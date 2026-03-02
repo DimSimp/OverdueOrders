@@ -113,6 +113,10 @@
       "validation_marker": "D'Addario"
     }
   ],
+  "openai": {
+    "api_key": "your-openai-api-key-here",
+    "model": "gpt-4o"
+  },
   "app": {
     "order_lookback_days": 30,
     "on_po_filter_phrase": "on po",

@@ -174,9 +174,18 @@ class InvoiceTab(ctk.CTkFrame):
         self._set_status("Parsing PDF…", color="gray60")
         self._set_error("")
 
+        def _notify_ai_fallback():
+            self.after(0, lambda: self._set_status("AI parsing (OpenAI)…", color="gray60"))
+
+        openai_config = getattr(self._app.config, "openai", None)
+
         def _worker():
             try:
-                items = parse_invoice(path, supplier)
+                items = parse_invoice(
+                    path, supplier,
+                    openai_config=openai_config,
+                    on_ai_fallback=_notify_ai_fallback,
+                )
                 self.after(0, lambda: self._on_parse_success(items))
             except ParseError as exc:
                 self.after(0, lambda e=str(exc): self._on_parse_error(e))

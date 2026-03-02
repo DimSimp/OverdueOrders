@@ -50,6 +50,16 @@ class EbayConfig:
 
 
 @dataclass
+class OpenAIConfig:
+    api_key: str
+    model: str
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+
+@dataclass
 class AppConfig:
     order_lookback_days: int
     on_po_filter_phrase: str
@@ -63,6 +73,7 @@ class ConfigManager:
         self.ebay: EbayConfig = None
         self.suppliers: list[SupplierConfig] = []
         self.app: AppConfig = None
+        self.openai: OpenAIConfig = None
 
     def load(self) -> None:
         if not CONFIG_PATH.exists():
@@ -116,6 +127,12 @@ class ConfigManager:
             order_lookback_days=a.get("order_lookback_days", 30),
             on_po_filter_phrase=a.get("on_po_filter_phrase", "on po"),
             output_dir=a.get("output_dir", "output"),
+        )
+
+        o = self._raw.get("openai", {})
+        self.openai = OpenAIConfig(
+            api_key=o.get("api_key", ""),
+            model=o.get("model", "gpt-4o"),
         )
 
     def save(self) -> None:

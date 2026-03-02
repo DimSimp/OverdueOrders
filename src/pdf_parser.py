@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 import pdfplumber
 
-from src.config import SupplierConfig
+from src.config import OpenAIConfig, SupplierConfig
 
 # Default regex patterns used when supplier-specific ones are not configured
 _DEFAULT_SKU_PATTERN = r"\b([A-Z][A-Z0-9\-]{2,19})\b"
@@ -48,9 +48,21 @@ class ParseError(Exception):
     pass
 
 
-def parse_invoice(pdf_path: str, supplier: SupplierConfig) -> list[InvoiceItem]:
+def parse_invoice(
+    pdf_path: str,
+    supplier: SupplierConfig,
+    openai_config: OpenAIConfig | None = None,
+    on_ai_fallback: callable = None,
+) -> list[InvoiceItem]:
     """
     Main entry point. Validates supplier, extracts items, applies suffix.
+
+    When standard parsing yields no items and an OpenAI config is provided,
+    falls back to AI-powered vision extraction for each page.
+
+    Args:
+        on_ai_fallback: Optional callback invoked (no args) when AI fallback
+                        is triggered, so the GUI can update its status.
 
     Raises ParseError with a user-friendly message on any failure.
     """
@@ -73,6 +85,7 @@ def parse_invoice(pdf_path: str, supplier: SupplierConfig) -> list[InvoiceItem]:
                     )
 
             items: list[InvoiceItem] = []
+            num_pages = len(pdf.pages)
 
             if supplier.pdf_format == "marker":
                 # Marker mode: work from the combined full-page text
@@ -81,7 +94,9 @@ def parse_invoice(pdf_path: str, supplier: SupplierConfig) -> list[InvoiceItem]:
                 for page_num, page in enumerate(pdf.pages, start=1):
                     text = page.extract_text() or ""
                     if not text.strip():
-                        # Scanned page — fall back to Tesseract OCR
+                        # Scanned page — prefer AI fallback over Tesseract if configured
+                        if openai_config and openai_config.is_configured:
+                            continue  # handled in AI fallback pass below
                         text = _ocr_page_to_text(pdf_path, page_num - 1)
                     items.extend(_extract_daddario(text, page_num))
             elif supplier.pdf_format == "table":
@@ -100,6 +115,19 @@ def parse_invoice(pdf_path: str, supplier: SupplierConfig) -> list[InvoiceItem]:
         raise
     except Exception as e:
         raise ParseError(f"Failed to read PDF: {e}") from e
+
+    # --- AI fallback: if standard parsing found nothing, try OpenAI Vision ---
+    if not items and openai_config and openai_config.is_configured:
+        if on_ai_fallback:
+            on_ai_fallback()
+
+        from src.ai_parser import extract_items_with_ai
+
+        for page_index in range(num_pages):
+            page_items = extract_items_with_ai(
+                pdf_path, page_index, supplier, openai_config
+            )
+            items.extend(page_items)
 
     if not items:
         raise ParseError(
