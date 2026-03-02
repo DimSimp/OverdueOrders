@@ -4,7 +4,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from src.data_processor import MatchedOrder, match_orders_to_invoice
+from src.data_processor import MatchedOrder, deduplicate_ebay_orders, filter_on_po, match_orders_to_invoice
 from src.exporter import export_to_csv
 from src.pdf_parser import InvoiceItem
 
@@ -56,6 +56,9 @@ class ResultsTab(ctk.CTkFrame):
         self._app = app
         self._matched: list[MatchedOrder] = []
         self._unmatched_inv: list[InvoiceItem] = []
+        # Deduped order lists — set during load_results for use by summary/unmatched views
+        self._neto_orders = []
+        self._ebay_orders = []
         self._build_ui()
 
     def _build_ui(self):
@@ -85,9 +88,9 @@ class ResultsTab(ctk.CTkFrame):
         for name in ("Matched Orders", "Unmatched Invoice Items", "Unmatched Orders"):
             self._inner_tabs.add(name)
 
-        # Matched Orders table
-        MATCHED_COLS = ["Platform", "Order No.", "Customer", "Date", "SKU", "Description", "Qty", "Notes"]
-        MATCHED_WIDTHS = [70, 100, 130, 90, 130, 250, 40, 280]
+        # Matched Orders table — includes "*" column to flag items that arrived with invoice
+        MATCHED_COLS = ["*", "Platform", "Order No.", "Customer", "Date", "SKU", "Description", "Qty", "Notes"]
+        MATCHED_WIDTHS = [20, 80, 110, 130, 90, 130, 240, 40, 270]
         self._matched_table = ReadOnlyTable(
             self._inner_tabs.tab("Matched Orders"),
             columns=MATCHED_COLS,
@@ -107,7 +110,7 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._inv_table.pack(fill="both", expand=True)
 
-        # Unmatched orders label (simple, since we don't track the full list currently)
+        # Unmatched orders
         self._unmatched_orders_note = ctk.CTkLabel(
             self._inner_tabs.tab("Unmatched Orders"),
             text=(
@@ -124,7 +127,7 @@ class ResultsTab(ctk.CTkFrame):
         self._unmatched_orders_table = ReadOnlyTable(
             self._inner_tabs.tab("Unmatched Orders"),
             columns=["Platform", "Order No.", "Customer", "Date", "SKU", "Notes"],
-            col_widths=[70, 100, 130, 90, 130, 350],
+            col_widths=[80, 110, 130, 90, 130, 350],
             corner_radius=4,
         )
         self._unmatched_orders_table.pack(fill="both", expand=True, padx=0, pady=(0, 0))
@@ -154,10 +157,17 @@ class ResultsTab(ctk.CTkFrame):
     # ── Public ────────────────────────────────────────────────────────────
 
     def load_results(self):
-        """Called by App when switching to this tab. Runs matching and updates UI."""
+        """Called by App when switching to this tab. Runs dedup + matching and updates UI."""
         invoice_items = self._app.invoice_tab.get_invoice_items()
-        neto_orders = self._app.neto_orders
-        ebay_orders = self._app.ebay_orders
+
+        # Deduplicate: remove Neto eBay-channel orders and enrich eBay orders with Neto notes
+        neto_orders, ebay_orders = deduplicate_ebay_orders(
+            self._app.neto_orders,
+            self._app.ebay_orders,
+        )
+        # Store for use by summary and unmatched-orders view
+        self._neto_orders = neto_orders
+        self._ebay_orders = ebay_orders
 
         matched, unmatched_inv = match_orders_to_invoice(
             invoice_items,
@@ -172,15 +182,23 @@ class ResultsTab(ctk.CTkFrame):
 
         self._populate_matched(matched)
         self._populate_unmatched_inv(unmatched_inv)
-        self._populate_unmatched_orders(neto_orders, ebay_orders, matched)
+        self._populate_unmatched_orders(matched)
         self._update_summary(matched, unmatched_inv)
 
     def _update_summary(self, matched, unmatched_inv):
-        on_po_count = self._count_on_po_orders()
-        unmatched_order_count = max(0, on_po_count - len({m.order_id + m.platform for m in matched}))
+        phrase = self._app.config.app.on_po_filter_phrase
+        on_po_neto = filter_on_po(self._neto_orders, phrase)
+        on_po_ebay = filter_on_po(self._ebay_orders, phrase)
+        on_po_count = len(on_po_neto) + len(on_po_ebay)
+
+        matched_order_ids = {(m.platform, m.order_id) for m in matched}
+        unmatched_order_count = max(0, on_po_count - len(matched_order_ids))
+
+        # Count only lines that are actual invoice matches
+        match_count = sum(1 for m in matched if m.is_invoice_match)
 
         self._matched_lbl.configure(
-            text=f"Matched: {len(matched)} order line{'s' if len(matched) != 1 else ''}",
+            text=f"Matched: {match_count} invoice line{'s' if match_count != 1 else ''}",
             text_color=("green" if matched else "gray50"),
         )
         self._unmatched_inv_lbl.configure(
@@ -190,17 +208,13 @@ class ResultsTab(ctk.CTkFrame):
             text=f"'On PO' orders with no match: {unmatched_order_count}"
         )
 
-    def _count_on_po_orders(self) -> int:
-        from src.data_processor import filter_on_po
-        phrase = self._app.config.app.on_po_filter_phrase
-        return len(filter_on_po(self._app.neto_orders, phrase)) + \
-               len(filter_on_po(self._app.ebay_orders, phrase))
-
     def _populate_matched(self, matched: list[MatchedOrder]):
         rows = []
         for m in matched:
             date_str = m.order_date.strftime("%Y-%m-%d") if m.order_date else ""
+            arrived = "*" if m.is_invoice_match else ""
             rows.append([
+                arrived,
                 m.platform,
                 m.order_id,
                 m.customer_name,
@@ -216,25 +230,19 @@ class ResultsTab(ctk.CTkFrame):
         rows = [[item.sku_with_suffix, item.description, str(item.quantity)] for item in items]
         self._inv_table.load_rows(rows)
 
-    def _populate_unmatched_orders(self, neto_orders, ebay_orders, matched):
-        from src.data_processor import filter_on_po
-        from src.neto_client import NetoOrder
-        from src.ebay_client import EbayOrder
-
+    def _populate_unmatched_orders(self, matched):
         phrase = self._app.config.app.on_po_filter_phrase
         matched_ids = {(m.platform, m.order_id) for m in matched}
 
         rows = []
-        for order in filter_on_po(neto_orders, phrase):
+        for order in filter_on_po(self._neto_orders, phrase):
             channel = order.sales_channel or "Neto"
             if (channel, order.order_id) not in matched_ids:
-                date_str = ""
-                if order.date_paid:
-                    date_str = order.date_paid.strftime("%Y-%m-%d")
+                date_str = order.date_paid.strftime("%Y-%m-%d") if order.date_paid else ""
                 skus = ", ".join(l.sku for l in order.line_items if l.sku)
                 rows.append([channel, order.order_id, order.customer_name, date_str, skus, order.notes])
 
-        for order in filter_on_po(ebay_orders, phrase):
+        for order in filter_on_po(self._ebay_orders, phrase):
             if ("eBay", order.order_id) not in matched_ids:
                 date_str = order.creation_date.strftime("%Y-%m-%d") if order.creation_date else ""
                 skus = ", ".join(l.sku for l in order.line_items if l.sku)

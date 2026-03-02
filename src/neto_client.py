@@ -22,6 +22,7 @@ OUTPUT_SELECTOR = [
     "DatePaid",
     "OrderStatus",
     "SalesChannel",
+    "PurchaseOrderNumber",
     "StickyNotes",
     "InternalOrderNotes",
     "DeliveryInstruction",
@@ -45,8 +46,9 @@ class NetoOrder:
     date_placed: datetime | None
     date_paid: datetime | None
     status: str
-    notes: str        # Concatenated staff/delivery notes
+    notes: str             # Concatenated staff/delivery notes
     sales_channel: str
+    purchase_order_number: str  # For eBay orders: the eBay order ID (xx-xxxxx-xxxxx)
     line_items: list[NetoLineItem] = field(default_factory=list)
 
 
@@ -198,6 +200,7 @@ class NetoClient:
             status=raw.get("OrderStatus", ""),
             notes=notes,
             sales_channel=raw.get("SalesChannel", ""),
+            purchase_order_number=str(raw.get("PurchaseOrderNumber") or "").strip(),
             line_items=line_items,
         )
 

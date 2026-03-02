@@ -15,7 +15,7 @@ class SupplierConfig:
     suffix: str
     suffix_position: Literal["append", "prepend"]
     character_substitutions: dict
-    pdf_format: Literal["table", "text", "marker"]
+    pdf_format: Literal["table", "text", "marker", "daddario"]
     validation_marker: str
     # --- table mode ---
     sku_column_hint: str = ""

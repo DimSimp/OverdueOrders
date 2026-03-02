@@ -15,6 +15,23 @@ _FALLBACK_QTY_IN_LINE = r"(?<!\$)(?<!\d\.)\b([1-9][0-9]{0,2})\b"
 # Matches a decimal number like "74.00" or "317.55" — used to identify price tokens
 _FLOAT_RE = re.compile(r"^\d+\.\d+$")
 
+# D'Addario fixed-format line item regex.
+# Format: SKU Description U/M QtyOrdered QtyShipped [QtyBackOrdered] RRP Disc% UnitPrice Amount
+# U/M is strictly uppercase letters (EA, BX, PR, SET, etc.).
+# Amount is ".00" for backordered items (those lines are skipped).
+_DADDARIO_ITEM_RE = re.compile(
+    r"^(\S+(?:\s+\d+/\S+)?)\s+"  # group 1: SKU (with optional fractional size like "1/2", "3/4", "1/4M")
+    r"(.+?)\s+"           # group 2: Description (non-greedy — stops at first valid U/M)
+    r"([A-Za-z]{1,6})\s+"  # group 3: U/M (case-insensitive — tolerates OCR misreads like "cA" for "EA")
+    r"(\d+)\s+"           # group 4: QtyOrdered
+    r"(\d+)\s+"           # group 5: QtyShipped
+    r"(?:\d+\s+)?"        # optional QtyBackOrdered (uncaptured)
+    r"\d+\.\d+\s+"        # RRP (uncaptured)
+    r"\d+\.\d+%\s+"       # Disc% (uncaptured)
+    r"\d+\.\d+\s+"        # UnitPrice (uncaptured)
+    r"(\.00|\d+\.\d+)$"   # group 6: Amount (".00" = backordered)
+)
+
 
 @dataclass
 class InvoiceItem:
@@ -43,7 +60,10 @@ def parse_invoice(pdf_path: str, supplier: SupplierConfig) -> list[InvoiceItem]:
                 page.extract_text() or "" for page in pdf.pages
             )
 
-            if supplier.validation_marker:
+            # Validate supplier marker only when the PDF has embedded text.
+            # Scanned PDFs (full_text empty) cannot be validated this way — trust
+            # the user's supplier selection and let extraction succeed or fail.
+            if supplier.validation_marker and full_text.strip():
                 if not _validate_supplier(full_text, supplier.validation_marker):
                     raise ParseError(
                         f"This PDF does not appear to be a {supplier.name} invoice.\n\n"
@@ -57,6 +77,13 @@ def parse_invoice(pdf_path: str, supplier: SupplierConfig) -> list[InvoiceItem]:
             if supplier.pdf_format == "marker":
                 # Marker mode: work from the combined full-page text
                 items.extend(_extract_by_markers(full_text, supplier, page_num=1))
+            elif supplier.pdf_format == "daddario":
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    text = page.extract_text() or ""
+                    if not text.strip():
+                        # Scanned page — fall back to Tesseract OCR
+                        text = _ocr_page_to_text(pdf_path, page_num - 1)
+                    items.extend(_extract_daddario(text, page_num))
             elif supplier.pdf_format == "table":
                 for page_num, page in enumerate(pdf.pages, start=1):
                     page_items = _extract_from_table(page, supplier, page_num)
@@ -516,3 +543,136 @@ def _parse_qty(raw: str) -> tuple[int, bool]:
         val = int(match.group())
         return (val if val > 0 else 1), False
     return 1, True
+
+
+def _ocr_page_to_text(pdf_path: str, page_index: int) -> str:
+    """
+    Render a single PDF page to a high-resolution image and extract text via
+    Tesseract OCR. Used as a fallback when a page contains no embedded text
+    (i.e. it is a scanned image rather than a digital PDF).
+
+    Requires:
+        pip install pymupdf pytesseract
+        Tesseract OCR installed from https://github.com/UB-Mannheim/tesseract/wiki
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        raise ParseError(
+            "This PDF appears to be scanned (no embedded text) and requires OCR.\n\n"
+            "Please install the required packages:\n"
+            "  pip install pymupdf pytesseract\n\n"
+            "Tesseract OCR must also be installed from:\n"
+            "  https://github.com/UB-Mannheim/tesseract/wiki"
+        )
+
+    try:
+        import io
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        raise ParseError(
+            "OCR support requires: pip install pytesseract Pillow"
+        )
+
+    # On Windows, Tesseract is often installed but not on PATH.
+    # Try common install locations so users don't need to edit PATH manually.
+    if pytesseract.pytesseract.tesseract_cmd == "tesseract":
+        import os
+        _common_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+        ]
+        for candidate in _common_paths:
+            if os.path.isfile(candidate):
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                break
+
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc.load_page(page_index)
+        # 300 DPI gives reliable text recognition for printed invoices
+        mat = fitz.Matrix(300 / 72, 300 / 72)
+        pix = page.get_pixmap(matrix=mat)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        # PSM 6: assume a uniform block of text — suits invoice page layout
+        return pytesseract.image_to_string(img, config="--psm 6")
+    except ParseError:
+        raise
+    except pytesseract.TesseractNotFoundError:
+        raise ParseError(
+            "Tesseract OCR is not installed or could not be found.\n\n"
+            "Please install it from:\n"
+            "  https://github.com/UB-Mannheim/tesseract/wiki\n\n"
+            "After installing, restart the application."
+        )
+    except Exception as e:
+        raise ParseError(f"OCR failed for page {page_index + 1}: {e}") from e
+
+
+def _extract_daddario(text: str, page_num: int) -> list[InvoiceItem]:
+    """
+    D'Addario-specific parser for their fixed-column text invoices.
+
+    Column order per line:
+        SKU  Description  U/M  QtyOrdered  QtyShipped  [QtyBackOrdered]  RRP  Disc%  UnitPrice  Amount
+
+    Items start on the line after the "Item Number" column header and end
+    before the legal disclaimer ("It is expressly agreed").
+    Backordered lines (Amount == ".00") and zero-shipped lines are skipped.
+    QtyShipped is used as the item quantity.
+    """
+    # Normalise OCR artefacts that appear in scanned D'Addario invoices:
+    #   • Pipe characters (Tesseract reads table column rules as "|") → space
+    #   • Bracket characters ("[", "]", "{", "}") next to letters → removed
+    text = re.sub(r"[ \t]*\|[ \t]*", " ", text)
+    text = re.sub(r"[\[\]{}]", "", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)  # compact runs of spaces
+
+    lines = text.splitlines()
+
+    # Find the column header line — items begin on the very next line.
+    # Falls back to scanning from line 0 when the header is garbled (OCR'd pages).
+    start_idx = 0
+    for i, line in enumerate(lines):
+        if "Item Number" in line:
+            start_idx = i + 1
+            break
+
+    # Items end at the legal disclaimer or totals line
+    end_idx = len(lines)
+    for i in range(start_idx, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("It is expressly") or stripped.startswith("Total Include GST"):
+            end_idx = i
+            break
+
+    items = []
+    for line in lines[start_idx:end_idx]:
+        line = line.strip()
+        if not line:
+            continue
+        m = _DADDARIO_ITEM_RE.match(line)
+        if not m:
+            continue
+
+        sku = m.group(1)
+        description = m.group(2)
+        qty_shipped = int(m.group(5))
+        amount = m.group(6)
+
+        # Skip backordered / unshipped items
+        if amount == ".00" or qty_shipped == 0:
+            continue
+
+        items.append(InvoiceItem(
+            sku=sku,
+            sku_with_suffix=sku,  # set in parse_invoice() via _build_neto_sku()
+            description=description,
+            quantity=qty_shipped,
+            source_page=page_num,
+            qty_flagged=False,
+        ))
+
+    return items

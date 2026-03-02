@@ -8,6 +8,7 @@ import pandas as pd
 from src.data_processor import MatchedOrder
 
 COLUMNS = [
+    "Arrived",          # "*" if this line item matched an invoice SKU; blank otherwise
     "Platform",
     "Order Number",
     "Customer",
@@ -45,6 +46,7 @@ def export_to_csv(
                 date_str = str(m.order_date)
 
         rows.append({
+            "Arrived": "*" if m.is_invoice_match else "",
             "Platform": m.platform,
             "Order Number": m.order_id,
             "Customer": m.customer_name,
