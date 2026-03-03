@@ -27,6 +27,9 @@ OUTPUT_SELECTOR = [
     "InternalOrderNotes",
     "DeliveryInstruction",
     "OrderLine",
+    "OrderLine.ProductName",
+    "OrderLine.ShortDescription",
+    "OrderLine.Name",
 ]
 
 
@@ -68,7 +71,8 @@ class NetoClient:
         progress_callback=None,
     ) -> list[NetoOrder]:
         """
-        Fetch all paid, undispatched orders within the given date range.
+        Fetch all paid, undispatched, non-eBay orders within the given date range.
+        eBay orders are handled directly via the eBay API — excluded here.
         Handles pagination automatically.
         progress_callback(fetched: int, total: int) is called if provided.
         """
@@ -93,7 +97,8 @@ class NetoClient:
 
             for raw in raw_orders:
                 order = self._parse_order(raw)
-                if order:
+                # Exclude eBay-channel orders — fetched directly from eBay API instead
+                if order and order.sales_channel.lower() != "ebay":
                     all_orders.append(order)
 
             if progress_callback:
@@ -173,7 +178,12 @@ class NetoClient:
         raw_lines = raw.get("OrderLine", [])
         if isinstance(raw_lines, dict):
             raw_lines = [raw_lines]
+        _debug_printed = False
         for line in raw_lines:
+            if not _debug_printed:
+                import sys
+                print(f"DEBUG OrderLine keys: {list(line.keys())}", file=sys.stderr, flush=True)
+                _debug_printed = True
             sku = line.get("SKU", "") or line.get("ProductSKU", "")
             qty_raw = line.get("Quantity", line.get("QuantityOrdered", 1))
             try:
@@ -184,9 +194,16 @@ class NetoClient:
                 price = float(str(line.get("UnitPrice", 0)))
             except (ValueError, TypeError):
                 price = 0.0
+            product_name = (
+                line.get("ProductName")
+                or line.get("Name")
+                or line.get("Title")
+                or line.get("ItemDescription")
+                or ""
+            )
             line_items.append(NetoLineItem(
                 sku=str(sku).strip(),
-                product_name=str(line.get("ProductName", "")).strip(),
+                product_name=str(product_name).strip(),
                 quantity=qty,
                 unit_price=price,
             ))

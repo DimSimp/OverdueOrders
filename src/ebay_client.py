@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import time
 import webbrowser
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlencode, parse_qs, urlparse
@@ -22,6 +23,13 @@ EBAY_SANDBOX_API_BASE = "https://api.sandbox.ebay.com"
 EBAY_AU_MARKETPLACE_ID = "EBAY_AU"
 EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
 
+# Trading API (SOAP) — for reading PrivateNotes via GetSellerTransactions
+EBAY_PROD_TRADING_URL = "https://api.ebay.com/ws/api.dll"
+EBAY_SANDBOX_TRADING_URL = "https://api.sandbox.ebay.com/ws/api.dll"
+EBAY_AU_SITE_ID = "15"
+EBAY_TRADING_VERSION = "967"
+_TRADING_NS = "urn:ebay:apis:eBLBaseComponents"
+
 
 @dataclass
 class EbayLineItem:
@@ -29,6 +37,9 @@ class EbayLineItem:
     sku: str
     title: str
     quantity: int
+    legacy_item_id: str = ""        # Trading API ItemID (for PrivateNotes lookup)
+    legacy_transaction_id: str = "" # Trading API TransactionID
+    notes: str = ""                 # PrivateNotes for this specific item
 
 
 @dataclass
@@ -227,7 +238,140 @@ class EbayClient:
 
         # Filter to PAID orders (eBay fulfillment filter doesn't support payment status)
         paid = [o for o in all_raw if o.get("orderPaymentStatus") == "PAID"]
-        return [self._parse_order(o) for o in paid]
+        orders = [self._parse_order(o) for o in paid]
+
+        # Enrich buyer_notes with PrivateNotes from the Trading API (if credentials configured)
+        if self._config.dev_id:
+            self._enrich_with_private_notes(orders, date_from, date_to)
+
+        return orders
+
+    # ----- Trading API (PrivateNotes) -----
+
+    @property
+    def _trading_url(self) -> str:
+        return EBAY_SANDBOX_TRADING_URL if self._config.environment == "sandbox" else EBAY_PROD_TRADING_URL
+
+    def _enrich_with_private_notes(
+        self,
+        orders: list[EbayOrder],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> None:
+        """
+        Fetch PrivateNotes from the Trading API (GetMyeBaySelling) and populate
+        buyer_notes on each EbayOrder. PrivateNotes are returned per OrderLineItemID
+        (ItemID-TransactionID). We extract the ItemID prefix and match against
+        legacyItemId from the Fulfillment API.
+
+        If any line item on an order has a PrivateNote, the combined notes are
+        appended to buyer_notes so filter_on_po can detect them.
+        """
+        token = self._ensure_valid_token()
+
+        # GetMyeBaySelling uses DurationInDays, not a date range.
+        # Calculate days since date_from; cap at 60 (API limit for sold list).
+        from datetime import timezone as _tz
+        now = datetime.now()
+        duration_days = min(int((now - date_from).days) + 1, 60)
+
+        # Build lookup: ItemID (extracted from OLI prefix) → PrivateNotes text
+        notes_by_item_id: dict[str, str] = {}
+        page = 1
+        while True:
+            xml_body = self._build_sold_list_xml(token, duration_days, page)
+            try:
+                resp = self._session.post(
+                    self._trading_url,
+                    headers={
+                        "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
+                        "X-EBAY-API-APP-NAME": self._config.client_id,
+                        "X-EBAY-API-DEV-NAME": self._config.dev_id,
+                        "X-EBAY-API-CERT-NAME": self._config.client_secret,
+                        "X-EBAY-API-SITEID": EBAY_AU_SITE_ID,
+                        "X-EBAY-API-COMPATIBILITY-LEVEL": EBAY_TRADING_VERSION,
+                        "Content-Type": "text/xml",
+                    },
+                    data=xml_body.encode("utf-8"),
+                    timeout=30,
+                )
+                resp.raise_for_status()
+            except Exception:
+                break  # Trading API unavailable — silently skip note enrichment
+
+            root = ET.fromstring(resp.text)
+            ns = {"e": _TRADING_NS}
+
+            ack = root.find("e:Ack", ns)
+            if ack is None or ack.text not in ("Success", "Warning"):
+                break
+
+            for txn in root.findall(".//e:Transaction", ns):
+                oli_el = txn.find("e:OrderLineItemID", ns)
+                if oli_el is None or not oli_el.text:
+                    continue
+                # OLI format: "ItemID-TransactionID" — extract ItemID prefix
+                item_id = oli_el.text.split("-")[0]
+                note = _xml_text(txn, "e:Item/e:PrivateNotes", ns)
+                if item_id and note:
+                    notes_by_item_id[item_id] = note
+
+            # Paginate through SoldList pages
+            total_pages_el = root.find(
+                ".//e:SoldList/e:PaginationResult/e:TotalNumberOfPages", ns
+            )
+            total_pages = int(total_pages_el.text) if total_pages_el is not None and total_pages_el.text else 1
+            if page >= total_pages:
+                break
+            page += 1
+
+        if not notes_by_item_id:
+            return
+
+        # Apply notes per line item; also roll up into order.buyer_notes for filter_on_po
+        for order in orders:
+            item_notes = []
+            for li in order.line_items:
+                note = notes_by_item_id.get(li.legacy_item_id, "")
+                li.notes = note
+                if note:
+                    item_notes.append(note)
+            if item_notes:
+                combined = " | ".join(item_notes)
+                if order.buyer_notes:
+                    order.buyer_notes = order.buyer_notes + " | " + combined
+                else:
+                    order.buyer_notes = combined
+
+    def _build_sold_list_xml(self, token: str, duration_days: int, page: int) -> str:
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<GetMyeBaySellingRequest xmlns="{_TRADING_NS}">'
+            f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+            "<SoldList>"
+            "<Include>true</Include>"
+            f"<DurationInDays>{duration_days}</DurationInDays>"
+            "<IncludeNotes>true</IncludeNotes>"
+            f"<Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>{page}</PageNumber></Pagination>"
+            "</SoldList>"
+            "</GetMyeBaySellingRequest>"
+        )
+
+    def _build_transactions_xml(self, token: str, date_from: datetime, date_to: datetime, page: int) -> str:
+        from_str = date_from.strftime("%Y-%m-%dT00:00:00.000Z")
+        to_str = date_to.strftime("%Y-%m-%dT23:59:59.000Z")
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<GetSellerTransactionsRequest xmlns="{_TRADING_NS}">'
+            f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+            f"<CreateTimeFrom>{from_str}</CreateTimeFrom>"
+            f"<CreateTimeTo>{to_str}</CreateTimeTo>"
+            "<IncludeVariations>true</IncludeVariations>"
+            f"<Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>{page}</PageNumber></Pagination>"
+            "</GetSellerTransactionsRequest>"
+        )
+
+    # ----- Orders -----
 
     def _parse_order(self, raw: dict) -> EbayOrder:
         buyer = raw.get("buyer", {})
@@ -246,6 +390,8 @@ class EbayClient:
                 sku=str(li.get("sku", "") or "").strip(),
                 title=str(li.get("title", "")).strip(),
                 quantity=int(li.get("quantity", 1)),
+                legacy_item_id=str(li.get("legacyItemId", "") or ""),
+                legacy_transaction_id=str(li.get("legacyTransactionId", "") or ""),
             ))
 
         return EbayOrder(
@@ -257,6 +403,12 @@ class EbayClient:
             payment_status=raw.get("orderPaymentStatus", ""),
             line_items=line_items,
         )
+
+
+def _xml_text(el: ET.Element, path: str, ns: dict) -> str:
+    """Find an element by namespaced path and return its text, or empty string."""
+    found = el.find(path, ns)
+    return (found.text or "").strip() if found is not None else ""
 
 
 def _extract_code(url_or_code: str) -> str | None:

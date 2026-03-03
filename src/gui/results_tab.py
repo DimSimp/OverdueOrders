@@ -4,8 +4,8 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from src.data_processor import MatchedOrder, deduplicate_ebay_orders, filter_on_po, match_orders_to_invoice
-from src.exporter import export_to_csv
+from src.data_processor import MatchedOrder, filter_on_po, match_orders_to_invoice
+from src.exporter import export_to_xlsx
 from src.pdf_parser import InvoiceItem
 
 
@@ -114,8 +114,8 @@ class ResultsTab(ctk.CTkFrame):
         self._unmatched_orders_note = ctk.CTkLabel(
             self._inner_tabs.tab("Unmatched Orders"),
             text=(
-                "These are 'on PO' orders (paid, undispatched, within date range)\n"
-                "whose SKUs did not match any item in the imported invoices.\n\n"
+                "Neto: 'on PO' orders (paid, undispatched) whose SKUs did not match the invoice.\n"
+                "eBay: all paid, unfulfilled orders whose SKUs did not match the invoice.\n\n"
                 "This may indicate the ordered stock is arriving in a future delivery,\n"
                 "or was purchased via phone/counter (not via an online channel)."
             ),
@@ -138,7 +138,7 @@ class ResultsTab(ctk.CTkFrame):
 
         self._export_btn = ctk.CTkButton(
             bottom,
-            text="Export to CSV",
+            text="Export to Excel",
             width=140,
             command=self._export_csv,
         )
@@ -157,22 +157,17 @@ class ResultsTab(ctk.CTkFrame):
     # ── Public ────────────────────────────────────────────────────────────
 
     def load_results(self):
-        """Called by App when switching to this tab. Runs dedup + matching and updates UI."""
+        """Called by App when switching to this tab. Runs matching and updates UI."""
         invoice_items = self._app.invoice_tab.get_invoice_items()
 
-        # Deduplicate: remove Neto eBay-channel orders and enrich eBay orders with Neto notes
-        neto_orders, ebay_orders = deduplicate_ebay_orders(
-            self._app.neto_orders,
-            self._app.ebay_orders,
-        )
-        # Store for use by summary and unmatched-orders view
-        self._neto_orders = neto_orders
-        self._ebay_orders = ebay_orders
+        # Neto orders already have eBay channel excluded; eBay orders come directly from eBay API
+        self._neto_orders = self._app.neto_orders
+        self._ebay_orders = self._app.ebay_orders
 
         matched, unmatched_inv = match_orders_to_invoice(
             invoice_items,
-            neto_orders,
-            ebay_orders,
+            self._neto_orders,
+            self._ebay_orders,
             on_po_phrase=self._app.config.app.on_po_filter_phrase,
         )
 
@@ -189,10 +184,10 @@ class ResultsTab(ctk.CTkFrame):
         phrase = self._app.config.app.on_po_filter_phrase
         on_po_neto = filter_on_po(self._neto_orders, phrase)
         on_po_ebay = filter_on_po(self._ebay_orders, phrase)
-        on_po_count = len(on_po_neto) + len(on_po_ebay)
+        candidate_count = len(on_po_neto) + len(on_po_ebay)
 
         matched_order_ids = {(m.platform, m.order_id) for m in matched}
-        unmatched_order_count = max(0, on_po_count - len(matched_order_ids))
+        unmatched_order_count = max(0, candidate_count - len(matched_order_ids))
 
         # Count only lines that are actual invoice matches
         match_count = sum(1 for m in matched if m.is_invoice_match)
@@ -205,12 +200,20 @@ class ResultsTab(ctk.CTkFrame):
             text=f"Unmatched invoice items: {len(unmatched_inv)}"
         )
         self._unmatched_orders_lbl.configure(
-            text=f"'On PO' orders with no match: {unmatched_order_count}"
+            text=f"Unmatched orders: {unmatched_order_count}"
         )
 
     def _populate_matched(self, matched: list[MatchedOrder]):
+        def _platform_key(m: MatchedOrder) -> tuple:
+            pl = m.platform.lower()
+            if pl == "website":
+                return (0, m.platform, m.order_id)
+            if pl == "ebay":
+                return (2, m.platform, m.order_id)
+            return (1, m.platform, m.order_id)
+
         rows = []
-        for m in matched:
+        for m in sorted(matched, key=_platform_key):
             date_str = m.order_date.strftime("%Y-%m-%d") if m.order_date else ""
             arrived = "*" if m.is_invoice_match else ""
             rows.append([
@@ -234,6 +237,14 @@ class ResultsTab(ctk.CTkFrame):
         phrase = self._app.config.app.on_po_filter_phrase
         matched_ids = {(m.platform, m.order_id) for m in matched}
 
+        def _platform_key(row: list) -> tuple:
+            pl = row[0].lower()  # row[0] is the channel/platform string
+            if pl == "website":
+                return (0, row[0], row[1])
+            if pl == "ebay":
+                return (2, row[0], row[1])
+            return (1, row[0], row[1])
+
         rows = []
         for order in filter_on_po(self._neto_orders, phrase):
             channel = order.sales_channel or "Neto"
@@ -242,12 +253,14 @@ class ResultsTab(ctk.CTkFrame):
                 skus = ", ".join(l.sku for l in order.line_items if l.sku)
                 rows.append([channel, order.order_id, order.customer_name, date_str, skus, order.notes])
 
-        for order in filter_on_po(self._ebay_orders, phrase):
+        # All eBay orders are candidates — show any that didn't match the invoice
+        for order in self._ebay_orders:
             if ("eBay", order.order_id) not in matched_ids:
                 date_str = order.creation_date.strftime("%Y-%m-%d") if order.creation_date else ""
                 skus = ", ".join(l.sku for l in order.line_items if l.sku)
                 rows.append(["eBay", order.order_id, order.buyer_name, date_str, skus, order.buyer_notes])
 
+        rows.sort(key=_platform_key)
         self._unmatched_orders_table.load_rows(rows)
 
     # ── Export ────────────────────────────────────────────────────────────
@@ -257,7 +270,7 @@ class ResultsTab(ctk.CTkFrame):
             messagebox.showinfo("No Data", "There are no matched orders to export.")
             return
         try:
-            path = export_to_csv(
+            path = export_to_xlsx(
                 self._matched,
                 output_dir=self._app.config.app.output_dir,
             )

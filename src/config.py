@@ -47,6 +47,9 @@ class EbayConfig:
     access_token: str
     access_token_expires_at: float
     environment: Literal["production", "sandbox"]
+    # Trading API credentials (for reading PrivateNotes via GetSellerTransactions)
+    dev_id: str = ""
+    user_token: str = ""
 
 
 @dataclass
@@ -99,6 +102,8 @@ class ConfigManager:
             access_token=e.get("access_token", ""),
             access_token_expires_at=float(e.get("access_token_expires_at", 0)),
             environment=e.get("environment", "production"),
+            dev_id=e.get("dev_id", ""),
+            user_token=e.get("user_token", ""),
         )
 
         self.suppliers = [

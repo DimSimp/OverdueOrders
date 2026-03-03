@@ -24,52 +24,6 @@ class MatchedOrder:
     is_invoice_match: bool     # True if this line item matched an invoice SKU
 
 
-def deduplicate_ebay_orders(
-    neto_orders: list[NetoOrder],
-    ebay_orders: list[EbayOrder],
-) -> tuple[list[NetoOrder], list[EbayOrder]]:
-    """
-    Match eBay API orders to Neto eBay-channel orders using PurchaseOrderNumber.
-
-    For each Neto order with SalesChannel="eBay":
-      - If its PurchaseOrderNumber matches an eBay API order:
-          copy Neto sticky notes onto the eBay order (enables 'on PO' detection);
-          remove the Neto order from results (eBay order replaces it with eBay order ID).
-      - If no eBay API match:
-          exclude entirely (order is completed/refunded on eBay, not yet synced in Neto).
-
-    Returns:
-        remaining_neto  — Neto orders with ALL eBay-channel orders removed
-        enriched_ebay   — eBay orders, matched ones having their notes populated from Neto
-    """
-    # Build lookup: eBay order ID → EbayOrder
-    ebay_by_id: dict[str, EbayOrder] = {o.order_id: o for o in ebay_orders}
-
-    # Collect all Neto eBay-channel order IDs (ALL will be removed from Neto results)
-    neto_ebay_order_ids: set[str] = set()
-
-    for neto_order in neto_orders:
-        if neto_order.sales_channel.lower() != "ebay":
-            continue
-        neto_ebay_order_ids.add(neto_order.order_id)
-
-        po = neto_order.purchase_order_number
-        if not po:
-            continue
-        ebay_match = ebay_by_id.get(po)
-        if ebay_match and neto_order.notes:
-            # Copy Neto sticky notes so the 'on PO' filter can detect them on the eBay order
-            if ebay_match.buyer_notes:
-                ebay_match.buyer_notes = neto_order.notes + " | " + ebay_match.buyer_notes
-            else:
-                ebay_match.buyer_notes = neto_order.notes
-
-    # Remove ALL Neto eBay-channel orders:
-    #   matched ones are replaced by enriched eBay orders (with eBay IDs)
-    #   unmatched ones are excluded (completed/refunded on eBay)
-    remaining_neto = [o for o in neto_orders if o.order_id not in neto_ebay_order_ids]
-    return remaining_neto, ebay_orders
-
 
 def filter_on_po(orders: list, phrase: str = "on po") -> list:
     """
@@ -113,6 +67,8 @@ def match_orders_to_invoice(
             invoice_lookup[key] = item
 
     on_po_neto = filter_on_po(neto_orders, on_po_phrase)
+    # eBay buyer_notes are now populated with PrivateNotes from the Trading API,
+    # so the "on po" filter works correctly for eBay orders too.
     on_po_ebay = filter_on_po(ebay_orders, on_po_phrase)
 
     matched: list[MatchedOrder] = []
@@ -133,7 +89,8 @@ def match_orders_to_invoice(
         matched_invoice_keys.update(matching_keys)
 
         # Include ALL line items; mark only the invoice-matching ones with is_invoice_match
-        for line in order.line_items:
+        # Notes are order-level for Neto — only shown on the first item
+        for idx, line in enumerate(order.line_items):
             key = line.sku.upper().strip()
             inv = invoice_lookup.get(key)
             matched.append(MatchedOrder(
@@ -144,7 +101,7 @@ def match_orders_to_invoice(
                 sku=line.sku,
                 description=line.product_name,
                 quantity=line.quantity,
-                notes=order.notes,
+                notes=order.notes if idx == 0 else "",
                 invoice_sku=inv.sku_with_suffix if inv else "",
                 invoice_description=inv.description if inv else "",
                 invoice_qty=inv.quantity if inv else 0,
@@ -162,6 +119,7 @@ def match_orders_to_invoice(
 
         matched_invoice_keys.update(matching_keys)
 
+        # eBay notes are item-level (PrivateNotes per listing)
         for line in order.line_items:
             key = line.sku.upper().strip()
             inv = invoice_lookup.get(key)
@@ -173,7 +131,7 @@ def match_orders_to_invoice(
                 sku=line.sku,
                 description=line.title,
                 quantity=line.quantity,
-                notes=order.buyer_notes,
+                notes=line.notes,
                 invoice_sku=inv.sku_with_suffix if inv else "",
                 invoice_description=inv.description if inv else "",
                 invoice_qty=inv.quantity if inv else 0,
