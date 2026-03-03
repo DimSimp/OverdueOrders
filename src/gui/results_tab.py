@@ -12,6 +12,13 @@ from src.pdf_parser import InvoiceItem
 class ReadOnlyTable(ctk.CTkScrollableFrame):
     """Scrollable read-only table using CTkLabel cells."""
 
+    # Alternating color pairs per order group: (light_mode, dark_mode)
+    _GROUP_COLORS = [
+        ("gray96", "gray18"),
+        ("gray88", "gray25"),
+    ]
+    _SEPARATOR_HEIGHT = 6  # pixels of gap between order groups
+
     def __init__(self, master, columns: list[str], col_widths: list[int], **kwargs):
         super().__init__(master, **kwargs)
         self._columns = columns
@@ -29,15 +36,82 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
             )
             lbl.grid(row=0, column=col, padx=(4, 8), pady=(4, 6), sticky="w")
 
-    def load_rows(self, rows: list[list[str]]):
+    def load_rows(
+        self,
+        rows: list[list[str]],
+        group_key_col: int | None = None,
+        group_button: dict | None = None,
+    ):
+        """
+        Load rows into the table.
+
+        Args:
+            group_key_col: If set, rows are visually grouped by the value in this
+                           column. A gap is inserted between groups, and alternating
+                           background colors distinguish adjacent groups.
+            group_button:  If set (along with group_key_col), adds a button to the
+                           first row of each group. Dict with keys:
+                           - "text": button label (str)
+                           - "callback": function(group_key_value) called on click
+                           - "width": button width in pixels (default 60)
+        """
         # Clear existing data rows (not header)
         for widget in self.winfo_children():
             info = widget.grid_info()
             if info and int(info.get("row", 0)) > 0:
                 widget.destroy()
 
-        for row_idx, row_data in enumerate(rows, start=1):
-            bg = ("gray92", "gray22") if row_idx % 2 == 0 else ("gray96", "gray18")
+        # Add button column header if needed
+        btn_col = len(self._columns) if group_button else None
+        if group_button:
+            lbl = ctk.CTkLabel(
+                self,
+                text="",
+                font=ctk.CTkFont(weight="bold"),
+                width=group_button.get("width", 60),
+                anchor="w",
+            )
+            lbl.grid(row=0, column=btn_col, padx=(4, 8), pady=(4, 6), sticky="w")
+
+        if group_key_col is None:
+            # No grouping — simple alternating rows
+            for row_idx, row_data in enumerate(rows, start=1):
+                bg = self._GROUP_COLORS[row_idx % 2]
+                for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
+                    lbl = ctk.CTkLabel(
+                        self,
+                        text=str(val),
+                        width=width,
+                        anchor="w",
+                        fg_color=bg,
+                        corner_radius=2,
+                    )
+                    lbl.grid(row=row_idx, column=col, padx=(4, 8), pady=1, sticky="w")
+            return
+
+        # Grouped mode — detect group boundaries and add visual separation
+        group_idx = 0
+        prev_key = None
+        grid_row = 1
+        is_first_in_group = True
+
+        for row_data in rows:
+            current_key = row_data[group_key_col] if group_key_col < len(row_data) else ""
+
+            if prev_key is not None and current_key != prev_key:
+                # Insert a spacer row between groups
+                spacer = ctk.CTkFrame(self, height=self._SEPARATOR_HEIGHT, fg_color="transparent")
+                spacer.grid(
+                    row=grid_row, column=0,
+                    columnspan=len(self._columns) + (1 if group_button else 0),
+                    sticky="ew",
+                )
+                grid_row += 1
+                group_idx += 1
+                is_first_in_group = True
+
+            bg = self._GROUP_COLORS[group_idx % 2]
+
             for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
                 lbl = ctk.CTkLabel(
                     self,
@@ -47,7 +121,28 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
                     fg_color=bg,
                     corner_radius=2,
                 )
-                lbl.grid(row=row_idx, column=col, padx=(4, 8), pady=1, sticky="w")
+                lbl.grid(row=grid_row, column=col, padx=(4, 8), pady=1, sticky="w")
+
+            # Add action button on the first row of each group
+            if group_button and is_first_in_group:
+                key_val = current_key  # capture for closure
+                # Also capture the platform (first data column for unmatched, second for matched)
+                # We pass the full group key which includes platform info
+                btn = ctk.CTkButton(
+                    self,
+                    text=group_button["text"],
+                    width=group_button.get("width", 60),
+                    height=24,
+                    font=ctk.CTkFont(size=11),
+                    fg_color="gray50",
+                    hover_color="gray40",
+                    command=lambda k=key_val: group_button["callback"](k),
+                )
+                btn.grid(row=grid_row, column=btn_col, padx=(4, 8), pady=1, sticky="w")
+                is_first_in_group = False
+
+            prev_key = current_key
+            grid_row += 1
 
 
 class ResultsTab(ctk.CTkFrame):
@@ -59,6 +154,10 @@ class ResultsTab(ctk.CTkFrame):
         # Deduped order lists — set during load_results for use by summary/unmatched views
         self._neto_orders = []
         self._ebay_orders = []
+        # Manual overrides: orders moved between matched ↔ unmatched by the user.
+        # Keys are (platform, order_id) tuples.
+        self._excluded_order_ids: set[tuple[str, str]] = set()
+        self._force_matched_order_ids: set[tuple[str, str]] = set()
         self._build_ui()
 
     def _build_ui(self):
@@ -90,7 +189,7 @@ class ResultsTab(ctk.CTkFrame):
 
         # Matched Orders table — includes "*" column to flag items that arrived with invoice
         MATCHED_COLS = ["*", "Platform", "Order No.", "Customer", "Date", "SKU", "Description", "Qty", "Notes"]
-        MATCHED_WIDTHS = [20, 80, 110, 130, 90, 130, 240, 40, 270]
+        MATCHED_WIDTHS = [20, 80, 110, 130, 90, 130, 200, 40, 230]
         self._matched_table = ReadOnlyTable(
             self._inner_tabs.tab("Matched Orders"),
             columns=MATCHED_COLS,
@@ -124,10 +223,12 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._unmatched_orders_note.pack(padx=20, pady=20, anchor="nw")
 
+        UNMATCHED_COLS = ["Platform", "Order No.", "Customer", "Date", "SKU", "Notes"]
+        UNMATCHED_WIDTHS = [80, 110, 130, 90, 130, 310]
         self._unmatched_orders_table = ReadOnlyTable(
             self._inner_tabs.tab("Unmatched Orders"),
-            columns=["Platform", "Order No.", "Customer", "Date", "SKU", "Notes"],
-            col_widths=[80, 110, 130, 90, 130, 350],
+            columns=UNMATCHED_COLS,
+            col_widths=UNMATCHED_WIDTHS,
             corner_radius=4,
         )
         self._unmatched_orders_table.pack(fill="both", expand=True, padx=0, pady=(0, 0))
@@ -171,14 +272,131 @@ class ResultsTab(ctk.CTkFrame):
             on_po_phrase=self._app.config.app.on_po_filter_phrase,
         )
 
+        # Reset manual overrides on fresh data load
+        self._excluded_order_ids.clear()
+        self._force_matched_order_ids.clear()
+
         self._matched = matched
         self._unmatched_inv = unmatched_inv
         self._app.matched_orders = matched
 
-        self._populate_matched(matched)
-        self._populate_unmatched_inv(unmatched_inv)
-        self._populate_unmatched_orders(matched)
-        self._update_summary(matched, unmatched_inv)
+        self._refresh_tables()
+
+    def _refresh_tables(self):
+        """Re-render matched and unmatched tables with current overrides applied."""
+        # Effective matched: original matched minus excluded, plus force-matched
+        effective_matched = [
+            m for m in self._matched
+            if (m.platform, m.order_id) not in self._excluded_order_ids
+        ]
+
+        # Build force-matched MatchedOrder entries from the raw order data
+        force_matched = self._build_force_matched()
+        effective_matched.extend(force_matched)
+
+        # Update the app's matched_orders for export
+        self._app.matched_orders = effective_matched
+
+        self._populate_matched(effective_matched)
+        self._populate_unmatched_inv(self._unmatched_inv)
+        self._populate_unmatched_orders(effective_matched)
+        self._update_summary(effective_matched, self._unmatched_inv)
+
+    def _build_force_matched(self) -> list[MatchedOrder]:
+        """Create MatchedOrder entries for orders manually moved to matched."""
+        if not self._force_matched_order_ids:
+            return []
+
+        result = []
+        phrase = self._app.config.app.on_po_filter_phrase
+
+        for order in filter_on_po(self._neto_orders, phrase):
+            channel = order.sales_channel or "Neto"
+            key = (channel, order.order_id)
+            if key not in self._force_matched_order_ids:
+                continue
+            order_date = order.date_paid or order.date_placed
+            for idx, line in enumerate(order.line_items):
+                result.append(MatchedOrder(
+                    platform=channel,
+                    order_id=order.order_id,
+                    customer_name=order.customer_name,
+                    order_date=order_date,
+                    sku=line.sku,
+                    description=line.product_name,
+                    quantity=line.quantity,
+                    notes=order.notes if idx == 0 else "",
+                    invoice_sku="",
+                    invoice_description="",
+                    invoice_qty=0,
+                    is_invoice_match=False,
+                ))
+
+        for order in self._ebay_orders:
+            key = ("eBay", order.order_id)
+            if key not in self._force_matched_order_ids:
+                continue
+            for line in order.line_items:
+                result.append(MatchedOrder(
+                    platform="eBay",
+                    order_id=order.order_id,
+                    customer_name=order.buyer_name,
+                    order_date=order.creation_date,
+                    sku=line.sku,
+                    description=line.title,
+                    quantity=line.quantity,
+                    notes=line.notes,
+                    invoice_sku="",
+                    invoice_description="",
+                    invoice_qty=0,
+                    is_invoice_match=False,
+                ))
+
+        return result
+
+    def _exclude_order(self, platform_and_order_id: str):
+        """Move an order from matched → unmatched."""
+        # Find the platform for this order_id from the matched list
+        for m in self._matched:
+            if m.order_id == platform_and_order_id:
+                key = (m.platform, m.order_id)
+                self._excluded_order_ids.add(key)
+                # Also remove from force-matched if it was there
+                self._force_matched_order_ids.discard(key)
+                break
+        else:
+            # Check effective matched (could be a force-matched order)
+            for key in list(self._force_matched_order_ids):
+                if key[1] == platform_and_order_id:
+                    self._force_matched_order_ids.discard(key)
+                    break
+        self._refresh_tables()
+
+    def _include_order(self, order_id: str):
+        """Move an order from unmatched → matched."""
+        # First check if this was originally matched but excluded
+        for m in self._matched:
+            if m.order_id == order_id:
+                key = (m.platform, m.order_id)
+                if key in self._excluded_order_ids:
+                    self._excluded_order_ids.discard(key)
+                    self._refresh_tables()
+                    return
+
+        # Otherwise, force-add it from the raw order lists
+        phrase = self._app.config.app.on_po_filter_phrase
+        for order in filter_on_po(self._neto_orders, phrase):
+            channel = order.sales_channel or "Neto"
+            if order.order_id == order_id:
+                self._force_matched_order_ids.add((channel, order.order_id))
+                self._refresh_tables()
+                return
+
+        for order in self._ebay_orders:
+            if order.order_id == order_id:
+                self._force_matched_order_ids.add(("eBay", order.order_id))
+                self._refresh_tables()
+                return
 
     def _update_summary(self, matched, unmatched_inv):
         phrase = self._app.config.app.on_po_filter_phrase
@@ -227,7 +445,15 @@ class ResultsTab(ctk.CTkFrame):
                 str(m.quantity),
                 m.notes,
             ])
-        self._matched_table.load_rows(rows)
+        self._matched_table.load_rows(
+            rows,
+            group_key_col=2,
+            group_button={
+                "text": "Remove",
+                "callback": self._exclude_order,
+                "width": 65,
+            },
+        )
 
     def _populate_unmatched_inv(self, items: list[InvoiceItem]):
         rows = [[item.sku_with_suffix, item.description, str(item.quantity)] for item in items]
@@ -261,17 +487,25 @@ class ResultsTab(ctk.CTkFrame):
                 rows.append(["eBay", order.order_id, order.buyer_name, date_str, skus, order.buyer_notes])
 
         rows.sort(key=_platform_key)
-        self._unmatched_orders_table.load_rows(rows)
+        self._unmatched_orders_table.load_rows(
+            rows,
+            group_key_col=1,
+            group_button={
+                "text": "Add",
+                "callback": self._include_order,
+                "width": 55,
+            },
+        )
 
     # ── Export ────────────────────────────────────────────────────────────
 
     def _export_csv(self):
-        if not self._matched:
+        if not self._app.matched_orders:
             messagebox.showinfo("No Data", "There are no matched orders to export.")
             return
         try:
             path = export_to_xlsx(
-                self._matched,
+                self._app.matched_orders,
                 output_dir=self._app.config.app.output_dir,
             )
             self._export_label.configure(text=f"Saved: {path}", text_color="green")
