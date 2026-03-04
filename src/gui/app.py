@@ -78,5 +78,6 @@ class App(ctk.CTk):
         self.tabview.set("1. Invoice")
 
     def _activate_results(self):
-        self.results_tab.load_results()
         self.tabview.set("3. Results")
+        # Defer loading so the tab renders first, then populates
+        self.after(50, self.results_tab.load_results)

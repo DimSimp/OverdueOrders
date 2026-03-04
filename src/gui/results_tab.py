@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import subprocess
 import sys
 from tkinter import messagebox
@@ -12,29 +14,49 @@ from src.pdf_parser import InvoiceItem
 class ReadOnlyTable(ctk.CTkScrollableFrame):
     """Scrollable read-only table using CTkLabel cells."""
 
-    # Alternating color pairs per order group: (light_mode, dark_mode)
+    # Alternating background colors per order group: (light_mode, dark_mode)
     _GROUP_COLORS = [
-        ("gray96", "gray18"),
-        ("gray88", "gray25"),
+        ("gray92", "gray20"),
+        ("gray84", "gray28"),
     ]
-    _SEPARATOR_HEIGHT = 6  # pixels of gap between order groups
+    _BORDER_COLOR = ("gray65", "gray45")
 
     def __init__(self, master, columns: list[str], col_widths: list[int], **kwargs):
         super().__init__(master, **kwargs)
         self._columns = columns
         self._col_widths = col_widths
+        self._header_frame: ctk.CTkFrame | None = None
+        self._content_frames: list[ctk.CTkFrame] = []
         self._render_headers()
 
-    def _render_headers(self):
+    def _configure_columns(self, frame: ctk.CTkFrame, col_offset: int, btn_width: int) -> None:
+        """Set fixed minsize on every grid column so widths stay consistent across frames."""
+        if btn_width:
+            frame.grid_columnconfigure(0, minsize=btn_width + 12, weight=0)
+        for col, width in enumerate(self._col_widths):
+            frame.grid_columnconfigure(col + col_offset, minsize=width + 12, weight=0)
+
+    def _render_headers(self, col_offset: int = 0, btn_width: int = 0):
+        """Render the header row in its own packed frame."""
+        if self._header_frame is not None:
+            self._header_frame.destroy()
+        self._header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._header_frame.pack(fill="x", padx=4, pady=(4, 2))
+        self._configure_columns(self._header_frame, col_offset, btn_width)
+
+        if btn_width:
+            ctk.CTkLabel(
+                self._header_frame, text="", width=btn_width
+            ).grid(row=0, column=0, padx=(4, 8), pady=(2, 4), sticky="w")
+
         for col, (header, width) in enumerate(zip(self._columns, self._col_widths)):
-            lbl = ctk.CTkLabel(
-                self,
+            ctk.CTkLabel(
+                self._header_frame,
                 text=header,
                 font=ctk.CTkFont(weight="bold"),
                 width=width,
                 anchor="w",
-            )
-            lbl.grid(row=0, column=col, padx=(4, 8), pady=(4, 6), sticky="w")
+            ).grid(row=0, column=col + col_offset, padx=(4, 8), pady=(2, 4), sticky="w")
 
     def load_rows(
         self,
@@ -45,104 +67,79 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
         """
         Load rows into the table.
 
-        Args:
-            group_key_col: If set, rows are visually grouped by the value in this
-                           column. A gap is inserted between groups, and alternating
-                           background colors distinguish adjacent groups.
-            group_button:  If set (along with group_key_col), adds a button to the
-                           first row of each group. Dict with keys:
-                           - "text": button label (str)
-                           - "callback": function(group_key_value) called on click
-                           - "width": button width in pixels (default 60)
+        Each order group is rendered inside a bordered CTkFrame so orders are
+        visually separated with an outline. The action button (if any) appears
+        at the left of the first row of each group.
         """
-        # Clear existing data rows (not header)
-        for widget in self.winfo_children():
-            info = widget.grid_info()
-            if info and int(info.get("row", 0)) > 0:
-                widget.destroy()
+        for frame in self._content_frames:
+            frame.destroy()
+        self._content_frames = []
 
-        # Add button column header if needed
-        btn_col = len(self._columns) if group_button else None
-        if group_button:
-            lbl = ctk.CTkLabel(
-                self,
-                text="",
-                font=ctk.CTkFont(weight="bold"),
-                width=group_button.get("width", 60),
-                anchor="w",
-            )
-            lbl.grid(row=0, column=btn_col, padx=(4, 8), pady=(4, 6), sticky="w")
+        btn_width = group_button.get("width", 60) if group_button else 0
+        col_offset = 1 if group_button else 0
+
+        self._render_headers(col_offset=col_offset, btn_width=btn_width)
 
         if group_key_col is None:
-            # No grouping — simple alternating rows
-            for row_idx, row_data in enumerate(rows, start=1):
-                bg = self._GROUP_COLORS[row_idx % 2]
+            # No grouping — simple alternating rows, no border
+            for row_idx, row_data in enumerate(rows):
+                colors = self._GROUP_COLORS[row_idx % 2]
+                row_frame = ctk.CTkFrame(self, fg_color=colors, corner_radius=2)
+                row_frame.pack(fill="x", padx=4, pady=1)
+                self._content_frames.append(row_frame)
                 for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
-                    lbl = ctk.CTkLabel(
-                        self,
+                    ctk.CTkLabel(
+                        row_frame, text=str(val), width=width,
+                        anchor="w", fg_color="transparent",
+                    ).grid(row=0, column=col, padx=(4, 8), pady=2, sticky="w")
+            return
+
+        # Pre-group rows by the group key column
+        groups: list[tuple[str, list]] = []
+        for row_data in rows:
+            key = row_data[group_key_col] if group_key_col < len(row_data) else ""
+            if groups and groups[-1][0] == key:
+                groups[-1][1].append(row_data)
+            else:
+                groups.append((key, [row_data]))
+
+        for group_idx, (key, group_rows) in enumerate(groups):
+            colors = self._GROUP_COLORS[group_idx % 2]
+
+            # One bordered frame per order group
+            group_frame = ctk.CTkFrame(
+                self,
+                border_width=1,
+                border_color=self._BORDER_COLOR,
+                corner_radius=4,
+                fg_color=colors,
+            )
+            group_frame.pack(fill="x", padx=4, pady=3)
+            self._configure_columns(group_frame, col_offset, btn_width)
+            self._content_frames.append(group_frame)
+
+            for row_idx, row_data in enumerate(group_rows):
+                # Action button on the first row only, at column 0
+                if group_button and row_idx == 0:
+                    ctk.CTkButton(
+                        group_frame,
+                        text=group_button["text"],
+                        width=btn_width,
+                        height=24,
+                        font=ctk.CTkFont(size=11),
+                        fg_color="gray50",
+                        hover_color="gray40",
+                        command=lambda k=key: group_button["callback"](k),
+                    ).grid(row=row_idx, column=0, padx=(4, 8), pady=2, sticky="w")
+
+                for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
+                    ctk.CTkLabel(
+                        group_frame,
                         text=str(val),
                         width=width,
                         anchor="w",
-                        fg_color=bg,
-                        corner_radius=2,
-                    )
-                    lbl.grid(row=row_idx, column=col, padx=(4, 8), pady=1, sticky="w")
-            return
-
-        # Grouped mode — detect group boundaries and add visual separation
-        group_idx = 0
-        prev_key = None
-        grid_row = 1
-        is_first_in_group = True
-
-        for row_data in rows:
-            current_key = row_data[group_key_col] if group_key_col < len(row_data) else ""
-
-            if prev_key is not None and current_key != prev_key:
-                # Insert a spacer row between groups
-                spacer = ctk.CTkFrame(self, height=self._SEPARATOR_HEIGHT, fg_color="transparent")
-                spacer.grid(
-                    row=grid_row, column=0,
-                    columnspan=len(self._columns) + (1 if group_button else 0),
-                    sticky="ew",
-                )
-                grid_row += 1
-                group_idx += 1
-                is_first_in_group = True
-
-            bg = self._GROUP_COLORS[group_idx % 2]
-
-            for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
-                lbl = ctk.CTkLabel(
-                    self,
-                    text=str(val),
-                    width=width,
-                    anchor="w",
-                    fg_color=bg,
-                    corner_radius=2,
-                )
-                lbl.grid(row=grid_row, column=col, padx=(4, 8), pady=1, sticky="w")
-
-            # Add action button on the first row of each group
-            if group_button and is_first_in_group:
-                key_val = current_key  # capture for closure
-                # Also capture the platform (first data column for unmatched, second for matched)
-                # We pass the full group key which includes platform info
-                btn = ctk.CTkButton(
-                    self,
-                    text=group_button["text"],
-                    width=group_button.get("width", 60),
-                    height=24,
-                    font=ctk.CTkFont(size=11),
-                    fg_color="gray50",
-                    hover_color="gray40",
-                    command=lambda k=key_val: group_button["callback"](k),
-                )
-                btn.grid(row=grid_row, column=btn_col, padx=(4, 8), pady=1, sticky="w")
-                is_first_in_group = False
-
-            prev_key = current_key
-            grid_row += 1
+                        fg_color="transparent",
+                    ).grid(row=row_idx, column=col + col_offset, padx=(4, 8), pady=1, sticky="w")
 
 
 class ResultsTab(ctk.CTkFrame):
@@ -223,8 +220,8 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._unmatched_orders_note.pack(padx=20, pady=20, anchor="nw")
 
-        UNMATCHED_COLS = ["Platform", "Order No.", "Customer", "Date", "SKU", "Notes"]
-        UNMATCHED_WIDTHS = [80, 110, 130, 90, 130, 310]
+        UNMATCHED_COLS = ["Platform", "Order No.", "Customer", "Date", "SKU", "Description", "Qty", "Notes"]
+        UNMATCHED_WIDTHS = [80, 110, 130, 90, 130, 200, 40, 230]
         self._unmatched_orders_table = ReadOnlyTable(
             self._inner_tabs.tab("Unmatched Orders"),
             columns=UNMATCHED_COLS,
@@ -259,28 +256,37 @@ class ResultsTab(ctk.CTkFrame):
 
     def load_results(self):
         """Called by App when switching to this tab. Runs matching and updates UI."""
-        invoice_items = self._app.invoice_tab.get_invoice_items()
+        try:
+            self._error_label.configure(text="Loading…")
+            self.update_idletasks()
 
-        # Neto orders already have eBay channel excluded; eBay orders come directly from eBay API
-        self._neto_orders = self._app.neto_orders
-        self._ebay_orders = self._app.ebay_orders
+            invoice_items = self._app.invoice_tab.get_invoice_items()
 
-        matched, unmatched_inv = match_orders_to_invoice(
-            invoice_items,
-            self._neto_orders,
-            self._ebay_orders,
-            on_po_phrase=self._app.config.app.on_po_filter_phrase,
-        )
+            # Neto orders already have eBay channel excluded; eBay orders come directly from eBay API
+            self._neto_orders = self._app.neto_orders
+            self._ebay_orders = self._app.ebay_orders
 
-        # Reset manual overrides on fresh data load
-        self._excluded_order_ids.clear()
-        self._force_matched_order_ids.clear()
+            matched, unmatched_inv = match_orders_to_invoice(
+                invoice_items,
+                self._neto_orders,
+                self._ebay_orders,
+                on_po_phrase=self._app.config.app.on_po_filter_phrase,
+            )
 
-        self._matched = matched
-        self._unmatched_inv = unmatched_inv
-        self._app.matched_orders = matched
+            # Reset manual overrides on fresh data load
+            self._excluded_order_ids.clear()
+            self._force_matched_order_ids.clear()
 
-        self._refresh_tables()
+            self._matched = matched
+            self._unmatched_inv = unmatched_inv
+            self._app.matched_orders = matched
+
+            self._refresh_tables()
+            self._error_label.configure(text="")
+        except Exception as exc:
+            import traceback, sys
+            traceback.print_exc(file=sys.stderr)
+            self._error_label.configure(text=f"Error loading results: {exc}")
 
     def _refresh_tables(self):
         """Re-render matched and unmatched tables with current overrides applied."""
@@ -308,9 +314,9 @@ class ResultsTab(ctk.CTkFrame):
             return []
 
         result = []
-        phrase = self._app.config.app.on_po_filter_phrase
-
-        for order in filter_on_po(self._neto_orders, phrase):
+        # TODO: filter disabled — iterate all orders
+        # for order in filter_on_po(self._neto_orders, self._app.config.app.on_po_filter_phrase):
+        for order in self._neto_orders:
             channel = order.sales_channel or "Neto"
             key = (channel, order.order_id)
             if key not in self._force_matched_order_ids:
@@ -399,10 +405,10 @@ class ResultsTab(ctk.CTkFrame):
                 return
 
     def _update_summary(self, matched, unmatched_inv):
-        phrase = self._app.config.app.on_po_filter_phrase
-        on_po_neto = filter_on_po(self._neto_orders, phrase)
-        on_po_ebay = filter_on_po(self._ebay_orders, phrase)
-        candidate_count = len(on_po_neto) + len(on_po_ebay)
+        # TODO: filter disabled — count all awaiting-shipment orders
+        # on_po_neto = filter_on_po(self._neto_orders, self._app.config.app.on_po_filter_phrase)
+        # on_po_ebay = filter_on_po(self._ebay_orders, self._app.config.app.on_po_filter_phrase)
+        candidate_count = len(self._neto_orders) + len(self._ebay_orders)
 
         matched_order_ids = {(m.platform, m.order_id) for m in matched}
         unmatched_order_count = max(0, candidate_count - len(matched_order_ids))
@@ -472,19 +478,30 @@ class ResultsTab(ctk.CTkFrame):
             return (1, row[0], row[1])
 
         rows = []
-        for order in filter_on_po(self._neto_orders, phrase):
+        # TODO: filter disabled — showing all awaiting-shipment orders
+        # for order in filter_on_po(self._neto_orders, phrase):
+        for order in self._neto_orders:
             channel = order.sales_channel or "Neto"
             if (channel, order.order_id) not in matched_ids:
                 date_str = order.date_paid.strftime("%Y-%m-%d") if order.date_paid else ""
-                skus = ", ".join(l.sku for l in order.line_items if l.sku)
-                rows.append([channel, order.order_id, order.customer_name, date_str, skus, order.notes])
+                # One row per line item; notes are order-level so only on first item
+                for idx, line in enumerate(order.line_items):
+                    rows.append([
+                        channel, order.order_id, order.customer_name, date_str,
+                        line.sku, line.product_name, str(line.quantity),
+                        order.notes if idx == 0 else "",
+                    ])
 
         # All eBay orders are candidates — show any that didn't match the invoice
         for order in self._ebay_orders:
             if ("eBay", order.order_id) not in matched_ids:
                 date_str = order.creation_date.strftime("%Y-%m-%d") if order.creation_date else ""
-                skus = ", ".join(l.sku for l in order.line_items if l.sku)
-                rows.append(["eBay", order.order_id, order.buyer_name, date_str, skus, order.buyer_notes])
+                # One row per line item; eBay notes are item-level
+                for line in order.line_items:
+                    rows.append([
+                        "eBay", order.order_id, order.buyer_name, date_str,
+                        line.sku, line.title, str(line.quantity), line.notes,
+                    ])
 
         rows.sort(key=_platform_key)
         self._unmatched_orders_table.load_rows(

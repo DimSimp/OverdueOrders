@@ -68,16 +68,18 @@ class NetoClient:
         self,
         date_from: datetime,
         date_to: datetime,
+        include_ebay_channel: bool = False,
         progress_callback=None,
     ) -> list[NetoOrder]:
         """
-        Fetch all paid, undispatched, non-eBay orders within the given date range.
-        eBay orders are handled directly via the eBay API — excluded here.
+        Fetch all paid, undispatched orders within the given date range.
+        By default, eBay-channel orders are excluded (fetched via the eBay API instead).
+        Set include_ebay_channel=True to include them (e.g. when eBay direct API is unavailable).
         Handles pagination automatically.
         progress_callback(fetched: int, total: int) is called if provided.
         """
         all_orders = []
-        page = 1
+        page = 0
         limit = 200
         total = None
 
@@ -97,8 +99,7 @@ class NetoClient:
 
             for raw in raw_orders:
                 order = self._parse_order(raw)
-                # Exclude eBay-channel orders — fetched directly from eBay API instead
-                if order and order.sales_channel.lower() != "ebay":
+                if order and (include_ebay_channel or order.sales_channel.lower() != "ebay"):
                     all_orders.append(order)
 
             if progress_callback:
@@ -178,12 +179,7 @@ class NetoClient:
         raw_lines = raw.get("OrderLine", [])
         if isinstance(raw_lines, dict):
             raw_lines = [raw_lines]
-        _debug_printed = False
         for line in raw_lines:
-            if not _debug_printed:
-                import sys
-                print(f"DEBUG OrderLine keys: {list(line.keys())}", file=sys.stderr, flush=True)
-                _debug_printed = True
             sku = line.get("SKU", "") or line.get("ProductSKU", "")
             qty_raw = line.get("Quantity", line.get("QuantityOrdered", 1))
             try:

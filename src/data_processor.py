@@ -66,10 +66,12 @@ def match_orders_to_invoice(
         if key:
             invoice_lookup[key] = item
 
-    on_po_neto = filter_on_po(neto_orders, on_po_phrase)
-    # eBay buyer_notes are now populated with PrivateNotes from the Trading API,
-    # so the "on po" filter works correctly for eBay orders too.
-    on_po_ebay = filter_on_po(ebay_orders, on_po_phrase)
+    # TODO: "on PO" filter temporarily disabled — using all awaiting-shipment orders instead.
+    # Re-enable these two lines (and remove the two below) once notes are consistent.
+    # on_po_neto = filter_on_po(neto_orders, on_po_phrase)
+    # on_po_ebay = filter_on_po(ebay_orders, on_po_phrase)
+    on_po_neto = neto_orders
+    on_po_ebay = ebay_orders
 
     matched: list[MatchedOrder] = []
     matched_invoice_keys: set[str] = set()

@@ -1,3 +1,4 @@
+import os
 import threading
 from tkinter import filedialog
 
@@ -82,6 +83,7 @@ class InvoiceTab(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._app = app
         self._on_complete = on_complete
+        self._loaded_filenames: list[str] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -127,6 +129,20 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._status_label.pack(side="left", padx=(16, 0))
 
+        # ── Loaded invoices list ──────────────────────────────────────────
+        files_row = ctk.CTkFrame(self, fg_color="transparent")
+        files_row.pack(fill="x", padx=12, pady=(0, 2))
+        ctk.CTkLabel(
+            files_row, text="Loaded invoices:",
+            font=ctk.CTkFont(size=12), text_color="gray60",
+        ).pack(side="left")
+        self._files_box = ctk.CTkTextbox(
+            files_row, height=52, state="disabled",
+            font=ctk.CTkFont(size=12), wrap="none",
+            border_width=1, corner_radius=4,
+        )
+        self._files_box.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
         # ── Editable table ────────────────────────────────────────────────
         self._table = EditableTable(self, corner_radius=6)
         self._table.pack(fill="both", expand=True, padx=12, pady=4)
@@ -157,11 +173,11 @@ class InvoiceTab(ctk.CTkFrame):
     # ── Actions ───────────────────────────────────────────────────────────
 
     def _import_pdf(self):
-        path = filedialog.askopenfilename(
-            title="Select Supplier Invoice PDF",
+        paths = filedialog.askopenfilenames(
+            title="Select Supplier Invoice PDF(s)",
             filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
         )
-        if not path:
+        if not paths:
             return
 
         supplier_name = self._supplier_var.get()
@@ -171,35 +187,53 @@ class InvoiceTab(ctk.CTkFrame):
             return
 
         self._import_btn.configure(state="disabled")
-        self._set_status("Parsing PDF…", color="gray60")
+        self._set_status(f"Parsing {len(paths)} PDF(s)…", color="gray60")
         self._set_error("")
-
-        def _notify_ai_fallback():
-            self.after(0, lambda: self._set_status("AI parsing (OpenAI)…", color="gray60"))
 
         openai_config = getattr(self._app.config, "openai", None)
 
+        def _notify_ai_fallback(filename: str):
+            self.after(0, lambda: self._set_status(f"AI parsing {filename}…", color="gray60"))
+
         def _worker():
-            try:
-                items = parse_invoice(
-                    path, supplier,
-                    openai_config=openai_config,
-                    on_ai_fallback=_notify_ai_fallback,
-                )
-                self.after(0, lambda: self._on_parse_success(items))
-            except ParseError as exc:
-                self.after(0, lambda e=str(exc): self._on_parse_error(e))
-            except Exception as exc:
-                self.after(0, lambda e=str(exc): self._on_parse_error(f"Unexpected error: {e}"))
+            errors = []
+            for idx, path in enumerate(paths):
+                fname = os.path.basename(path)
+                self.after(0, lambda f=fname, i=idx, n=len(paths):
+                    self._set_status(f"Parsing {f} ({i+1}/{n})…", color="gray60"))
+                try:
+                    items = parse_invoice(
+                        path, supplier,
+                        openai_config=openai_config,
+                        on_ai_fallback=lambda f=fname: _notify_ai_fallback(f),
+                    )
+                    self.after(0, lambda it=items, f=fname: self._on_parse_success(it, f))
+                except ParseError as exc:
+                    errors.append(f"{fname}: {exc}")
+                except Exception as exc:
+                    errors.append(f"{fname}: Unexpected error: {exc}")
+
+            if errors:
+                self.after(0, lambda e="\n".join(errors): self._on_parse_error(e))
+            else:
+                self.after(0, lambda: self._import_btn.configure(state="normal"))
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_parse_success(self, items: list[InvoiceItem]):
+    def _on_parse_success(self, items: list[InvoiceItem], filename: str):
         self._table.load_items(items, append=True)
+        self._loaded_filenames.append(filename)
+        self._update_files_box()
         count = self._table.row_count()
         self._set_status(f"{count} item{'s' if count != 1 else ''} loaded.", color="green")
         self._next_btn.configure(state="normal")
         self._import_btn.configure(state="normal")
+
+    def _update_files_box(self):
+        self._files_box.configure(state="normal")
+        self._files_box.delete("1.0", "end")
+        self._files_box.insert("1.0", "  |  ".join(self._loaded_filenames))
+        self._files_box.configure(state="disabled")
 
     def _on_parse_error(self, message: str):
         self._set_error(message)
@@ -208,6 +242,8 @@ class InvoiceTab(ctk.CTkFrame):
 
     def _clear(self):
         self._table.clear()
+        self._loaded_filenames.clear()
+        self._update_files_box()
         self._set_status("No items loaded.", color="gray60")
         self._set_error("")
         self._next_btn.configure(state="disabled")

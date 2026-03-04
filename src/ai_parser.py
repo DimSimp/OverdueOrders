@@ -25,7 +25,7 @@ as a JSON array.
 Each item must have these fields:
 - "sku": the product SKU / item code / part number (string)
 - "description": the product description (string)
-- "quantity": the quantity shipped or ordered as an integer
+- "quantity": the quantity shipped/supplied as an integer (NOT qty ordered or backordered)
 
 Rules:
 - Return ONLY the JSON array, no markdown fences or commentary.
@@ -43,10 +43,20 @@ def _build_user_prompt(supplier: SupplierConfig) -> str:
 
     if supplier.pdf_format == "daddario":
         parts.append(
-            "The column order is: SKU, Description, U/M, QtyOrdered, "
+            "Column layout: Item Number, Description, U/M, QtyOrdered, "
             "QtyShipped, [QtyBackOrdered], RRP, Disc%, UnitPrice, Amount. "
-            "Use QtyShipped as the quantity. Skip items where Amount is .00 "
-            "or QtyShipped is 0."
+            "Use the 'Item Number' column as the SKU. "
+            "Use QtyShipped as the quantity. "
+            "Skip items where Amount is .00 or QtyShipped is 0."
+        )
+    elif supplier.name.startswith("AMS"):
+        parts.append(
+            "Column layout: Model No, Description, SUPP, B/O (and possibly other columns). "
+            "'Model No' is the SKU. "
+            "'SUPP' is the quantity supplied (received) — use this as the quantity. "
+            "'B/O' is the backordered quantity — ignore it entirely. "
+            "Stop extracting items when you encounter a line starting with "
+            "'Packed by' or 'Collect' — those mark the end of the invoice."
         )
 
     parts.append("Extract all line items from this invoice page.")
