@@ -156,7 +156,7 @@ class NetoClient:
     def _post(self, body: dict) -> dict:
         return self._post_action("GetOrder", body)
 
-    def _post_action(self, action: str, body: dict) -> dict:
+    def _post_action(self, action: str, body: dict, timeout: int = 30) -> dict:
         url = f"{self._config.store_url}/do/WS/NetoAPI"
         resp = self._session.post(
             url,
@@ -168,7 +168,7 @@ class NetoClient:
                 "Content-Type": "application/json",
             },
             json=body,
-            timeout=30,
+            timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -185,7 +185,7 @@ class NetoClient:
                 "OutputSelector": ["OrderID", "OrderStatus"],
             }
         }
-        data = self._post(body)
+        data = self._post_action("GetOrder", body, timeout=10)
         orders = data.get("Order", [])
         if isinstance(orders, dict):
             orders = [orders]

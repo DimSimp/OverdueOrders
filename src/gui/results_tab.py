@@ -589,6 +589,11 @@ class ResultsTab(ctk.CTkFrame):
 
     def _open_order_detail(self, order_id: str, platform: str):
         """Check order status via API, then open detail modal if still active."""
+        # Skip status check if eBay isn't authenticated (avoids hanging on auth errors)
+        if platform.lower() == "ebay" and not self._app.ebay_client.is_authenticated():
+            self._show_order_modal(order_id, platform)
+            return
+
         self._error_label.configure(text="Checking order status...")
         self.update_idletasks()
 
@@ -605,8 +610,9 @@ class ResultsTab(ctk.CTkFrame):
                 self.after(0, lambda: self._handle_status_check(order_id, platform, is_completed))
             except Exception as e:
                 # If status check fails (e.g. network error), open the modal anyway
+                err_msg = f"Status check failed: {e}"
                 self.after(0, lambda: self._show_order_modal(order_id, platform))
-                self.after(0, lambda: self._error_label.configure(text=f"Status check failed: {e}"))
+                self.after(0, lambda m=err_msg: self._error_label.configure(text=m))
 
         threading.Thread(target=_check_and_open, daemon=True).start()
 
@@ -624,6 +630,7 @@ class ResultsTab(ctk.CTkFrame):
             self._show_order_modal(order_id, platform)
 
     def _show_order_modal(self, order_id: str, platform: str):
+        self._error_label.configure(text="")
         neto_order = None
         ebay_order = None
         matched_skus = []
@@ -639,6 +646,10 @@ class ResultsTab(ctk.CTkFrame):
                 if o.order_id == order_id:
                     neto_order = o
                     break
+
+        if neto_order is None and ebay_order is None:
+            self._error_label.configure(text=f"Could not find order {order_id} ({platform}) in loaded data")
+            return
 
         # Gather matched SKUs for this order
         for m in self._matched:
@@ -682,7 +693,8 @@ class ResultsTab(ctk.CTkFrame):
 
                 self.after(0, lambda: self._apply_refreshed_orders(neto_orders, ebay_orders))
             except Exception as e:
-                self.after(0, lambda: self._error_label.configure(text=f"Refresh failed: {e}"))
+                err_msg = f"Refresh failed: {e}"
+                self.after(0, lambda m=err_msg: self._error_label.configure(text=m))
                 self.after(0, lambda: self._refresh_btn.configure(state="normal"))
 
         threading.Thread(target=_fetch, daemon=True).start()

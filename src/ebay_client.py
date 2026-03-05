@@ -266,7 +266,7 @@ class EbayClient:
                 "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
                 "Content-Type": "application/json",
             },
-            timeout=30,
+            timeout=10,
         )
         self._raise_for_ebay_error(resp)
         data = resp.json()

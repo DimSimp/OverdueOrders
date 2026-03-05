@@ -32,6 +32,17 @@ class OrderDetailModal(ctk.CTkToplevel):
         on_close_callback=None,
     ):
         super().__init__(master)
+
+        # Workaround for customtkinter bug on Windows: CTkToplevel schedules
+        # after(200, iconbitmap(...)) which fails with TclError on some systems.
+        _orig_iconbitmap = self.iconbitmap
+        def _safe_iconbitmap(*args, **kwargs):
+            try:
+                _orig_iconbitmap(*args, **kwargs)
+            except Exception:
+                pass
+        self.iconbitmap = _safe_iconbitmap
+
         self._order_id = order_id
         self._platform = platform
         self._neto_order = neto_order
@@ -47,24 +58,36 @@ class OrderDetailModal(ctk.CTkToplevel):
         self.title(f"Order {order_id} — {platform}")
         self.geometry("750x780")
         self.minsize(600, 500)
-        self.transient(master)
-        self.grab_set()
+
+        # Use the top-level window as transient parent (not the tab frame)
+        toplevel = master.winfo_toplevel()
+        self.transient(toplevel)
 
         self.protocol("WM_DELETE_WINDOW", self._close)
 
+        # Build UI first, then grab focus after a short delay to avoid Windows freeze
         self._build_ui()
+        self.after(150, self._activate)
 
     def _build_ui(self):
-        container = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=8, pady=8)
+        try:
+            container = ctk.CTkScrollableFrame(self, fg_color="transparent")
+            container.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self._build_header(container)
-        self._build_shipping(container)
-        self._build_line_items(container)
-        self._build_notes(container)
-        self._build_tracking(container)
-        self._build_freight_placeholder(container)
-        self._build_action_bar()
+            self._build_header(container)
+            self._build_shipping(container)
+            self._build_line_items(container)
+            self._build_notes(container)
+            self._build_tracking(container)
+            self._build_freight_placeholder(container)
+            self._build_action_bar()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            ctk.CTkLabel(
+                self, text=f"Error building order detail:\n{e}",
+                text_color="red", wraplength=600,
+            ).pack(padx=20, pady=20)
 
     # ── Header ────────────────────────────────────────────────────────────
 
@@ -428,7 +451,20 @@ class OrderDetailModal(ctk.CTkToplevel):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to mark order as sent:\n{e}", parent=self)
 
+    def _activate(self):
+        """Bring window to front and grab focus after UI is fully rendered."""
+        self.lift()
+        self.focus_force()
+        try:
+            self.grab_set()
+        except Exception:
+            pass  # grab can fail if window was closed quickly
+
     def _close(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         if self._on_close:
             self._on_close(self._completed)
         self.destroy()
