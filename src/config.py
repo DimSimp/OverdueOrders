@@ -67,6 +67,8 @@ class AppConfig:
     order_lookback_days: int
     on_po_filter_phrase: str
     output_dir: str
+    dry_run: bool = True
+    snapshot_dir: str = ""
 
 
 class ConfigManager:
@@ -132,6 +134,8 @@ class ConfigManager:
             order_lookback_days=a.get("order_lookback_days", 30),
             on_po_filter_phrase=a.get("on_po_filter_phrase", "on po"),
             output_dir=a.get("output_dir", "output"),
+            dry_run=a.get("dry_run", True),
+            snapshot_dir=a.get("snapshot_dir", ""),
         )
 
         o = self._raw.get("openai", {})

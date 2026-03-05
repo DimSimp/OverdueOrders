@@ -21,7 +21,7 @@ EBAY_SANDBOX_AUTH_URL = "https://auth.sandbox.ebay.com/oauth2/authorize"
 EBAY_SANDBOX_API_BASE = "https://api.sandbox.ebay.com"
 
 EBAY_AU_MARKETPLACE_ID = "EBAY_AU"
-EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
+EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment"
 
 # Trading API (SOAP) — for reading PrivateNotes via GetSellerTransactions
 EBAY_PROD_TRADING_URL = "https://api.ebay.com/ws/api.dll"
@@ -40,6 +40,7 @@ class EbayLineItem:
     legacy_item_id: str = ""        # Trading API ItemID (for PrivateNotes lookup)
     legacy_transaction_id: str = "" # Trading API TransactionID
     notes: str = ""                 # PrivateNotes for this specific item
+    image_url: str = ""             # Product image URL
 
 
 @dataclass
@@ -51,6 +52,15 @@ class EbayOrder:
     order_status: str       # orderFulfillmentStatus
     payment_status: str     # orderPaymentStatus
     line_items: list[EbayLineItem] = field(default_factory=list)
+    # Shipping address
+    ship_name: str = ""
+    ship_street1: str = ""
+    ship_street2: str = ""
+    ship_city: str = ""
+    ship_state: str = ""
+    ship_postcode: str = ""
+    ship_country: str = ""
+    ship_phone: str = ""
 
 
 class EbayAuthError(Exception):
@@ -246,6 +256,59 @@ class EbayClient:
 
         return orders
 
+    def get_order_status(self, order_id: str) -> str:
+        """Lightweight call to check current fulfillment status of an order."""
+        token = self._ensure_valid_token()
+        resp = self._session.get(
+            f"{self._api_base}/sell/fulfillment/v1/order/{order_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        self._raise_for_ebay_error(resp)
+        data = resp.json()
+        return data.get("orderFulfillmentStatus", "")
+
+    def create_shipping_fulfillment(
+        self,
+        order_id: str,
+        line_items: list[EbayLineItem],
+        tracking_number: str = "",
+        carrier: str = "",
+        dry_run: bool = True,
+    ) -> dict:
+        """Create a shipping fulfillment for an order. Returns API response."""
+        fulfillment_lines = [
+            {"lineItemId": li.line_item_id, "quantity": li.quantity}
+            for li in line_items
+        ]
+        body = {"lineItems": fulfillment_lines}
+        if tracking_number:
+            body["trackingNumber"] = tracking_number
+        if carrier:
+            body["shippingCarrierCode"] = carrier
+
+        if dry_run:
+            print(f"[DRY RUN] eBay CreateShippingFulfillment on {order_id}: {body}")
+            return {"fulfillmentId": "DRY_RUN", "DryRun": True}
+
+        token = self._ensure_valid_token()
+        resp = self._session.post(
+            f"{self._api_base}/sell/fulfillment/v1/order/{order_id}/shipping_fulfillment",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=30,
+        )
+        self._raise_for_ebay_error(resp)
+        return resp.json()
+
     # ----- Trading API (PrivateNotes) -----
 
     @property
@@ -385,6 +448,10 @@ class EbayClient:
 
         line_items = []
         for li in raw.get("lineItems", []):
+            image_url = ""
+            image_data = li.get("image")
+            if isinstance(image_data, dict):
+                image_url = str(image_data.get("imageUrl", "") or "").strip()
             line_items.append(EbayLineItem(
                 line_item_id=str(li.get("lineItemId", "")),
                 sku=str(li.get("sku", "") or "").strip(),
@@ -392,7 +459,19 @@ class EbayClient:
                 quantity=int(li.get("quantity", 1)),
                 legacy_item_id=str(li.get("legacyItemId", "") or ""),
                 legacy_transaction_id=str(li.get("legacyTransactionId", "") or ""),
+                image_url=image_url,
             ))
+
+        # Extract shipping address from fulfillmentStartInstructions
+        ship_to = {}
+        instructions = raw.get("fulfillmentStartInstructions", [])
+        if instructions:
+            ship_to = (
+                instructions[0]
+                .get("shippingStep", {})
+                .get("shipTo", {})
+            )
+        contact = ship_to.get("contactAddress", {})
 
         return EbayOrder(
             order_id=str(raw.get("orderId", "")),
@@ -402,6 +481,14 @@ class EbayClient:
             order_status=raw.get("orderFulfillmentStatus", ""),
             payment_status=raw.get("orderPaymentStatus", ""),
             line_items=line_items,
+            ship_name=str(ship_to.get("fullName", "") or "").strip(),
+            ship_street1=str(contact.get("addressLine1", "") or "").strip(),
+            ship_street2=str(contact.get("addressLine2", "") or "").strip(),
+            ship_city=str(contact.get("city", "") or "").strip(),
+            ship_state=str(contact.get("stateOrProvince", "") or "").strip(),
+            ship_postcode=str(contact.get("postalCode", "") or "").strip(),
+            ship_country=str(contact.get("countryCode", "") or "").strip(),
+            ship_phone=str(ship_to.get("primaryPhone", {}).get("phoneNumber", "") or "").strip(),
         )
 
 

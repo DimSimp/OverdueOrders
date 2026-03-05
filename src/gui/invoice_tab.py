@@ -121,6 +121,15 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._clear_btn.pack(side="left", padx=(8, 0))
 
+        self._load_session_btn = ctk.CTkButton(
+            controls,
+            text="Load Session",
+            width=110,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._load_session,
+        )
+        self._load_session_btn.pack(side="left", padx=(8, 0))
+
         self._status_label = ctk.CTkLabel(
             controls,
             text="No items loaded.",
@@ -253,6 +262,51 @@ class InvoiceTab(ctk.CTkFrame):
 
     def _set_error(self, text: str):
         self._error_label.configure(text=text)
+
+    def _load_session(self):
+        """Load a previously saved session snapshot."""
+        initial_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
+        path = filedialog.askopenfilename(
+            title="Load Session Snapshot",
+            initialdir=initial_dir,
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            from src.session import load_snapshot
+            snapshot = load_snapshot(path)
+
+            # Populate app state
+            self._app.neto_orders = snapshot.neto_orders
+            self._app.ebay_orders = snapshot.ebay_orders
+            self._app.matched_orders = snapshot.matched_orders
+
+            # Populate invoice table
+            self._table.clear()
+            self._table.load_items(snapshot.invoice_items, append=True)
+            self._loaded_filenames = [os.path.basename(path)]
+            self._update_files_box()
+            count = self._table.row_count()
+            self._set_status(f"Session loaded: {count} item{'s' if count != 1 else ''}.", color="green")
+            self._next_btn.configure(state="normal")
+
+            # Set results tab state and jump to it
+            results = self._app.results_tab
+            results._neto_orders = snapshot.neto_orders
+            results._ebay_orders = snapshot.ebay_orders
+            results._matched = snapshot.matched_orders
+            results._unmatched_inv = snapshot.unmatched_inv
+            results._excluded_order_ids = set(snapshot.excluded_order_ids)
+            results._force_matched_order_ids = set(snapshot.force_matched_order_ids)
+            results._refresh_tables()
+
+            # Jump to results tab
+            self._app.tabview.set("3. Results")
+
+        except Exception as e:
+            self._set_error(f"Failed to load session: {e}")
 
     # ── Public API (used by results_tab) ──────────────────────────────────
 

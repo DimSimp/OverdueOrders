@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from tkinter import messagebox
+import threading
+from tkinter import messagebox, filedialog
 
 import customtkinter as ctk
 
 from src.data_processor import MatchedOrder, filter_on_po, match_orders_to_invoice
 from src.exporter import export_to_xlsx
+from src.gui.order_detail_modal import OrderDetailModal
 from src.pdf_parser import InvoiceItem
 
 
@@ -20,6 +22,10 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
         ("gray84", "gray28"),
     ]
     _BORDER_COLOR = ("gray65", "gray45")
+    _HOVER_COLORS = [
+        ("gray88", "gray24"),
+        ("gray80", "gray32"),
+    ]
 
     def __init__(self, master, columns: list[str], col_widths: list[int], **kwargs):
         super().__init__(master, **kwargs)
@@ -30,11 +36,24 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
         self._render_headers()
 
     def _configure_columns(self, frame: ctk.CTkFrame, col_offset: int, btn_width: int) -> None:
-        """Set fixed minsize on every grid column so widths stay consistent across frames."""
+        """Set fixed widths on every grid column so widths stay consistent across frames."""
         if btn_width:
             frame.grid_columnconfigure(0, minsize=btn_width + 12, weight=0)
         for col, width in enumerate(self._col_widths):
             frame.grid_columnconfigure(col + col_offset, minsize=width + 12, weight=0)
+
+    def _make_cell(self, parent, text: str, width: int, **kwargs) -> ctk.CTkLabel:
+        """Create a label cell constrained to a fixed width with text wrapping."""
+        lbl = ctk.CTkLabel(
+            parent,
+            text=str(text),
+            width=width,
+            wraplength=width,
+            anchor="w",
+            justify="left",
+            **kwargs,
+        )
+        return lbl
 
     def _render_headers(self, col_offset: int = 0, btn_width: int = 0):
         """Render the header row in its own packed frame."""
@@ -50,19 +69,17 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
             ).grid(row=0, column=0, padx=(4, 8), pady=(2, 4), sticky="w")
 
         for col, (header, width) in enumerate(zip(self._columns, self._col_widths)):
-            ctk.CTkLabel(
-                self._header_frame,
-                text=header,
+            self._make_cell(
+                self._header_frame, header, width,
                 font=ctk.CTkFont(weight="bold"),
-                width=width,
-                anchor="w",
-            ).grid(row=0, column=col + col_offset, padx=(4, 8), pady=(2, 4), sticky="w")
+            ).grid(row=0, column=col + col_offset, padx=(4, 8), pady=(2, 4), sticky="ew")
 
     def load_rows(
         self,
         rows: list[list[str]],
         group_key_col: int | None = None,
         group_button: dict | None = None,
+        on_row_click: callable | None = None,
     ):
         """
         Load rows into the table.
@@ -70,6 +87,8 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
         Each order group is rendered inside a bordered CTkFrame so orders are
         visually separated with an outline. The action button (if any) appears
         at the left of the first row of each group.
+
+        on_row_click(group_key, platform) is called when a row is clicked (not the button).
         """
         for frame in self._content_frames:
             frame.destroy()
@@ -86,12 +105,12 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
                 colors = self._GROUP_COLORS[row_idx % 2]
                 row_frame = ctk.CTkFrame(self, fg_color=colors, corner_radius=2)
                 row_frame.pack(fill="x", padx=4, pady=1)
+                self._configure_columns(row_frame, 0, 0)
                 self._content_frames.append(row_frame)
                 for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
-                    ctk.CTkLabel(
-                        row_frame, text=str(val), width=width,
-                        anchor="w", fg_color="transparent",
-                    ).grid(row=0, column=col, padx=(4, 8), pady=2, sticky="w")
+                    self._make_cell(
+                        row_frame, val, width, fg_color="transparent",
+                    ).grid(row=0, column=col, padx=(4, 8), pady=2, sticky="ew")
             return
 
         # Pre-group rows by the group key column
@@ -105,6 +124,7 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
 
         for group_idx, (key, group_rows) in enumerate(groups):
             colors = self._GROUP_COLORS[group_idx % 2]
+            hover_colors = self._HOVER_COLORS[group_idx % 2]
 
             # One bordered frame per order group
             group_frame = ctk.CTkFrame(
@@ -117,6 +137,19 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
             group_frame.pack(fill="x", padx=4, pady=3)
             self._configure_columns(group_frame, col_offset, btn_width)
             self._content_frames.append(group_frame)
+
+            # Determine platform from first row (column index 1 for matched, 0 for unmatched)
+            platform_col = 1 if col_offset else 0
+            platform = group_rows[0][platform_col] if platform_col < len(group_rows[0]) else ""
+
+            # Hover highlight bindings
+            if on_row_click:
+                def _on_enter(e, f=group_frame, hc=hover_colors):
+                    f.configure(fg_color=hc)
+                def _on_leave(e, f=group_frame, c=colors):
+                    f.configure(fg_color=c)
+                group_frame.bind("<Enter>", _on_enter)
+                group_frame.bind("<Leave>", _on_leave)
 
             for row_idx, row_data in enumerate(group_rows):
                 # Action button on the first row only, at column 0
@@ -133,13 +166,15 @@ class ReadOnlyTable(ctk.CTkScrollableFrame):
                     ).grid(row=row_idx, column=0, padx=(4, 8), pady=2, sticky="w")
 
                 for col, (val, width) in enumerate(zip(row_data, self._col_widths)):
-                    ctk.CTkLabel(
-                        group_frame,
-                        text=str(val),
-                        width=width,
-                        anchor="w",
-                        fg_color="transparent",
-                    ).grid(row=row_idx, column=col + col_offset, padx=(4, 8), pady=1, sticky="w")
+                    cell = self._make_cell(
+                        group_frame, val, width, fg_color="transparent",
+                    )
+                    cell.grid(row=row_idx, column=col + col_offset, padx=(4, 8), pady=1, sticky="ew")
+
+                    # Make cells clickable
+                    if on_row_click:
+                        cell.configure(cursor="hand2")
+                        cell.bind("<Button-1>", lambda e, k=key, p=platform: on_row_click(k, p))
 
 
 class ResultsTab(ctk.CTkFrame):
@@ -230,7 +265,7 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._unmatched_orders_table.pack(fill="both", expand=True, padx=0, pady=(0, 0))
 
-        # ── Bottom row: export ────────────────────────────────────────────
+        # ── Bottom row: export + refresh + save ─────────────────────────────
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=12, pady=(4, 12))
 
@@ -241,6 +276,25 @@ class ResultsTab(ctk.CTkFrame):
             command=self._export_csv,
         )
         self._export_btn.pack(side="left")
+
+        self._refresh_btn = ctk.CTkButton(
+            bottom,
+            text="Refresh Orders",
+            width=130,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._refresh_orders,
+        )
+        self._refresh_btn.pack(side="left", padx=(12, 0))
+
+        self._save_session_btn = ctk.CTkButton(
+            bottom,
+            text="Save Session As",
+            width=130,
+            fg_color="gray50",
+            hover_color="gray40",
+            command=self._save_session_as,
+        )
+        self._save_session_btn.pack(side="left", padx=(12, 0))
 
         self._export_label = ctk.CTkLabel(
             bottom, text="", font=ctk.CTkFont(size=12), text_color="gray60"
@@ -283,6 +337,23 @@ class ResultsTab(ctk.CTkFrame):
 
             self._refresh_tables()
             self._error_label.configure(text="")
+
+            # Auto-save session snapshot
+            try:
+                from src.session import save_snapshot
+                save_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
+                save_snapshot(
+                    save_dir=save_dir,
+                    invoice_items=invoice_items,
+                    neto_orders=self._neto_orders,
+                    ebay_orders=self._ebay_orders,
+                    matched_orders=matched,
+                    unmatched_inv=unmatched_inv,
+                    excluded_ids=self._excluded_order_ids,
+                    force_matched_ids=self._force_matched_order_ids,
+                )
+            except Exception:
+                pass  # Auto-save is non-critical
         except Exception as exc:
             import traceback, sys
             traceback.print_exc(file=sys.stderr)
@@ -390,8 +461,7 @@ class ResultsTab(ctk.CTkFrame):
                     return
 
         # Otherwise, force-add it from the raw order lists
-        phrase = self._app.config.app.on_po_filter_phrase
-        for order in filter_on_po(self._neto_orders, phrase):
+        for order in self._neto_orders:
             channel = order.sales_channel or "Neto"
             if order.order_id == order_id:
                 self._force_matched_order_ids.add((channel, order.order_id))
@@ -459,6 +529,7 @@ class ResultsTab(ctk.CTkFrame):
                 "callback": self._exclude_order,
                 "width": 65,
             },
+            on_row_click=self._open_order_detail,
         )
 
     def _populate_unmatched_inv(self, items: list[InvoiceItem]):
@@ -513,6 +584,156 @@ class ResultsTab(ctk.CTkFrame):
                 "width": 55,
             },
         )
+
+    # ── Order Detail Modal ───────────────────────────────────────────────
+
+    def _open_order_detail(self, order_id: str, platform: str):
+        """Check order status via API, then open detail modal if still active."""
+        self._error_label.configure(text="Checking order status...")
+        self.update_idletasks()
+
+        def _check_and_open():
+            try:
+                status = ""
+                if platform.lower() == "ebay":
+                    status = self._app.ebay_client.get_order_status(order_id)
+                    is_completed = status in ("FULFILLED",)
+                else:
+                    status = self._app.neto_client.get_order_status(order_id)
+                    is_completed = status.lower() in ("dispatched", "shipped", "completed")
+
+                self.after(0, lambda: self._handle_status_check(order_id, platform, is_completed))
+            except Exception as e:
+                # If status check fails (e.g. network error), open the modal anyway
+                self.after(0, lambda: self._show_order_modal(order_id, platform))
+                self.after(0, lambda: self._error_label.configure(text=f"Status check failed: {e}"))
+
+        threading.Thread(target=_check_and_open, daemon=True).start()
+
+    def _handle_status_check(self, order_id: str, platform: str, is_completed: bool):
+        self._error_label.configure(text="")
+        if is_completed:
+            messagebox.showinfo(
+                "Order Completed",
+                f"Order {order_id} has already been completed by another user.\n\n"
+                "The orders list will now refresh.",
+                parent=self,
+            )
+            self._refresh_orders()
+        else:
+            self._show_order_modal(order_id, platform)
+
+    def _show_order_modal(self, order_id: str, platform: str):
+        neto_order = None
+        ebay_order = None
+        matched_skus = []
+
+        # Find the raw order object
+        if platform.lower() == "ebay":
+            for o in self._ebay_orders:
+                if o.order_id == order_id:
+                    ebay_order = o
+                    break
+        else:
+            for o in self._neto_orders:
+                if o.order_id == order_id:
+                    neto_order = o
+                    break
+
+        # Gather matched SKUs for this order
+        for m in self._matched:
+            if m.order_id == order_id and m.is_invoice_match:
+                matched_skus.append(m.sku)
+
+        OrderDetailModal(
+            self,
+            order_id=order_id,
+            platform=platform,
+            neto_order=neto_order,
+            ebay_order=ebay_order,
+            matched_skus=matched_skus,
+            neto_client=self._app.neto_client,
+            ebay_client=self._app.ebay_client,
+            dry_run=self._app.config.app.dry_run,
+            on_close_callback=self._on_modal_close,
+        )
+
+    def _on_modal_close(self, completed: bool):
+        if completed:
+            self._refresh_orders()
+
+    def _refresh_orders(self):
+        """Re-fetch orders from APIs and re-run matching."""
+        self._error_label.configure(text="Refreshing orders...")
+        self._refresh_btn.configure(state="disabled")
+        self.update_idletasks()
+
+        def _fetch():
+            try:
+                from datetime import datetime, timedelta
+                lookback = self._app.config.app.order_lookback_days
+                date_to = datetime.now()
+                date_from = date_to - timedelta(days=lookback)
+
+                neto_orders = self._app.neto_client.get_overdue_orders(date_from, date_to)
+                ebay_orders = []
+                if self._app.ebay_client.is_authenticated():
+                    ebay_orders = self._app.ebay_client.get_overdue_orders(date_from, date_to)
+
+                self.after(0, lambda: self._apply_refreshed_orders(neto_orders, ebay_orders))
+            except Exception as e:
+                self.after(0, lambda: self._error_label.configure(text=f"Refresh failed: {e}"))
+                self.after(0, lambda: self._refresh_btn.configure(state="normal"))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply_refreshed_orders(self, neto_orders, ebay_orders):
+        self._app.neto_orders = neto_orders
+        self._app.ebay_orders = ebay_orders
+        self._neto_orders = neto_orders
+        self._ebay_orders = ebay_orders
+
+        invoice_items = self._app.invoice_tab.get_invoice_items()
+        matched, unmatched_inv = match_orders_to_invoice(
+            invoice_items,
+            self._neto_orders,
+            self._ebay_orders,
+            on_po_phrase=self._app.config.app.on_po_filter_phrase,
+        )
+        self._matched = matched
+        self._unmatched_inv = unmatched_inv
+        self._excluded_order_ids.clear()
+        self._force_matched_order_ids.clear()
+        self._refresh_tables()
+        self._refresh_btn.configure(state="normal")
+        self._error_label.configure(text="")
+
+    def _save_session_as(self):
+        """Let the user choose a directory and save the session snapshot there."""
+        from src.session import save_snapshot
+        initial_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
+        save_dir = filedialog.askdirectory(
+            title="Choose snapshot save location",
+            initialdir=initial_dir,
+            parent=self,
+        )
+        if not save_dir:
+            return
+        try:
+            invoice_items = self._app.invoice_tab.get_invoice_items()
+            path = save_snapshot(
+                save_dir=save_dir,
+                invoice_items=invoice_items,
+                neto_orders=self._neto_orders,
+                ebay_orders=self._ebay_orders,
+                matched_orders=self._app.matched_orders,
+                unmatched_inv=self._unmatched_inv,
+                excluded_ids=self._excluded_order_ids,
+                force_matched_ids=self._force_matched_order_ids,
+            )
+            self._export_label.configure(text=f"Session saved: {path}", text_color="green")
+        except Exception as e:
+            self._error_label.configure(text=f"Save failed: {e}")
 
     # ── Export ────────────────────────────────────────────────────────────
 

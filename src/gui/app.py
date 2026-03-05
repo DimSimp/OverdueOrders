@@ -43,6 +43,18 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(side="left", padx=20, pady=10)
 
+        # Dry-run banner
+        if self.config.app.dry_run:
+            dry_banner = ctk.CTkFrame(self, height=28, corner_radius=0, fg_color=("red3", "red4"))
+            dry_banner.pack(fill="x", side="top")
+            dry_banner.pack_propagate(False)
+            ctk.CTkLabel(
+                dry_banner,
+                text="DRY RUN MODE — API writes are simulated (change dry_run in config.json to disable)",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color="white",
+            ).pack(pady=4)
+
         # Tab view
         self.tabview = ctk.CTkTabview(self, corner_radius=8)
         self.tabview.pack(fill="both", expand=True, padx=12, pady=(8, 12))

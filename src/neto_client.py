@@ -26,10 +26,21 @@ OUTPUT_SELECTOR = [
     "StickyNotes",
     "InternalOrderNotes",
     "DeliveryInstruction",
+    "ShipFirstName",
+    "ShipLastName",
+    "ShipCompany",
+    "ShipStreetLine1",
+    "ShipStreetLine2",
+    "ShipCity",
+    "ShipState",
+    "ShipPostCode",
+    "ShipCountry",
+    "ShipPhone",
     "OrderLine",
     "OrderLine.ProductName",
     "OrderLine.ShortDescription",
     "OrderLine.Name",
+    "OrderLine.ThumbURL",
 ]
 
 
@@ -39,6 +50,7 @@ class NetoLineItem:
     product_name: str
     quantity: int
     unit_price: float
+    image_url: str = ""
 
 
 @dataclass
@@ -53,6 +65,21 @@ class NetoOrder:
     sales_channel: str
     purchase_order_number: str  # For eBay orders: the eBay order ID (xx-xxxxx-xxxxx)
     line_items: list[NetoLineItem] = field(default_factory=list)
+    # Separate note fields for the order detail modal
+    sticky_notes: list[dict] = field(default_factory=list)
+    internal_notes: str = ""
+    delivery_instruction: str = ""
+    # Shipping address
+    ship_first_name: str = ""
+    ship_last_name: str = ""
+    ship_company: str = ""
+    ship_street1: str = ""
+    ship_street2: str = ""
+    ship_city: str = ""
+    ship_state: str = ""
+    ship_postcode: str = ""
+    ship_country: str = ""
+    ship_phone: str = ""
 
 
 class NetoAPIError(Exception):
@@ -127,11 +154,14 @@ class NetoClient:
         }
 
     def _post(self, body: dict) -> dict:
+        return self._post_action("GetOrder", body)
+
+    def _post_action(self, action: str, body: dict) -> dict:
         url = f"{self._config.store_url}/do/WS/NetoAPI"
         resp = self._session.post(
             url,
             headers={
-                "NETOAPI_ACTION": "GetOrder",
+                "NETOAPI_ACTION": action,
                 "NETOAPI_KEY": self._config.api_key,
                 "NETOAPI_USERNAME": self._config.username,
                 "Accept": "application/json",
@@ -147,6 +177,69 @@ class NetoClient:
             raise NetoAPIError(f"Neto API error: {messages}")
         return data
 
+    def get_order_status(self, order_id: str) -> str:
+        """Lightweight call to check current order status."""
+        body = {
+            "Filter": {
+                "OrderID": order_id,
+                "OutputSelector": ["OrderID", "OrderStatus"],
+            }
+        }
+        data = self._post(body)
+        orders = data.get("Order", [])
+        if isinstance(orders, dict):
+            orders = [orders]
+        if orders:
+            return orders[0].get("OrderStatus", "")
+        return ""
+
+    def update_order_status(
+        self,
+        order_id: str,
+        new_status: str = "Dispatched",
+        tracking_number: str = "",
+        carrier: str = "",
+        dry_run: bool = True,
+    ) -> dict:
+        """Mark an order as dispatched (or other status). Returns API response."""
+        order_update = {
+            "OrderID": order_id,
+            "OrderStatus": new_status,
+        }
+        if tracking_number:
+            order_update["ShippingTracking"] = tracking_number
+        if carrier:
+            order_update["ShippingCarrier"] = carrier
+
+        if dry_run:
+            print(f"[DRY RUN] Neto UpdateOrder: {order_update}")
+            return {"Ack": "Success", "DryRun": True}
+
+        body = {"Order": [order_update]}
+        return self._post_action("UpdateOrder", body)
+
+    def add_sticky_note(
+        self,
+        order_id: str,
+        title: str,
+        description: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Add a sticky note to an order. Returns API response."""
+        note = {"Title": title, "Description": description}
+
+        if dry_run:
+            print(f"[DRY RUN] Neto AddStickyNote on {order_id}: {note}")
+            return {"Ack": "Success", "DryRun": True}
+
+        body = {
+            "Order": [{
+                "OrderID": order_id,
+                "StickyNotes": [note],
+            }]
+        }
+        return self._post_action("UpdateOrder", body)
+
     def _parse_order(self, raw: dict) -> NetoOrder | None:
         order_id = raw.get("OrderID", "")
         if not order_id:
@@ -154,9 +247,18 @@ class NetoClient:
 
         customer_name = raw.get("Username", "") or raw.get("Email", "")
 
-        # Collect all notes fields and concatenate.
-        # StickyNotes: single dict or list of dicts {StickyNoteID, Title, Description}.
-        # InternalOrderNotes and DeliveryInstruction are plain strings.
+        # Parse separate note fields
+        raw_sticky = raw.get("StickyNotes")
+        if isinstance(raw_sticky, dict):
+            sticky_notes_list = [raw_sticky]
+        elif isinstance(raw_sticky, list):
+            sticky_notes_list = raw_sticky
+        else:
+            sticky_notes_list = []
+        internal_notes = str(raw.get("InternalOrderNotes") or "").strip()
+        delivery_instruction = str(raw.get("DeliveryInstruction") or "").strip()
+
+        # Collect all notes fields and concatenate (backward compat).
         notes_parts = []
         for notes_field in NOTES_FIELDS:
             val = raw.get(notes_field)
@@ -164,7 +266,6 @@ class NetoClient:
                 continue
             if isinstance(val, (dict, list)):
                 items = [val] if isinstance(val, dict) else val
-                # Use Description as the note text; fall back to Title if empty
                 text = " | ".join(
                     str(n.get("Description") or n.get("Title") or "").strip()
                     for n in items
@@ -197,11 +298,13 @@ class NetoClient:
                 or line.get("ItemDescription")
                 or ""
             )
+            image_url = str(line.get("ThumbURL") or line.get("DefaultImageURL") or "").strip()
             line_items.append(NetoLineItem(
                 sku=str(sku).strip(),
                 product_name=str(product_name).strip(),
                 quantity=qty,
                 unit_price=price,
+                image_url=image_url,
             ))
 
         return NetoOrder(
@@ -215,6 +318,19 @@ class NetoClient:
             sales_channel=raw.get("SalesChannel", ""),
             purchase_order_number=str(raw.get("PurchaseOrderNumber") or "").strip(),
             line_items=line_items,
+            sticky_notes=sticky_notes_list,
+            internal_notes=internal_notes,
+            delivery_instruction=delivery_instruction,
+            ship_first_name=str(raw.get("ShipFirstName") or "").strip(),
+            ship_last_name=str(raw.get("ShipLastName") or "").strip(),
+            ship_company=str(raw.get("ShipCompany") or "").strip(),
+            ship_street1=str(raw.get("ShipStreetLine1") or "").strip(),
+            ship_street2=str(raw.get("ShipStreetLine2") or "").strip(),
+            ship_city=str(raw.get("ShipCity") or "").strip(),
+            ship_state=str(raw.get("ShipState") or "").strip(),
+            ship_postcode=str(raw.get("ShipPostCode") or "").strip(),
+            ship_country=str(raw.get("ShipCountry") or "").strip(),
+            ship_phone=str(raw.get("ShipPhone") or "").strip(),
         )
 
 
