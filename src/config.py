@@ -69,6 +69,8 @@ class AppConfig:
     output_dir: str
     dry_run: bool = True
     snapshot_dir: str = ""
+    inventory_csv: str = "inventory.CSV"
+    sku_corrections_file: str = "sku_corrections.csv"
 
 
 class ConfigManager:
@@ -136,6 +138,8 @@ class ConfigManager:
             output_dir=a.get("output_dir", "output"),
             dry_run=a.get("dry_run", True),
             snapshot_dir=a.get("snapshot_dir", ""),
+            inventory_csv=a.get("inventory_csv", "inventory.CSV"),
+            sku_corrections_file=a.get("sku_corrections_file", "sku_corrections.csv"),
         )
 
         o = self._raw.get("openai", {})

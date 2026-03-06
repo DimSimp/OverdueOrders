@@ -296,6 +296,15 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._save_session_btn.pack(side="left", padx=(12, 0))
 
+        ctk.CTkButton(
+            bottom,
+            text="Test Modal",
+            width=90,
+            fg_color=("purple3", "purple4"),
+            hover_color=("purple4", "purple3"),
+            command=self._open_test_modal,
+        ).pack(side="left", padx=(12, 0))
+
         self._export_label = ctk.CTkLabel(
             bottom, text="", font=ctk.CTkFont(size=12), text_color="gray60"
         )
@@ -589,8 +598,12 @@ class ResultsTab(ctk.CTkFrame):
 
     def _open_order_detail(self, order_id: str, platform: str):
         """Check order status via API, then open detail modal if still active."""
+        print(f"[MODAL] Row clicked: order_id={order_id!r}, platform={platform!r}")
+        print(f"[MODAL] neto_orders loaded: {len(self._neto_orders)}, ebay_orders loaded: {len(self._ebay_orders)}")
+
         # Skip status check if eBay isn't authenticated (avoids hanging on auth errors)
         if platform.lower() == "ebay" and not self._app.ebay_client.is_authenticated():
+            print(f"[MODAL] eBay not authenticated — skipping status check, opening modal directly")
             self._show_order_modal(order_id, platform)
             return
 
@@ -600,6 +613,7 @@ class ResultsTab(ctk.CTkFrame):
         def _check_and_open():
             try:
                 status = ""
+                print(f"[MODAL] Status check thread started for {order_id!r} ({platform!r})")
                 if platform.lower() == "ebay":
                     status = self._app.ebay_client.get_order_status(order_id)
                     is_completed = status in ("FULFILLED",)
@@ -607,9 +621,12 @@ class ResultsTab(ctk.CTkFrame):
                     status = self._app.neto_client.get_order_status(order_id)
                     is_completed = status.lower() in ("dispatched", "shipped", "completed")
 
+                print(f"[MODAL] Status result: {status!r}, is_completed={is_completed}")
                 self.after(0, lambda: self._handle_status_check(order_id, platform, is_completed))
             except Exception as e:
-                # If status check fails (e.g. network error), open the modal anyway
+                import traceback
+                print(f"[MODAL] Status check FAILED: {e}")
+                traceback.print_exc()
                 err_msg = f"Status check failed: {e}"
                 self.after(0, lambda: self._show_order_modal(order_id, platform))
                 self.after(0, lambda m=err_msg: self._error_label.configure(text=m))
@@ -617,6 +634,7 @@ class ResultsTab(ctk.CTkFrame):
         threading.Thread(target=_check_and_open, daemon=True).start()
 
     def _handle_status_check(self, order_id: str, platform: str, is_completed: bool):
+        print(f"[MODAL] _handle_status_check: order_id={order_id!r}, is_completed={is_completed}")
         self._error_label.configure(text="")
         if is_completed:
             messagebox.showinfo(
@@ -630,6 +648,7 @@ class ResultsTab(ctk.CTkFrame):
             self._show_order_modal(order_id, platform)
 
     def _show_order_modal(self, order_id: str, platform: str):
+        print(f"[MODAL] _show_order_modal: order_id={order_id!r}, platform={platform!r}")
         self._error_label.configure(text="")
         neto_order = None
         ebay_order = None
@@ -641,20 +660,31 @@ class ResultsTab(ctk.CTkFrame):
                 if o.order_id == order_id:
                     ebay_order = o
                     break
+            print(f"[MODAL] eBay order lookup: {'FOUND' if ebay_order else 'NOT FOUND'}")
         else:
             for o in self._neto_orders:
                 if o.order_id == order_id:
                     neto_order = o
                     break
+            print(f"[MODAL] Neto order lookup (platform={platform!r}): {'FOUND' if neto_order else 'NOT FOUND'}")
+            if neto_order is None:
+                # Show a sample of order IDs to help diagnose ID mismatches
+                sample = [o.order_id for o in self._neto_orders[:5]]
+                print(f"[MODAL] Sample neto_order IDs in list: {sample}")
 
         if neto_order is None and ebay_order is None:
-            self._error_label.configure(text=f"Could not find order {order_id} ({platform}) in loaded data")
+            msg = f"Could not find order {order_id} ({platform}) in loaded data"
+            print(f"[MODAL] {msg}")
+            self._error_label.configure(text=msg)
             return
 
         # Gather matched SKUs for this order
         for m in self._matched:
             if m.order_id == order_id and m.is_invoice_match:
                 matched_skus.append(m.sku)
+
+        print(f"[MODAL] matched_skus for this order: {matched_skus}")
+        print(f"[MODAL] Creating OrderDetailModal...")
 
         OrderDetailModal(
             self,
@@ -668,6 +698,7 @@ class ResultsTab(ctk.CTkFrame):
             dry_run=self._app.config.app.dry_run,
             on_close_callback=self._on_modal_close,
         )
+        print(f"[MODAL] OrderDetailModal created")
 
     def _on_modal_close(self, completed: bool):
         if completed:
@@ -746,6 +777,41 @@ class ResultsTab(ctk.CTkFrame):
             self._export_label.configure(text=f"Session saved: {path}", text_color="green")
         except Exception as e:
             self._error_label.configure(text=f"Save failed: {e}")
+
+    # ── Test Modal ────────────────────────────────────────────────────────
+
+    def _open_test_modal(self):
+        """Minimal CTkToplevel to verify that modal rendering works at all."""
+        win = ctk.CTkToplevel(self)
+        win.title("Test Modal")
+        win.geometry("400x250")
+        win.resizable(False, False)
+        win.transient(self.winfo_toplevel())
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+        ctk.CTkLabel(
+            win,
+            text="✓  Modal is rendering correctly",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="green",
+        ).pack(padx=20, pady=(40, 10))
+
+        ctk.CTkLabel(
+            win,
+            text="If you can read this, CTkToplevel works.\nThe issue is specific to OrderDetailModal.",
+            font=ctk.CTkFont(size=13),
+            justify="center",
+        ).pack(padx=20, pady=10)
+
+        ctk.CTkButton(
+            win, text="Close", width=100, command=win.destroy
+        ).pack(pady=20)
+
+        win.update_idletasks()
+        win.deiconify()
+        win.lift()
+        win.focus_force()
+        print(f"[TEST MODAL] opened: winfo_width={win.winfo_width()}, winfo_ismapped={win.winfo_ismapped()}")
 
     # ── Export ────────────────────────────────────────────────────────────
 

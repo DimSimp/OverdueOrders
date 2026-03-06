@@ -18,6 +18,16 @@ _PLACEHOLDER_SIZE = (50, 50)
 class OrderDetailModal(ctk.CTkToplevel):
     """Modal window showing full order details with fulfillment actions."""
 
+    # Class-level override so that CTkToplevel's after(200, self.iconbitmap, path)
+    # captures THIS method (bound at schedule time), not the base class version.
+    # Without this, the instance-attribute workaround doesn't intercept the
+    # deferred call because the callable reference is captured before we replace it.
+    def iconbitmap(self, *args, **kwargs):
+        try:
+            super().iconbitmap(*args, **kwargs)
+        except Exception:
+            pass
+
     def __init__(
         self,
         master,
@@ -33,16 +43,6 @@ class OrderDetailModal(ctk.CTkToplevel):
     ):
         super().__init__(master)
 
-        # Workaround for customtkinter bug on Windows: CTkToplevel schedules
-        # after(200, iconbitmap(...)) which fails with TclError on some systems.
-        _orig_iconbitmap = self.iconbitmap
-        def _safe_iconbitmap(*args, **kwargs):
-            try:
-                _orig_iconbitmap(*args, **kwargs)
-            except Exception:
-                pass
-        self.iconbitmap = _safe_iconbitmap
-
         self._order_id = order_id
         self._platform = platform
         self._neto_order = neto_order
@@ -55,34 +55,74 @@ class OrderDetailModal(ctk.CTkToplevel):
         self._completed = False
         self._image_refs: list = []  # prevent GC of CTkImage objects
 
+        print(f"[MODAL] __init__: order_id={order_id!r}, platform={platform!r}")
+        print(f"[MODAL] neto_order is None: {neto_order is None}, ebay_order is None: {ebay_order is None}")
+        if neto_order:
+            print(f"[MODAL] neto_order.customer_name={neto_order.customer_name!r}, line_items={len(neto_order.line_items)}")
+        if ebay_order:
+            print(f"[MODAL] ebay_order.buyer_name={ebay_order.buyer_name!r}, line_items={len(ebay_order.line_items)}")
+
         self.title(f"Order {order_id} — {platform}")
         self.geometry("750x780")
         self.minsize(600, 500)
 
         # Use the top-level window as transient parent (not the tab frame)
         toplevel = master.winfo_toplevel()
+        print(f"[MODAL] transient parent type: {type(toplevel).__name__}")
         self.transient(toplevel)
 
         self.protocol("WM_DELETE_WINDOW", self._close)
 
-        # Build UI first, then grab focus after a short delay to avoid Windows freeze
         self._build_ui()
+        self.update_idletasks()
+        print(f"[MODAL] After build+update_idletasks(): winfo_ismapped={self.winfo_ismapped()}, winfo_width={self.winfo_width()}, winfo_height={self.winfo_height()}")
         self.after(150, self._activate)
 
     def _build_ui(self):
+        print(f"[MODAL] _build_ui starting")
         try:
-            container = ctk.CTkScrollableFrame(self, fg_color="transparent")
-            container.pack(fill="both", expand=True, padx=8, pady=8)
-
-            self._build_header(container)
-            self._build_shipping(container)
-            self._build_line_items(container)
-            self._build_notes(container)
-            self._build_tracking(container)
-            self._build_freight_placeholder(container)
+            # Action bar MUST be packed first (side=bottom) before the expanding
+            # container. In tkinter pack geometry, a widget with fill="both" +
+            # expand=True grabs ALL remaining space — anything packed after it
+            # gets zero height and is invisible.
+            print(f"[MODAL] calling _build_action_bar (FIRST, side=bottom)...")
             self._build_action_bar()
+            print(f"[MODAL] _build_action_bar done")
+
+            # DIAGNOSTIC: using plain CTkFrame instead of CTkScrollableFrame
+            # to test whether CTkScrollableFrame's Canvas is blocking rendering.
+            container = ctk.CTkFrame(self, fg_color="transparent")
+            container.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+            print(f"[MODAL] container (plain CTkFrame) created and packed")
+
+            print(f"[MODAL] calling _build_header...")
+            self._build_header(container)
+            print(f"[MODAL] _build_header done")
+
+            print(f"[MODAL] calling _build_shipping...")
+            self._build_shipping(container)
+            print(f"[MODAL] _build_shipping done")
+
+            print(f"[MODAL] calling _build_line_items...")
+            self._build_line_items(container)
+            print(f"[MODAL] _build_line_items done")
+
+            print(f"[MODAL] calling _build_notes...")
+            self._build_notes(container)
+            print(f"[MODAL] _build_notes done")
+
+            print(f"[MODAL] calling _build_tracking...")
+            self._build_tracking(container)
+            print(f"[MODAL] _build_tracking done")
+
+            print(f"[MODAL] calling _build_freight_placeholder...")
+            self._build_freight_placeholder(container)
+            print(f"[MODAL] _build_freight_placeholder done")
+
+            print(f"[MODAL] _build_ui COMPLETE")
         except Exception as e:
             import traceback
+            print(f"[MODAL] _build_ui EXCEPTION: {e}")
             traceback.print_exc()
             ctk.CTkLabel(
                 self, text=f"Error building order detail:\n{e}",
@@ -92,6 +132,7 @@ class OrderDetailModal(ctk.CTkToplevel):
     # ── Header ────────────────────────────────────────────────────────────
 
     def _build_header(self, parent):
+        print(f"[MODAL] _build_header: parent type={type(parent).__name__}")
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="x", padx=8, pady=(8, 4))
 
@@ -120,6 +161,7 @@ class OrderDetailModal(ctk.CTkToplevel):
             customer = self._ebay_order.buyer_name
             date_str = self._ebay_order.creation_date.strftime("%Y-%m-%d") if self._ebay_order.creation_date else ""
 
+        print(f"[MODAL] _build_header: customer={customer!r}, date_str={date_str!r}")
         ctk.CTkLabel(frame, text=customer, font=ctk.CTkFont(size=14)).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(frame, text=date_str, font=ctk.CTkFont(size=13), text_color="gray50").pack(side="left")
 
@@ -387,7 +429,7 @@ class OrderDetailModal(ctk.CTkToplevel):
 
     def _build_action_bar(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", padx=12, pady=(4, 12))
+        bar.pack(fill="x", side="bottom", padx=12, pady=(4, 12))
 
         self._send_btn = ctk.CTkButton(
             bar, text="Mark as Sent", width=140, height=36,
@@ -453,12 +495,17 @@ class OrderDetailModal(ctk.CTkToplevel):
 
     def _activate(self):
         """Bring window to front and grab focus after UI is fully rendered."""
+        print(f"[MODAL] _activate: winfo_ismapped={self.winfo_ismapped()}, winfo_viewable={self.winfo_viewable()}")
         self.lift()
         self.focus_force()
+        # Nudge geometry to force Windows DWM to repaint if still blank
+        geo = self.geometry()
+        self.geometry(geo)
         try:
             self.grab_set()
         except Exception:
             pass  # grab can fail if window was closed quickly
+        print(f"[MODAL] _activate complete")
 
     def _close(self):
         try:

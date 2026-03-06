@@ -41,6 +41,7 @@ class InvoiceItem:
     quantity: int
     source_page: int
     qty_flagged: bool = False  # True if qty could not be parsed (defaulted to 1)
+    supplier_name: str = ""    # Set by parse_invoice() for downstream validation
 
 
 class ParseError(Exception):
@@ -87,7 +88,9 @@ def parse_invoice(
             items: list[InvoiceItem] = []
             num_pages = len(pdf.pages)
 
-            if supplier.pdf_format == "marker":
+            if supplier.pdf_format == "ai_only":
+                pass  # Skip all standard parsing — go straight to AI Vision below
+            elif supplier.pdf_format == "marker":
                 # Marker mode: work from the combined full-page text
                 items.extend(_extract_by_markers(full_text, supplier, page_num=1))
             elif supplier.pdf_format == "daddario":
@@ -138,7 +141,8 @@ def parse_invoice(
 
     # Apply character substitutions and suffix to produce sku_with_suffix
     for item in items:
-        item.sku_with_suffix = _build_neto_sku(item.sku, supplier)
+        item.sku_with_suffix = build_neto_sku(item.sku, supplier)
+        item.supplier_name = supplier.name
 
     return items
 
@@ -147,7 +151,7 @@ def _validate_supplier(full_text: str, marker: str) -> bool:
     return marker.lower() in full_text.lower()
 
 
-def _build_neto_sku(raw_sku: str, supplier: SupplierConfig) -> str:
+def build_neto_sku(raw_sku: str, supplier: SupplierConfig) -> str:
     """Apply character substitutions then append/prepend suffix."""
     sku = raw_sku
     for char, replacement in supplier.character_substitutions.items():
@@ -209,6 +213,11 @@ def _parse_table(
 
         # Skip rows that look like totals or section headers (no alphanumeric SKU)
         if not re.search(r"[A-Za-z0-9]", sku):
+            continue
+
+        # Skip rows with an explicitly zero qty (e.g. Pro Music SUPP=0, Amber Shipped=0.00).
+        # A blank qty is not skipped here — it will be flagged by _parse_qty instead.
+        if qty_raw and _is_zero_qty(qty_raw):
             continue
 
         qty, qty_flagged = _parse_qty(qty_raw)
@@ -556,6 +565,14 @@ def _parse_rest_tokens(tokens: list[str]) -> tuple[list[str], str]:
         return [], "1"
 
     return tokens[:i], tokens[i]
+
+
+def _is_zero_qty(raw: str) -> bool:
+    """Return True if qty_raw is an explicit zero value (0, 0.0, 0.00, etc.)."""
+    try:
+        return float(raw.replace(",", "")) == 0.0
+    except ValueError:
+        return False
 
 
 def _parse_qty(raw: str) -> tuple[int, bool]:

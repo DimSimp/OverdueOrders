@@ -58,6 +58,28 @@ def _build_user_prompt(supplier: SupplierConfig) -> str:
             "Stop extracting items when you encounter a line starting with "
             "'Packed by' or 'Collect' — those mark the end of the invoice."
         )
+    elif supplier.name.startswith("Pro Music"):
+        parts.append(
+            "This invoice is in landscape orientation. "
+            "The exact column order is: CODE, DESCRIPTION, RRP incl GST, UNIT, ORD, SUPP, B/ORD, "
+            "TRADE PRICE, DISC%, VALUE, GST%, TOTAL. "
+            "Use 'CODE' as the SKU. "
+            "Use 'SUPP' (quantity supplied/received) as the quantity. "
+            "Skip any line where SUPP is 0 — those items were not delivered."
+        )
+    elif supplier.name.startswith("Amber"):
+        parts.append(
+            "Column layout: Item code, Item Description, Ordered, Shipped, Back Order "
+            "(and possibly other columns such as price). "
+            "'Item code' is the SKU. "
+            "'Item Description' is the product description. "
+            "'Shipped' is the quantity received — use this as the quantity. "
+            "The Shipped column may show decimal values like '5.00' — always round these to the "
+            "nearest whole number (e.g. 5.00 → 5, 0.00 → 0). "
+            "Skip items where Shipped is 0 or 0.00. "
+            "Stop extracting items when you reach a row where Item code is 'Charges' "
+            "or any row that is clearly a freight/handling/tax charge rather than a product."
+        )
 
     parts.append("Extract all line items from this invoice page.")
     return " ".join(parts)

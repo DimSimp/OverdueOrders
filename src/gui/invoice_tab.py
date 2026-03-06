@@ -1,10 +1,41 @@
 import os
+import tempfile
 import threading
+from collections import OrderedDict
 from tkinter import filedialog
 
 import customtkinter as ctk
 
-from src.pdf_parser import InvoiceItem, ParseError, parse_invoice
+from src.pdf_parser import InvoiceItem, ParseError, build_neto_sku, parse_invoice
+
+
+def _image_to_temp_pdf(image_path: str) -> str:
+    """
+    Convert an image file (JPG, PNG, TIFF, etc.) to a single-page temporary PDF.
+
+    The PDF contains the image as a full-page raster (no embedded text), so the
+    standard parse pipeline will naturally fall through to the AI Vision fallback.
+
+    Returns the path to a temporary .pdf file. The caller is responsible for
+    deleting it after use.
+    """
+    try:
+        import fitz
+    except ImportError:
+        raise ParseError(
+            "Image import requires PyMuPDF.\n\nInstall it with: pip install pymupdf"
+        )
+
+    img_bytes = open(image_path, "rb").read()
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, stream=img_bytes)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    doc.save(tmp.name)
+    doc.close()
+    return tmp.name
 
 
 class EditableTable(ctk.CTkScrollableFrame):
@@ -84,6 +115,7 @@ class InvoiceTab(ctk.CTkFrame):
         self._app = app
         self._on_complete = on_complete
         self._loaded_filenames: list[str] = []
+        self._invoice_items: list[InvoiceItem] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -111,6 +143,15 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._import_btn.pack(side="left")
 
+        self._scan_btn = ctk.CTkButton(
+            controls,
+            text="📷 Scan",
+            width=90,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._scan_with_phone,
+        )
+        self._scan_btn.pack(side="left", padx=(8, 0))
+
         self._clear_btn = ctk.CTkButton(
             controls,
             text="Clear All",
@@ -129,6 +170,15 @@ class InvoiceTab(ctk.CTkFrame):
             command=self._load_session,
         )
         self._load_session_btn.pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            controls,
+            text="Test Modal",
+            width=90,
+            fg_color=("purple3", "purple4"),
+            hover_color=("purple4", "purple3"),
+            command=self._open_test_modal,
+        ).pack(side="left", padx=(8, 0))
 
         self._status_label = ctk.CTkLabel(
             controls,
@@ -175,16 +225,23 @@ class InvoiceTab(ctk.CTkFrame):
             text="Next: Fetch Orders →",
             width=180,
             state="disabled",
-            command=self._on_complete,
+            command=self._on_next_clicked,
         )
         self._next_btn.pack(side="right")
 
     # ── Actions ───────────────────────────────────────────────────────────
 
+    _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".gif", ".webp"}
+
     def _import_pdf(self):
         paths = filedialog.askopenfilenames(
-            title="Select Supplier Invoice PDF(s)",
-            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            title="Select Supplier Invoice PDF(s) or Images",
+            filetypes=[
+                ("Supported files", "*.pdf *.jpg *.jpeg *.png *.tiff *.tif *.bmp *.gif *.webp"),
+                ("PDF files", "*.pdf"),
+                ("Image files", "*.jpg *.jpeg *.png *.tiff *.tif *.bmp *.gif *.webp"),
+                ("All files", "*.*"),
+            ],
         )
         if not paths:
             return
@@ -196,7 +253,7 @@ class InvoiceTab(ctk.CTkFrame):
             return
 
         self._import_btn.configure(state="disabled")
-        self._set_status(f"Parsing {len(paths)} PDF(s)…", color="gray60")
+        self._set_status(f"Parsing {len(paths)} file(s)…", color="gray60")
         self._set_error("")
 
         openai_config = getattr(self._app.config, "openai", None)
@@ -206,21 +263,38 @@ class InvoiceTab(ctk.CTkFrame):
 
         def _worker():
             errors = []
-            for idx, path in enumerate(paths):
-                fname = os.path.basename(path)
-                self.after(0, lambda f=fname, i=idx, n=len(paths):
-                    self._set_status(f"Parsing {f} ({i+1}/{n})…", color="gray60"))
-                try:
-                    items = parse_invoice(
-                        path, supplier,
-                        openai_config=openai_config,
-                        on_ai_fallback=lambda f=fname: _notify_ai_fallback(f),
-                    )
-                    self.after(0, lambda it=items, f=fname: self._on_parse_success(it, f))
-                except ParseError as exc:
-                    errors.append(f"{fname}: {exc}")
-                except Exception as exc:
-                    errors.append(f"{fname}: Unexpected error: {exc}")
+            temp_files: list[str] = []
+            try:
+                for idx, path in enumerate(paths):
+                    fname = os.path.basename(path)
+                    self.after(0, lambda f=fname, i=idx, n=len(paths):
+                        self._set_status(f"Parsing {f} ({i+1}/{n})…", color="gray60"))
+                    try:
+                        # Convert images to a temporary PDF so the standard parse
+                        # pipeline (including AI fallback) can handle them.
+                        parse_path = path
+                        if os.path.splitext(path)[1].lower() in self._IMAGE_EXTENSIONS:
+                            self.after(0, lambda f=fname:
+                                self._set_status(f"Converting {f} to PDF…", color="gray60"))
+                            parse_path = _image_to_temp_pdf(path)
+                            temp_files.append(parse_path)
+
+                        items = parse_invoice(
+                            parse_path, supplier,
+                            openai_config=openai_config,
+                            on_ai_fallback=lambda f=fname: _notify_ai_fallback(f),
+                        )
+                        self.after(0, lambda it=items, f=fname: self._on_parse_success(it, f))
+                    except ParseError as exc:
+                        errors.append(f"{fname}: {exc}")
+                    except Exception as exc:
+                        errors.append(f"{fname}: Unexpected error: {exc}")
+            finally:
+                for tmp in temp_files:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
             if errors:
                 self.after(0, lambda e="\n".join(errors): self._on_parse_error(e))
@@ -230,6 +304,7 @@ class InvoiceTab(ctk.CTkFrame):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_parse_success(self, items: list[InvoiceItem], filename: str):
+        self._invoice_items.extend(items)
         self._table.load_items(items, append=True)
         self._loaded_filenames.append(filename)
         self._update_files_box()
@@ -250,6 +325,7 @@ class InvoiceTab(ctk.CTkFrame):
         self._import_btn.configure(state="normal")
 
     def _clear(self):
+        self._invoice_items.clear()
         self._table.clear()
         self._loaded_filenames.clear()
         self._update_files_box()
@@ -285,6 +361,7 @@ class InvoiceTab(ctk.CTkFrame):
 
             # Populate invoice table
             self._table.clear()
+            self._invoice_items = list(snapshot.invoice_items)
             self._table.load_items(snapshot.invoice_items, append=True)
             self._loaded_filenames = [os.path.basename(path)]
             self._update_files_box()
@@ -308,18 +385,229 @@ class InvoiceTab(ctk.CTkFrame):
         except Exception as e:
             self._set_error(f"Failed to load session: {e}")
 
+    def _scan_with_phone(self):
+        """Open the phone scan dialog, then parse any received images."""
+        supplier_name = self._supplier_var.get()
+        supplier = self._app.config.get_supplier_by_name(supplier_name)
+        if supplier is None:
+            self._set_error(f"Unknown supplier: '{supplier_name}'. Check config.json.")
+            return
+
+        openai_config = getattr(self._app.config, "openai", None)
+
+        def _on_images_done(image_paths: list[str]):
+            if not image_paths:
+                return
+            self._import_btn.configure(state="disabled")
+            self._scan_btn.configure(state="disabled")
+            self._set_status(f"Processing {len(image_paths)} scanned image(s)…", color="gray60")
+            self._set_error("")
+
+            def _notify_ai_fallback(filename: str):
+                self.after(0, lambda: self._set_status(f"AI parsing {filename}…", color="gray60"))
+
+            def _worker():
+                errors = []
+                temp_pdfs: list[str] = []
+                try:
+                    for idx, img_path in enumerate(image_paths):
+                        fname = f"scan_{idx + 1}.jpg"
+                        self.after(0, lambda i=idx, n=len(image_paths):
+                            self._set_status(f"Parsing scan {i+1}/{n}…", color="gray60"))
+                        try:
+                            pdf_path = _image_to_temp_pdf(img_path)
+                            temp_pdfs.append(pdf_path)
+                            items = parse_invoice(
+                                pdf_path, supplier,
+                                openai_config=openai_config,
+                                on_ai_fallback=lambda f=fname: _notify_ai_fallback(f),
+                            )
+                            self.after(0, lambda it=items, f=fname:
+                                self._on_parse_success(it, f))
+                        except ParseError as exc:
+                            errors.append(f"Scan {idx + 1}: {exc}")
+                        except Exception as exc:
+                            errors.append(f"Scan {idx + 1}: Unexpected error: {exc}")
+                        finally:
+                            try:
+                                os.unlink(img_path)
+                            except OSError:
+                                pass
+                finally:
+                    for tmp in temp_pdfs:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+
+                if errors:
+                    self.after(0, lambda e="\n".join(errors): self._on_parse_error(e))
+                else:
+                    self.after(0, lambda: (
+                        self._import_btn.configure(state="normal"),
+                        self._scan_btn.configure(state="normal"),
+                    ))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        from src.gui.phone_scan_dialog import PhoneScanDialog
+        PhoneScanDialog(self, on_done=_on_images_done, supplier_name=supplier_name)
+
+    def _open_test_modal(self):
+        """Minimal CTkToplevel to verify that modal rendering works at all."""
+        win = ctk.CTkToplevel(self)
+        win.withdraw()
+        win.title("Test Modal")
+        win.geometry("400x250")
+        win.resizable(False, False)
+        win.transient(self.winfo_toplevel())
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+        ctk.CTkLabel(
+            win,
+            text="✓  Modal is rendering correctly",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="green",
+        ).pack(padx=20, pady=(40, 10))
+
+        ctk.CTkLabel(
+            win,
+            text="If you can read this, CTkToplevel works.\nThe issue is specific to OrderDetailModal.",
+            font=ctk.CTkFont(size=13),
+            justify="center",
+        ).pack(padx=20, pady=10)
+
+        ctk.CTkButton(
+            win, text="Close", width=100, command=win.destroy
+        ).pack(pady=20)
+
+        win.update_idletasks()
+        win.deiconify()
+        win.lift()
+        win.focus_force()
+        print(f"[TEST MODAL] opened: winfo_width={win.winfo_width()}, winfo_ismapped={win.winfo_ismapped()}")
+
     # ── Public API (used by results_tab) ──────────────────────────────────
 
-    def get_invoice_items(self):
-        """Convert editable table rows back to InvoiceItem objects."""
-        from src.pdf_parser import InvoiceItem as _Item
+    def get_invoice_items(self) -> list[InvoiceItem]:
+        """
+        Merge editable table values (description, qty) with stored item metadata
+        (sku, sku_with_suffix, supplier_name).
+        """
+        table_rows = self._table.get_items()
+        if not self._invoice_items:
+            # Fallback: table only (e.g. session loaded before this feature)
+            return [
+                InvoiceItem(
+                    sku=r["sku"],
+                    sku_with_suffix=r["sku"],
+                    description=r["description"],
+                    quantity=r["qty"],
+                    source_page=0,
+                )
+                for r in table_rows
+            ]
         return [
-            _Item(
-                sku=d["sku"],
-                sku_with_suffix=d["sku"],
-                description=d["description"],
-                quantity=d["qty"],
-                source_page=0,
+            InvoiceItem(
+                sku=item.sku,
+                sku_with_suffix=item.sku_with_suffix,
+                description=row["description"],
+                quantity=row["qty"],
+                source_page=item.source_page,
+                qty_flagged=item.qty_flagged,
+                supplier_name=item.supplier_name,
             )
-            for d in self._table.get_items()
+            for item, row in zip(self._invoice_items, table_rows)
         ]
+
+    # ── SKU validation flow ────────────────────────────────────────────────
+
+    def _on_next_clicked(self):
+        """Validate SKUs against inventory.CSV, show correction dialogs, then proceed."""
+        items = self.get_invoice_items()
+        if not items:
+            return
+
+        app_cfg = self._app.config.app
+        self._set_status("Validating SKUs…", color="gray60")
+        self._next_btn.configure(state="disabled")
+
+        def _worker():
+            from src.sku_validator import load_corrections, load_inventory, validate_items
+            inventory = load_inventory(app_cfg.inventory_csv)
+            corrections = load_corrections(app_cfg.sku_corrections_file)
+            results = validate_items(items, inventory, corrections)
+            self.after(0, lambda: self._on_validation_done(results, app_cfg.sku_corrections_file))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_validation_done(self, results, corrections_path: str):
+        unconfirmed = [r for r in results if not r.is_confirmed]
+        if not unconfirmed:
+            self._set_status(f"{len(results)} item(s) validated.", color="green")
+            self._apply_corrections_and_proceed(results, corrections_path)
+            return
+
+        # Group by supplier name, preserving encounter order
+        groups: OrderedDict[str, list] = OrderedDict()
+        for r in unconfirmed:
+            groups.setdefault(r.item.supplier_name, []).append(r)
+
+        self._set_status(
+            f"{len(unconfirmed)} unrecognised SKU(s) — review required.",
+            color="orange",
+        )
+        self._process_supplier_groups(list(groups.items()), results, corrections_path)
+
+    def _process_supplier_groups(self, remaining_groups, all_results, corrections_path: str):
+        """Show one SkuCorrectionDialog per supplier group, sequentially."""
+        if not remaining_groups:
+            self._apply_corrections_and_proceed(all_results, corrections_path)
+            return
+
+        supplier_name, group = remaining_groups[0]
+        rest = remaining_groups[1:]
+
+        from src.gui.sku_correction_dialog import SkuCorrectionDialog
+
+        def on_accepted(new_corrections):
+            if new_corrections:
+                from src.sku_validator import save_corrections
+                save_corrections(corrections_path, new_corrections)
+            self._process_supplier_groups(rest, all_results, corrections_path)
+
+        def on_skip():
+            self._process_supplier_groups(rest, all_results, corrections_path)
+
+        def on_cancel():
+            self._set_status("Validation cancelled.", color="orange")
+            self._next_btn.configure(state="normal")
+
+        SkuCorrectionDialog(
+            self,
+            unconfirmed=group,
+            supplier_name=supplier_name,
+            on_accepted=on_accepted,
+            on_skip=on_skip,
+            on_cancel=on_cancel,
+        )
+
+    def _apply_corrections_and_proceed(self, all_results, corrections_path: str):
+        """Apply all saved corrections to stored items, then move to orders tab."""
+        from src.sku_validator import load_corrections
+        corrections = load_corrections(corrections_path)
+
+        for item in self._invoice_items:
+            key = (item.supplier_name.lower(), item.sku.upper())
+            if key in corrections:
+                corrected = corrections[key]
+                supplier = self._app.config.get_supplier_by_name(item.supplier_name)
+                item.sku = corrected
+                item.sku_with_suffix = (
+                    build_neto_sku(corrected, supplier)
+                    if supplier is not None
+                    else corrected
+                )
+
+        self._next_btn.configure(state="normal")
+        self._on_complete()
