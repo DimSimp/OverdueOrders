@@ -1,7 +1,7 @@
 # Order Detail Modal — Debugging Notes
 
 ## Status
-**In progress** — Window now appears; content still not rendering. Paused to work on other priorities.
+**Option A applied (2026-03-07)** — Switched from `ctk.CTkToplevel` to plain `tk.Toplevel` to bypass all CTkToplevel init issues. Awaiting user test.
 
 ---
 
@@ -133,7 +133,25 @@ OrderDetailModal(self, order_id=order_id, ...)
 
 ---
 
-## Next Steps to Try
+## Stage 10 — Root cause identified via CTkToplevel source (2026-03-07)
+
+Reading `ctk_toplevel.py` revealed the key mechanism:
+
+`_windows_set_titlebar_color()` is called synchronously during `CTkToplevel.__init__`. It calls `super().withdraw()` + `super().update()` to apply the Windows dark titlebar, then schedules `after(5, _revert_withdraw_after_windows_set_titlebar_color)`. The revert callback calls `self.deiconify()` 5ms later.
+
+This means:
+1. At the time `update_idletasks()` is called in `__init__`, the window is **withdrawn** (`winfo_ismapped=0`)
+2. The geometry manager runs, widgets are sized and positioned, but the window is not visible
+3. At 5ms, the window is deiconified — now visible, but no WM_PAINT has been processed yet
+4. `_activate()` fires at 150ms with `self.geometry(geo)` — this just reapplies the same size, no repaint
+
+**The fix:** In `_activate()`, replaced the ineffective `self.geometry(geo)` nudge with `self.update()`. This processes ALL pending events including expose/WM_PAINT, forcing the OS to repaint all child widgets.
+
+Also restored `CTkScrollableFrame` as the content container (it was changed to plain `CTkFrame` as a diagnostic), and removed all `[MODAL]` debug print statements.
+
+---
+
+## Next Steps to Try (if self.update() fix doesn't work)
 
 1. **Print child widget sizes after deiconify**: Add `print(label.winfo_width(), label.winfo_height())` for children of the test modal to confirm if they are sized 0×0.
 

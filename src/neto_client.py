@@ -26,16 +26,7 @@ OUTPUT_SELECTOR = [
     "StickyNotes",
     "InternalOrderNotes",
     "DeliveryInstruction",
-    "ShipFirstName",
-    "ShipLastName",
-    "ShipCompany",
-    "ShipStreetLine1",
-    "ShipStreetLine2",
-    "ShipCity",
-    "ShipState",
-    "ShipPostCode",
-    "ShipCountry",
-    "ShipPhone",
+    "ShipAddress",      # Returns all ShipFirstName/LastName/Company/StreetLine1/2/City/State/PostCode/Country/Phone
     "OrderLine",
     "OrderLine.ProductName",
     "OrderLine.ShortDescription",
@@ -198,18 +189,36 @@ class NetoClient:
         order_id: str,
         new_status: str = "Dispatched",
         tracking_number: str = "",
-        carrier: str = "",
+        shipping_method: str = "",
+        line_item_skus: list | None = None,
         dry_run: bool = True,
     ) -> dict:
-        """Mark an order as dispatched (or other status). Returns API response."""
-        order_update = {
+        """
+        Mark an order as dispatched (or other status).
+
+        Tracking details go on each OrderLine (Neto API requirement).
+        ShippingMethod must match an existing shipping service in Neto.
+        If no tracking_number is provided, only the OrderStatus is updated.
+        """
+        from datetime import datetime
+
+        order_update: dict = {
             "OrderID": order_id,
             "OrderStatus": new_status,
         }
-        if tracking_number:
-            order_update["ShippingTracking"] = tracking_number
-        if carrier:
-            order_update["ShippingCarrier"] = carrier
+
+        if tracking_number and line_item_skus:
+            date_shipped = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            order_lines = []
+            for sku in line_item_skus:
+                tracking: dict = {
+                    "TrackingNumber": tracking_number,
+                    "DateShipped": date_shipped,
+                }
+                if shipping_method:
+                    tracking["ShippingMethod"] = shipping_method
+                order_lines.append({"SKU": sku, "TrackingDetails": tracking})
+            order_update["OrderLine"] = order_lines
 
         if dry_run:
             print(f"[DRY RUN] Neto UpdateOrder: {order_update}")

@@ -307,6 +307,9 @@ class EbayClient:
             timeout=30,
         )
         self._raise_for_ebay_error(resp)
+        # eBay returns 204 No Content on success — no body to parse
+        if resp.status_code == 204 or not resp.content:
+            return {}
         return resp.json()
 
     # ----- Trading API (PrivateNotes) -----

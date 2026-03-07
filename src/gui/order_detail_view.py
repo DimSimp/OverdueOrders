@@ -2,35 +2,46 @@ from __future__ import annotations
 
 import io
 import threading
+import tkinter as tk
 from tkinter import messagebox
 
 import customtkinter as ctk
 import requests
-from PIL import Image
+from PIL import Image, ImageTk
 
-from src.ebay_client import EbayClient, EbayLineItem, EbayOrder
+from src.ebay_client import EbayClient, EbayOrder
 from src.neto_client import NetoClient, NetoOrder
 
 
 _PLACEHOLDER_SIZE = (50, 50)
 
+_SHIPPING_METHODS = [
+    "Allied Express",
+    "Aramex",
+    "Australia Post",
+    "Bonds Couriers",
+    "Courier's Please",
+    "DAI Post",
+    "Toll",
+]
 
-class OrderDetailModal(ctk.CTkToplevel):
-    """Modal window showing full order details with fulfillment actions."""
 
-    # Class-level override so that CTkToplevel's after(200, self.iconbitmap, path)
-    # captures THIS method (bound at schedule time), not the base class version.
-    # Without this, the instance-attribute workaround doesn't intercept the
-    # deferred call because the callable reference is captured before we replace it.
-    def iconbitmap(self, *args, **kwargs):
-        try:
-            super().iconbitmap(*args, **kwargs)
-        except Exception:
-            pass
+class OrderDetailView(ctk.CTkFrame):
+    """
+    Full-screen order detail view rendered as a plain CTkFrame inside the
+    ResultsTab. Replaces the old CTkToplevel modal to avoid canvas rendering bugs.
+
+    Navigation is callback-based:
+        on_back()          — return to the results list
+        on_fulfilled()     — called after successfully marking order as sent;
+                             triggers a list refresh before returning
+        on_move_to_unmatched() — optional; moves order out of matched list
+    """
 
     def __init__(
         self,
         master,
+        *,
         order_id: str,
         platform: str,
         neto_order: NetoOrder | None,
@@ -39,108 +50,90 @@ class OrderDetailModal(ctk.CTkToplevel):
         neto_client: NetoClient | None,
         ebay_client: EbayClient | None,
         dry_run: bool = True,
-        on_close_callback=None,
+        on_back,
+        on_fulfilled,
+        on_move_to_unmatched=None,
     ):
-        super().__init__(master)
-
+        super().__init__(master, fg_color="transparent")
         self._order_id = order_id
         self._platform = platform
         self._neto_order = neto_order
         self._ebay_order = ebay_order
-        self._matched_skus = set(s.upper().strip() for s in matched_skus)
+        self._matched_skus = {s.upper().strip() for s in matched_skus}
         self._neto_client = neto_client
         self._ebay_client = ebay_client
         self._dry_run = dry_run
-        self._on_close = on_close_callback
+        self._on_back = on_back
+        self._on_fulfilled = on_fulfilled
+        self._on_move_to_unmatched = on_move_to_unmatched
         self._completed = False
-        self._image_refs: list = []  # prevent GC of CTkImage objects
-
-        print(f"[MODAL] __init__: order_id={order_id!r}, platform={platform!r}")
-        print(f"[MODAL] neto_order is None: {neto_order is None}, ebay_order is None: {ebay_order is None}")
-        if neto_order:
-            print(f"[MODAL] neto_order.customer_name={neto_order.customer_name!r}, line_items={len(neto_order.line_items)}")
-        if ebay_order:
-            print(f"[MODAL] ebay_order.buyer_name={ebay_order.buyer_name!r}, line_items={len(ebay_order.line_items)}")
-
-        self.title(f"Order {order_id} — {platform}")
-        self.geometry("750x780")
-        self.minsize(600, 500)
-
-        # Use the top-level window as transient parent (not the tab frame)
-        toplevel = master.winfo_toplevel()
-        print(f"[MODAL] transient parent type: {type(toplevel).__name__}")
-        self.transient(toplevel)
-
-        self.protocol("WM_DELETE_WINDOW", self._close)
-
+        self._image_refs: list = []
+        self._full_images: dict[str, bytes] = {}  # url → raw bytes for enlargement
         self._build_ui()
-        self.update_idletasks()
-        print(f"[MODAL] After build+update_idletasks(): winfo_ismapped={self.winfo_ismapped()}, winfo_width={self.winfo_width()}, winfo_height={self.winfo_height()}")
-        self.after(150, self._activate)
 
     def _build_ui(self):
-        print(f"[MODAL] _build_ui starting")
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # ── Top navigation bar ────────────────────────────────────────────
+        nav = ctk.CTkFrame(self, fg_color=("gray85", "gray20"), corner_radius=0)
+        nav.grid(row=0, column=0, sticky="ew")
+
+        self._back_btn = ctk.CTkButton(
+            nav, text="← Back to Results", width=150, height=32,
+            fg_color="transparent", hover_color=("gray75", "gray30"),
+            font=ctk.CTkFont(size=13),
+            command=self._on_back,
+        )
+        self._back_btn.pack(side="left", padx=8, pady=6)
+
+        ctk.CTkLabel(
+            nav,
+            text=f"Order {self._order_id}  —  {self._platform}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(side="left", padx=8)
+
+        # ── Scrollable body ───────────────────────────────────────────────
+        body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+
         try:
-            # Action bar MUST be packed first (side=bottom) before the expanding
-            # container. In tkinter pack geometry, a widget with fill="both" +
-            # expand=True grabs ALL remaining space — anything packed after it
-            # gets zero height and is invisible.
-            print(f"[MODAL] calling _build_action_bar (FIRST, side=bottom)...")
-            self._build_action_bar()
-            print(f"[MODAL] _build_action_bar done")
-
-            # DIAGNOSTIC: using plain CTkFrame instead of CTkScrollableFrame
-            # to test whether CTkScrollableFrame's Canvas is blocking rendering.
-            container = ctk.CTkFrame(self, fg_color="transparent")
-            container.pack(fill="both", expand=True, padx=8, pady=(8, 4))
-            print(f"[MODAL] container (plain CTkFrame) created and packed")
-
-            print(f"[MODAL] calling _build_header...")
-            self._build_header(container)
-            print(f"[MODAL] _build_header done")
-
-            print(f"[MODAL] calling _build_shipping...")
-            self._build_shipping(container)
-            print(f"[MODAL] _build_shipping done")
-
-            print(f"[MODAL] calling _build_line_items...")
-            self._build_line_items(container)
-            print(f"[MODAL] _build_line_items done")
-
-            print(f"[MODAL] calling _build_notes...")
-            self._build_notes(container)
-            print(f"[MODAL] _build_notes done")
-
-            print(f"[MODAL] calling _build_tracking...")
-            self._build_tracking(container)
-            print(f"[MODAL] _build_tracking done")
-
-            print(f"[MODAL] calling _build_freight_placeholder...")
-            self._build_freight_placeholder(container)
-            print(f"[MODAL] _build_freight_placeholder done")
-
-            print(f"[MODAL] _build_ui COMPLETE")
+            self._build_header(body)
+            self._build_shipping(body)
+            self._build_line_items(body)
+            self._build_notes(body)
+            self._build_tracking(body)
+            self._build_freight_placeholder(body)
+            self._build_action_bar(body)
         except Exception as e:
             import traceback
-            print(f"[MODAL] _build_ui EXCEPTION: {e}")
             traceback.print_exc()
             ctk.CTkLabel(
-                self, text=f"Error building order detail:\n{e}",
-                text_color="red", wraplength=600,
+                body, text=f"Error building order detail:\n{e}",
+                text_color="red", wraplength=700,
             ).pack(padx=20, pady=20)
 
     # ── Header ────────────────────────────────────────────────────────────
 
     def _build_header(self, parent):
-        print(f"[MODAL] _build_header: parent type={type(parent).__name__}")
         frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(fill="x", padx=8, pady=(8, 4))
+        frame.pack(fill="x", padx=8, pady=(12, 4))
 
         ctk.CTkLabel(
             frame,
             text=f"Order {self._order_id}",
             font=ctk.CTkFont(size=18, weight="bold"),
-        ).pack(side="left", padx=(0, 12))
+        ).pack(side="left", padx=(0, 6))
+
+        # Copy order number button
+        _id_copy_btn = ctk.CTkButton(
+            frame, text="Copy", width=45, height=22, font=ctk.CTkFont(size=10),
+            fg_color="gray50", hover_color="gray40",
+        )
+        _id_copy_btn.configure(
+            command=lambda b=_id_copy_btn: self._copy_to_clipboard(self._order_id, b)
+        )
+        _id_copy_btn.pack(side="left", padx=(0, 12))
 
         ctk.CTkLabel(
             frame,
@@ -159,9 +152,11 @@ class OrderDetailModal(ctk.CTkToplevel):
             date_str = d.strftime("%Y-%m-%d") if d else ""
         elif self._ebay_order:
             customer = self._ebay_order.buyer_name
-            date_str = self._ebay_order.creation_date.strftime("%Y-%m-%d") if self._ebay_order.creation_date else ""
+            date_str = (
+                self._ebay_order.creation_date.strftime("%Y-%m-%d")
+                if self._ebay_order.creation_date else ""
+            )
 
-        print(f"[MODAL] _build_header: customer={customer!r}, date_str={date_str!r}")
         ctk.CTkLabel(frame, text=customer, font=ctk.CTkFont(size=14)).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(frame, text=date_str, font=ctk.CTkFont(size=13), text_color="gray50").pack(side="left")
 
@@ -171,29 +166,37 @@ class OrderDetailModal(ctk.CTkToplevel):
         frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
         frame.pack(fill="x", padx=8, pady=6)
 
-        ctk.CTkLabel(frame, text="Shipping Address", font=ctk.CTkFont(size=13, weight="bold")).pack(
+        ctk.CTkLabel(frame, text="Shipping Details", font=ctk.CTkFont(size=13, weight="bold")).pack(
             anchor="w", padx=10, pady=(8, 4)
         )
 
         lines = self._get_address_lines()
-        self._address_lines = lines
 
         for line in lines:
             if not line:
                 continue
             row = ctk.CTkFrame(frame, fg_color="transparent")
             row.pack(fill="x", padx=10, pady=1)
-            ctk.CTkLabel(row, text=line, font=ctk.CTkFont(size=13), anchor="w").pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(
+
+            ctk.CTkLabel(row, text=line, font=ctk.CTkFont(size=13), anchor="w").pack(
+                side="left", fill="x", expand=True
+            )
+
+            btn = ctk.CTkButton(
                 row, text="Copy", width=45, height=22, font=ctk.CTkFont(size=10),
                 fg_color="gray50", hover_color="gray40",
-                command=lambda t=line: self._copy_to_clipboard(t),
-            ).pack(side="right", padx=4)
+            )
+            btn.configure(command=lambda t=line, b=btn: self._copy_to_clipboard(t, b))
+            btn.pack(side="right", padx=4)
 
-        ctk.CTkButton(
+        all_text = "\n".join(l for l in lines if l)
+        copy_all_btn = ctk.CTkButton(
             frame, text="Copy All", width=70, height=26, font=ctk.CTkFont(size=11),
-            command=lambda: self._copy_to_clipboard("\n".join(l for l in lines if l)),
-        ).pack(anchor="e", padx=10, pady=(4, 8))
+        )
+        copy_all_btn.configure(
+            command=lambda b=copy_all_btn: self._copy_to_clipboard(all_text, b, "Copy All")
+        )
+        copy_all_btn.pack(anchor="e", padx=10, pady=(4, 8))
 
     def _get_address_lines(self) -> list[str]:
         if self._neto_order:
@@ -230,10 +233,9 @@ class OrderDetailModal(ctk.CTkToplevel):
             anchor="w", padx=10, pady=(8, 4)
         )
 
-        # Header row
         hdr = ctk.CTkFrame(frame, fg_color="transparent")
         hdr.pack(fill="x", padx=10, pady=(0, 2))
-        for text, w in [("", 54), ("SKU", 130), ("Description", 250), ("Qty", 40), ("Arrived", 50)]:
+        for text, w in [("", 54), ("SKU", 130), ("Description", 300), ("Qty", 40), ("Arrived", 60)]:
             ctk.CTkLabel(hdr, text=text, width=w, font=ctk.CTkFont(size=11, weight="bold"), anchor="w").pack(
                 side="left", padx=(0, 6)
             )
@@ -244,48 +246,89 @@ class OrderDetailModal(ctk.CTkToplevel):
         line_items = []
         if self._neto_order:
             for li in self._neto_order.line_items:
+                print(f"[IMAGE DEBUG] Neto SKU={li.sku!r} image_url={li.image_url!r}")
                 line_items.append((li.sku, li.product_name, li.quantity, li.image_url))
         elif self._ebay_order:
             for li in self._ebay_order.line_items:
+                print(f"[IMAGE DEBUG] eBay SKU={li.sku!r} image_url={li.image_url!r}")
                 line_items.append((li.sku, li.title, li.quantity, li.image_url))
 
         for sku, desc, qty, image_url in line_items:
             row = ctk.CTkFrame(items_frame, fg_color="transparent")
             row.pack(fill="x", pady=1)
 
-            # Image placeholder
             img_label = ctk.CTkLabel(row, text="", width=50, height=50)
             img_label.pack(side="left", padx=(0, 4))
-
             if image_url:
                 self._load_image_async(image_url, img_label)
+                # Clicking the thumbnail opens a larger preview
+                img_label.bind(
+                    "<Button-1>",
+                    lambda e, u=image_url: self._open_image_large(u),
+                )
+                img_label.configure(cursor="hand2")
 
-            arrived = "*" if sku.upper().strip() in self._matched_skus else ""
-
+            arrived = "✓" if sku.upper().strip() in self._matched_skus else ""
             ctk.CTkLabel(row, text=sku, width=130, anchor="w", wraplength=130).pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(row, text=desc, width=250, anchor="w", wraplength=250).pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(row, text=desc, width=300, anchor="w", wraplength=300).pack(side="left", padx=(0, 6))
             ctk.CTkLabel(row, text=str(qty), width=40, anchor="w").pack(side="left", padx=(0, 6))
             ctk.CTkLabel(
-                row, text=arrived, width=50, anchor="w",
+                row, text=arrived, width=60, anchor="w",
                 text_color="green" if arrived else "gray50",
                 font=ctk.CTkFont(size=14, weight="bold"),
             ).pack(side="left")
 
     def _load_image_async(self, url: str, label: ctk.CTkLabel):
-        """Load a product image in a background thread."""
         def _fetch():
             try:
                 resp = requests.get(url, timeout=10)
                 resp.raise_for_status()
-                img = Image.open(io.BytesIO(resp.content))
+                data = resp.content
+                self._full_images[url] = data  # Cache raw bytes for click-to-enlarge
+                img = Image.open(io.BytesIO(data))
                 img.thumbnail(_PLACEHOLDER_SIZE, Image.Resampling.LANCZOS)
                 ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=_PLACEHOLDER_SIZE)
                 self._image_refs.append(ctk_img)
                 label.after(0, lambda: label.configure(image=ctk_img, text=""))
-            except Exception:
-                pass  # leave placeholder
+            except Exception as exc:
+                print(f"[IMAGE] Failed to load {url!r}: {exc}")
 
         threading.Thread(target=_fetch, daemon=True).start()
+
+    def _open_image_large(self, url: str):
+        """Open a plain tk.Toplevel showing a larger version of the item image."""
+        data = self._full_images.get(url)
+        if not data:
+            return  # Still loading or failed — no-op
+
+        try:
+            img = Image.open(io.BytesIO(data))
+            img.thumbnail((600, 600), Image.Resampling.LANCZOS)
+
+            # Use plain tk.Toplevel (not CTkToplevel) to avoid canvas rendering bugs
+            top = tk.Toplevel(self.winfo_toplevel())
+            top.title("Image Preview")
+            top.resizable(False, False)
+
+            photo = ImageTk.PhotoImage(img)
+            lbl = tk.Label(top, image=photo, cursor="hand2")
+            lbl.image = photo  # Prevent garbage collection
+            lbl.pack()
+
+            hint = tk.Label(top, text="Click image or press Escape to close", fg="gray60")
+            hint.pack(pady=(0, 4))
+
+            lbl.bind("<Button-1>", lambda e: top.destroy())
+            top.bind("<Escape>", lambda e: top.destroy())
+
+            # Center on screen
+            top.update_idletasks()
+            w, h = top.winfo_width(), top.winfo_height()
+            sw, sh = top.winfo_screenwidth(), top.winfo_screenheight()
+            top.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+        except Exception:
+            pass
 
     # ── Notes ─────────────────────────────────────────────────────────────
 
@@ -305,14 +348,13 @@ class OrderDetailModal(ctk.CTkToplevel):
     def _build_neto_notes(self, parent):
         o = self._neto_order
 
-        # Delivery instructions (read-only)
         if o.delivery_instruction:
             ctk.CTkLabel(
                 parent, text=f"Delivery Instructions: {o.delivery_instruction}",
-                font=ctk.CTkFont(size=12), anchor="w", wraplength=650,
+                font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
+                text_color="#f5c518",
             ).pack(fill="x", padx=10, pady=2)
 
-        # Existing sticky notes (read-only)
         if o.sticky_notes:
             ctk.CTkLabel(parent, text="Existing Sticky Notes:", font=ctk.CTkFont(size=12, weight="bold")).pack(
                 anchor="w", padx=10, pady=(6, 2)
@@ -321,25 +363,28 @@ class OrderDetailModal(ctk.CTkToplevel):
                 title = note.get("Title", "")
                 desc = note.get("Description", "")
                 text = f"{title}: {desc}" if title else desc
-                ctk.CTkLabel(
-                    parent, text=text, font=ctk.CTkFont(size=12),
-                    anchor="w", wraplength=650, fg_color=("gray90", "gray25"),
-                    corner_radius=4,
-                ).pack(fill="x", padx=10, pady=1, ipadx=4, ipady=2)
+                tb = ctk.CTkTextbox(
+                    parent, height=50, font=ctk.CTkFont(size=12),
+                    text_color="#f5c518", fg_color=("gray90", "gray25"),
+                    border_width=0,
+                )
+                tb.insert("1.0", text)
+                tb.configure(state="disabled")
+                tb.pack(fill="x", padx=10, pady=1)
 
-        # Internal notes (read-only)
         if o.internal_notes:
             ctk.CTkLabel(
                 parent, text=f"Internal Notes: {o.internal_notes}",
-                font=ctk.CTkFont(size=12), anchor="w", wraplength=650,
+                font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
+                text_color="#f5c518",
             ).pack(fill="x", padx=10, pady=2)
 
-        # New sticky note
         ctk.CTkLabel(parent, text="Add Sticky Note:", font=ctk.CTkFont(size=12)).pack(
             anchor="w", padx=10, pady=(8, 2)
         )
         self._note_textbox = ctk.CTkTextbox(parent, height=60, font=ctk.CTkFont(size=12))
         self._note_textbox.pack(fill="x", padx=10, pady=(0, 4))
+        self._bind_context_menu(self._note_textbox._textbox)
 
         self._add_note_btn = ctk.CTkButton(
             parent, text="Add Note", width=90, height=28,
@@ -350,23 +395,22 @@ class OrderDetailModal(ctk.CTkToplevel):
     def _build_ebay_notes(self, parent):
         o = self._ebay_order
 
-        # Buyer checkout notes (read-only)
         if o.buyer_notes:
             ctk.CTkLabel(
                 parent, text=f"Buyer Notes: {o.buyer_notes}",
-                font=ctk.CTkFont(size=12), anchor="w", wraplength=650,
+                font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
+                text_color="#f5c518",
             ).pack(fill="x", padx=10, pady=2)
 
-        # Per-item PrivateNotes
         for li in o.line_items:
             if li.notes:
                 ctk.CTkLabel(
                     parent, text=f"[{li.sku}] PrivateNotes: {li.notes}",
-                    font=ctk.CTkFont(size=12), anchor="w", wraplength=650,
+                    font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
                     fg_color=("gray90", "gray25"), corner_radius=4,
+                    text_color="#f5c518",
                 ).pack(fill="x", padx=10, pady=1, ipadx=4, ipady=2)
 
-        # Placeholder for note editing (eBay PrivateNotes editing is complex)
         ctk.CTkLabel(
             parent,
             text="(eBay note editing coming in a future update)",
@@ -385,12 +429,13 @@ class OrderDetailModal(ctk.CTkToplevel):
                 dry_run=self._dry_run,
             )
             self._add_note_btn.configure(state="disabled", text="Note Added")
+            parent = self.winfo_toplevel()
             if self._dry_run:
-                messagebox.showinfo("Dry Run", f"[DRY RUN] Sticky note would be added:\n{text}", parent=self)
+                messagebox.showinfo("Dry Run", f"[DRY RUN] Sticky note would be added:\n{text}", parent=parent)
             else:
-                messagebox.showinfo("Success", "Sticky note added.", parent=self)
+                messagebox.showinfo("Success", "Sticky note added.", parent=parent)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to add note: {e}", parent=self)
+            messagebox.showerror("Error", f"Failed to add note: {e}", parent=self.winfo_toplevel())
 
     # ── Tracking ──────────────────────────────────────────────────────────
 
@@ -408,10 +453,14 @@ class OrderDetailModal(ctk.CTkToplevel):
         ctk.CTkLabel(row, text="Tracking Number:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
         self._tracking_entry = ctk.CTkEntry(row, width=220, font=ctk.CTkFont(size=12))
         self._tracking_entry.pack(side="left", padx=(0, 20))
+        self._bind_context_menu(self._tracking_entry._entry)
 
-        ctk.CTkLabel(row, text="Carrier:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
-        self._carrier_entry = ctk.CTkEntry(row, width=160, font=ctk.CTkFont(size=12))
-        self._carrier_entry.pack(side="left")
+        ctk.CTkLabel(row, text="Shipping Method:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
+        self._carrier_combo = ctk.CTkComboBox(
+            row, values=_SHIPPING_METHODS, width=180, font=ctk.CTkFont(size=12),
+        )
+        self._carrier_combo.set("")  # Blank default
+        self._carrier_combo.pack(side="left")
 
     # ── Freight Placeholder ───────────────────────────────────────────────
 
@@ -427,9 +476,9 @@ class OrderDetailModal(ctk.CTkToplevel):
 
     # ── Action Bar ────────────────────────────────────────────────────────
 
-    def _build_action_bar(self):
-        bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", side="bottom", padx=12, pady=(4, 12))
+    def _build_action_bar(self, parent):
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        bar.pack(fill="x", padx=8, pady=(8, 16))
 
         self._send_btn = ctk.CTkButton(
             bar, text="Mark as Sent", width=140, height=36,
@@ -439,35 +488,42 @@ class OrderDetailModal(ctk.CTkToplevel):
         )
         self._send_btn.pack(side="left", padx=(0, 12))
 
-        self._close_btn = ctk.CTkButton(
-            bar, text="Close", width=90, height=36,
+        if self._on_move_to_unmatched:
+            ctk.CTkButton(
+                bar, text="Move to Unmatched", width=150, height=36,
+                fg_color="gray50", hover_color="gray40",
+                command=self._do_move_to_unmatched,
+            ).pack(side="left", padx=(0, 12))
+
+        ctk.CTkButton(
+            bar, text="← Back", width=90, height=36,
             fg_color="gray50", hover_color="gray40",
-            command=self._close,
-        )
-        self._close_btn.pack(side="left")
+            command=self._on_back,
+        ).pack(side="left")
 
         self._status_label = ctk.CTkLabel(bar, text="", font=ctk.CTkFont(size=13))
         self._status_label.pack(side="left", padx=12)
 
+    # ── Actions ───────────────────────────────────────────────────────────
+
     def _mark_as_sent(self):
         tracking = self._tracking_entry.get().strip()
-        carrier = self._carrier_entry.get().strip()
+        carrier = self._carrier_combo.get().strip()
+        parent = self.winfo_toplevel()
 
         if not tracking:
-            if not messagebox.askyesno(
-                "No Tracking",
-                "Send without a tracking number?",
-                parent=self,
-            ):
+            if not messagebox.askyesno("No Tracking", "Send without a tracking number?", parent=parent):
                 return
 
         try:
             if self._neto_order and self._neto_client:
+                line_item_skus = [li.sku for li in self._neto_order.line_items]
                 self._neto_client.update_order_status(
                     self._order_id,
                     new_status="Dispatched",
                     tracking_number=tracking,
-                    carrier=carrier,
+                    shipping_method=carrier,
+                    line_item_skus=line_item_skus,
                     dry_run=self._dry_run,
                 )
             elif self._ebay_order and self._ebay_client:
@@ -480,42 +536,45 @@ class OrderDetailModal(ctk.CTkToplevel):
                 )
 
             self._completed = True
-            self._send_btn.configure(state="disabled", text="COMPLETED", fg_color="gray50")
+            self._send_btn.configure(state="disabled", text="SENT", fg_color="gray50")
             self._tracking_entry.configure(state="disabled")
-            self._carrier_entry.configure(state="disabled")
-            self._close_btn.configure(text="Back to Orders")
+            self._carrier_combo.configure(state="disabled")
 
             if self._dry_run:
                 self._status_label.configure(text="[DRY RUN] Order marked as sent", text_color="orange")
             else:
                 self._status_label.configure(text="Order marked as sent!", text_color="green")
+                self._on_fulfilled()
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to mark order as sent:\n{e}", parent=self)
+            messagebox.showerror("Error", f"Failed to mark order as sent:\n{e}", parent=parent)
 
-    def _activate(self):
-        """Bring window to front and grab focus after UI is fully rendered."""
-        print(f"[MODAL] _activate: winfo_ismapped={self.winfo_ismapped()}, winfo_viewable={self.winfo_viewable()}")
-        self.lift()
-        self.focus_force()
-        # Nudge geometry to force Windows DWM to repaint if still blank
-        geo = self.geometry()
-        self.geometry(geo)
-        try:
-            self.grab_set()
-        except Exception:
-            pass  # grab can fail if window was closed quickly
-        print(f"[MODAL] _activate complete")
+    def _do_move_to_unmatched(self):
+        if self._on_move_to_unmatched:
+            self._on_move_to_unmatched()
+        self._on_back()
 
-    def _close(self):
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        if self._on_close:
-            self._on_close(self._completed)
-        self.destroy()
+    def show_completed_warning(self):
+        """Call from ResultsTab after status check confirms order is already done."""
+        self._status_label.configure(
+            text="⚠ This order has already been completed", text_color="orange"
+        )
+        self._send_btn.configure(state="disabled")
 
-    def _copy_to_clipboard(self, text: str):
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _bind_context_menu(self, widget):
+        """Bind a right-click Cut/Copy/Paste context menu to a tk widget."""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label="Cut",   command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Copy",  command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Paste", command=lambda: widget.event_generate("<<Paste>>"))
+        widget.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+
+    def _copy_to_clipboard(self, text: str, btn=None, original_text: str = "Copy"):
+        """Copy text to clipboard; briefly change btn label to 'Copied!' if provided."""
         self.clipboard_clear()
         self.clipboard_append(text)
+        if btn is not None:
+            btn.configure(text="Copied!")
+            self.after(2000, lambda: btn.configure(text=original_text))
