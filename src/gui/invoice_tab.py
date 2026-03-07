@@ -119,16 +119,26 @@ class InvoiceTab(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        # ── Top controls row ──────────────────────────────────────────────
-        controls = ctk.CTkFrame(self, fg_color="transparent")
-        controls.pack(fill="x", padx=12, pady=(12, 6))
+        # ── Mode switcher ─────────────────────────────────────────────────
+        self._mode_var = ctk.StringVar(value="PDF Invoice")
+        self._mode_switcher = ctk.CTkSegmentedButton(
+            self,
+            values=["PDF Invoice", "FTP Inventory"],
+            variable=self._mode_var,
+            command=self._on_mode_change,
+        )
+        self._mode_switcher.pack(fill="x", padx=12, pady=(12, 4))
 
-        ctk.CTkLabel(controls, text="Supplier:", font=ctk.CTkFont(size=13)).pack(side="left")
+        # ── PDF controls row ─────────────────────────────────────────────
+        self._pdf_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._pdf_frame.pack(fill="x", padx=12, pady=(0, 6))
+
+        ctk.CTkLabel(self._pdf_frame, text="Supplier:", font=ctk.CTkFont(size=13)).pack(side="left")
 
         supplier_names = self._app.config.supplier_names()
         self._supplier_var = ctk.StringVar(value=supplier_names[0] if supplier_names else "")
         self._supplier_menu = ctk.CTkOptionMenu(
-            controls,
+            self._pdf_frame,
             values=supplier_names,
             variable=self._supplier_var,
             width=220,
@@ -136,7 +146,7 @@ class InvoiceTab(ctk.CTkFrame):
         self._supplier_menu.pack(side="left", padx=(6, 16))
 
         self._import_btn = ctk.CTkButton(
-            controls,
+            self._pdf_frame,
             text="Import PDF",
             width=120,
             command=self._import_pdf,
@@ -144,8 +154,8 @@ class InvoiceTab(ctk.CTkFrame):
         self._import_btn.pack(side="left")
 
         self._scan_btn = ctk.CTkButton(
-            controls,
-            text="📷 Scan",
+            self._pdf_frame,
+            text="Scan",
             width=90,
             fg_color=("dodgerblue3", "dodgerblue4"),
             command=self._scan_with_phone,
@@ -153,7 +163,7 @@ class InvoiceTab(ctk.CTkFrame):
         self._scan_btn.pack(side="left", padx=(8, 0))
 
         self._clear_btn = ctk.CTkButton(
-            controls,
+            self._pdf_frame,
             text="Clear All",
             width=90,
             fg_color="gray50",
@@ -163,7 +173,7 @@ class InvoiceTab(ctk.CTkFrame):
         self._clear_btn.pack(side="left", padx=(8, 0))
 
         self._load_session_btn = ctk.CTkButton(
-            controls,
+            self._pdf_frame,
             text="Load Session",
             width=110,
             fg_color=("dodgerblue3", "dodgerblue4"),
@@ -171,32 +181,50 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._load_session_btn.pack(side="left", padx=(8, 0))
 
-        ctk.CTkButton(
-            controls,
-            text="Test Modal",
-            width=90,
-            fg_color=("purple3", "purple4"),
-            hover_color=("purple4", "purple3"),
-            command=self._open_test_modal,
-        ).pack(side="left", padx=(8, 0))
-
         self._status_label = ctk.CTkLabel(
-            controls,
+            self._pdf_frame,
             text="No items loaded.",
             text_color="gray60",
             font=ctk.CTkFont(size=12),
         )
         self._status_label.pack(side="left", padx=(16, 0))
 
-        # ── Loaded invoices list ──────────────────────────────────────────
-        files_row = ctk.CTkFrame(self, fg_color="transparent")
-        files_row.pack(fill="x", padx=12, pady=(0, 2))
+        # ── FTP controls row (initially hidden) ──────────────────────────
+        self._ftp_frame = ctk.CTkFrame(self, fg_color="transparent")
+        # Not packed yet — only shown when mode switches to FTP
+
         ctk.CTkLabel(
-            files_row, text="Loaded invoices:",
+            self._ftp_frame,
+            text="Downloads morning & afternoon inventory from FTP, finds received items.",
+            font=ctk.CTkFont(size=12),
+            text_color="gray60",
+        ).pack(side="left", padx=(0, 12))
+
+        self._ftp_btn = ctk.CTkButton(
+            self._ftp_frame,
+            text="Load from FTP",
+            width=140,
+            command=self._load_from_ftp,
+        )
+        self._ftp_btn.pack(side="left")
+
+        self._ftp_status_label = ctk.CTkLabel(
+            self._ftp_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="gray60",
+        )
+        self._ftp_status_label.pack(side="left", padx=(12, 0))
+
+        # ── Loaded invoices list ──────────────────────────────────────────
+        self._files_row = ctk.CTkFrame(self, fg_color="transparent")
+        self._files_row.pack(fill="x", padx=12, pady=(0, 2))
+        ctk.CTkLabel(
+            self._files_row, text="Loaded invoices:",
             font=ctk.CTkFont(size=12), text_color="gray60",
         ).pack(side="left")
         self._files_box = ctk.CTkTextbox(
-            files_row, height=52, state="disabled",
+            self._files_row, height=52, state="disabled",
             font=ctk.CTkFont(size=12), wrap="none",
             border_width=1, corner_radius=4,
         )
@@ -453,39 +481,73 @@ class InvoiceTab(ctk.CTkFrame):
         from src.gui.phone_scan_dialog import PhoneScanDialog
         PhoneScanDialog(self, on_done=_on_images_done, supplier_name=supplier_name)
 
-    def _open_test_modal(self):
-        """Minimal CTkToplevel to verify that modal rendering works at all."""
-        win = ctk.CTkToplevel(self)
-        win.withdraw()
-        win.title("Test Modal")
-        win.geometry("400x250")
-        win.resizable(False, False)
-        win.transient(self.winfo_toplevel())
-        win.protocol("WM_DELETE_WINDOW", win.destroy)
+    # ── FTP mode ──────────────────────────────────────────────────────────
 
-        ctk.CTkLabel(
-            win,
-            text="✓  Modal is rendering correctly",
-            font=ctk.CTkFont(size=16, weight="bold"),
+    def _on_mode_change(self, mode: str):
+        if mode == "PDF Invoice":
+            self._ftp_frame.pack_forget()
+            self._pdf_frame.pack(fill="x", padx=12, pady=(0, 6),
+                                 before=self._files_row)
+        else:
+            self._pdf_frame.pack_forget()
+            self._ftp_frame.pack(fill="x", padx=12, pady=(0, 6),
+                                 before=self._files_row)
+        self._clear()
+
+    def _load_from_ftp(self):
+        ftp_cfg = self._app.config.ftp
+        if ftp_cfg is None:
+            self._set_error("FTP not configured in config.json.")
+            return
+        self._ftp_btn.configure(state="disabled")
+        self._ftp_status_label.configure(text="Connecting to FTP...", text_color="gray60")
+        self._set_error("")
+
+        def _worker():
+            from src.ftp_inventory import download_and_compare
+            try:
+                received = download_and_compare(
+                    ftp_cfg.host, ftp_cfg.username, ftp_cfg.password,
+                    ftp_cfg.morning_filename, ftp_cfg.afternoon_filename,
+                )
+                self.after(0, lambda: self._on_ftp_success(received))
+            except Exception as exc:
+                err_msg = str(exc)
+                self.after(0, lambda m=err_msg: self._on_ftp_error(m))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_ftp_success(self, received):
+        from src.pdf_parser import InvoiceItem
+        items = [
+            InvoiceItem(
+                sku=r.sku,
+                sku_with_suffix=r.sku,
+                description="",
+                quantity=max(1, int(r.quantity)),
+                source_page=0,
+                supplier_name=r.supplier,
+            )
+            for r in received
+            if r.sku
+        ]
+        self._invoice_items = items
+        self._table.clear()
+        self._table.load_items(items, append=False)
+        self._loaded_filenames = ["FTP Inventory (Morning vs Afternoon)"]
+        self._update_files_box()
+        count = self._table.row_count()
+        self._ftp_status_label.configure(
+            text=f"{count} received item{'s' if count != 1 else ''} found.",
             text_color="green",
-        ).pack(padx=20, pady=(40, 10))
+        )
+        self._next_btn.configure(state="normal" if count > 0 else "disabled")
+        self._ftp_btn.configure(state="normal")
 
-        ctk.CTkLabel(
-            win,
-            text="If you can read this, CTkToplevel works.\nThe issue is specific to OrderDetailModal.",
-            font=ctk.CTkFont(size=13),
-            justify="center",
-        ).pack(padx=20, pady=10)
-
-        ctk.CTkButton(
-            win, text="Close", width=100, command=win.destroy
-        ).pack(pady=20)
-
-        win.update_idletasks()
-        win.deiconify()
-        win.lift()
-        win.focus_force()
-        print(f"[TEST MODAL] opened: winfo_width={win.winfo_width()}, winfo_ismapped={win.winfo_ismapped()}")
+    def _on_ftp_error(self, message: str):
+        self._set_error(f"FTP error: {message}")
+        self._ftp_status_label.configure(text="Load failed.", text_color="orange")
+        self._ftp_btn.configure(state="normal")
 
     # ── Public API (used by results_tab) ──────────────────────────────────
 
@@ -526,6 +588,11 @@ class InvoiceTab(ctk.CTkFrame):
         """Validate SKUs against inventory.CSV, show correction dialogs, then proceed."""
         items = self.get_invoice_items()
         if not items:
+            return
+
+        # FTP items already use Neto-native SKUs — skip validation
+        if self._mode_var.get() == "FTP Inventory":
+            self._on_complete()
             return
 
         app_cfg = self._app.config.app

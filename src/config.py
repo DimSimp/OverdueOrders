@@ -63,6 +63,15 @@ class OpenAIConfig:
 
 
 @dataclass
+class FTPConfig:
+    host: str
+    username: str
+    password: str
+    morning_filename: str = "Morning_Inventory_Report.xlsx"
+    afternoon_filename: str = "Afternoon_Inventory_Report.xlsx"
+
+
+@dataclass
 class AppConfig:
     order_lookback_days: int
     on_po_filter_phrase: str
@@ -81,6 +90,7 @@ class ConfigManager:
         self.suppliers: list[SupplierConfig] = []
         self.app: AppConfig = None
         self.openai: OpenAIConfig = None
+        self.ftp: Optional[FTPConfig] = None
 
     def load(self) -> None:
         if not CONFIG_PATH.exists():
@@ -147,6 +157,16 @@ class ConfigManager:
             api_key=o.get("api_key", ""),
             model=o.get("model", "gpt-4o"),
         )
+
+        ftp_raw = self._raw.get("ftp", {})
+        if ftp_raw.get("host"):
+            self.ftp = FTPConfig(
+                host=ftp_raw["host"],
+                username=ftp_raw.get("username", ""),
+                password=ftp_raw.get("password", ""),
+                morning_filename=ftp_raw.get("morning_filename", "Morning_Inventory_Report.xlsx"),
+                afternoon_filename=ftp_raw.get("afternoon_filename", "Afternoon_Inventory_Report.xlsx"),
+            )
 
     def save(self) -> None:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
