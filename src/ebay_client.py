@@ -409,6 +409,59 @@ class EbayClient:
                 else:
                     order.buyer_notes = combined
 
+    def get_item_images(self, legacy_item_ids: list[str]) -> dict[str, str]:
+        """
+        Fetch the primary listing image for each ItemID via Trading API GetItem.
+        Returns {legacy_item_id: image_url}. Silently skips items that fail.
+        """
+        if not legacy_item_ids:
+            return {}
+        try:
+            token = self._ensure_valid_token()
+        except Exception:
+            return {}
+
+        result = {}
+        for item_id in legacy_item_ids:
+            if not item_id:
+                continue
+            xml_body = (
+                '<?xml version="1.0" encoding="utf-8"?>'
+                f'<GetItemRequest xmlns="{_TRADING_NS}">'
+                f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+                f"<ItemID>{item_id}</ItemID>"
+                "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
+                "<OutputSelector>PictureDetails</OutputSelector>"
+                "</GetItemRequest>"
+            )
+            try:
+                resp = self._session.post(
+                    self._trading_url,
+                    headers={
+                        "X-EBAY-API-CALL-NAME": "GetItem",
+                        "X-EBAY-API-APP-NAME": self._config.client_id,
+                        "X-EBAY-API-DEV-NAME": self._config.dev_id,
+                        "X-EBAY-API-CERT-NAME": self._config.client_secret,
+                        "X-EBAY-API-SITEID": EBAY_AU_SITE_ID,
+                        "X-EBAY-API-COMPATIBILITY-LEVEL": EBAY_TRADING_VERSION,
+                        "Content-Type": "text/xml",
+                    },
+                    data=xml_body.encode("utf-8"),
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                root = ET.fromstring(resp.text)
+                ns = {"e": _TRADING_NS}
+                ack = root.find("e:Ack", ns)
+                if ack is not None and ack.text in ("Success", "Warning"):
+                    pic_url = _xml_text(root, ".//e:PictureDetails/e:PictureURL", ns)
+                    if pic_url:
+                        result[item_id] = pic_url
+            except Exception:
+                continue
+
+        return result
+
     def _build_sold_list_xml(self, token: str, duration_days: int, page: int) -> str:
         return (
             '<?xml version="1.0" encoding="utf-8"?>'

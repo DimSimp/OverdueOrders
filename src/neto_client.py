@@ -227,6 +227,42 @@ class NetoClient:
         body = {"Order": [order_update]}
         return self._post_action("UpdateOrder", body)
 
+    def get_product_images(self, skus: list[str]) -> dict[str, str]:
+        """
+        Fetch primary image URLs for a list of product SKUs via GetItem.
+        Returns {sku: full_image_url} for products that have an image configured.
+        Images are returned under the 'Images' list; we use the 'Main' image or first available.
+        """
+        if not skus:
+            return {}
+        body = {
+            "Filter": {
+                "SKU": skus,
+                "OutputSelector": ["SKU", "Images"],
+            }
+        }
+        try:
+            data = self._post_action("GetItem", body)
+        except NetoAPIError:
+            return {}
+        items = data.get("Item", [])
+        if isinstance(items, dict):
+            items = [items]
+        result = {}
+        for item in items:
+            sku = str(item.get("SKU", "")).strip()
+            images = item.get("Images", [])
+            if isinstance(images, dict):
+                images = [images]
+            if not images:
+                continue
+            # Prefer "Main" image; fall back to first
+            main = next((i for i in images if i.get("Name") == "Main"), images[0])
+            url = str(main.get("URL") or "").strip()
+            if sku and url:
+                result[sku] = url
+        return result
+
     def add_sticky_note(
         self,
         order_id: str,

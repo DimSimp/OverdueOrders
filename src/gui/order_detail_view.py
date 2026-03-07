@@ -69,6 +69,9 @@ class OrderDetailView(ctk.CTkFrame):
         self._completed = False
         self._image_refs: list = []
         self._full_images: dict[str, bytes] = {}  # url → raw bytes for enlargement
+        # Pending image fetches: keyed by api_id (sku for Neto, legacyItemId for eBay)
+        self._neto_img_pending: dict[str, ctk.CTkLabel] = {}
+        self._ebay_img_pending: dict[str, ctk.CTkLabel] = {}
         self._build_ui()
 
     def _build_ui(self):
@@ -243,30 +246,29 @@ class OrderDetailView(ctk.CTkFrame):
         items_frame = ctk.CTkFrame(frame, fg_color="transparent")
         items_frame.pack(fill="x", padx=10, pady=(0, 8))
 
+        # Build (sku, desc, qty, api_id) — api_id is used to look up images after load
         line_items = []
         if self._neto_order:
             for li in self._neto_order.line_items:
-                print(f"[IMAGE DEBUG] Neto SKU={li.sku!r} image_url={li.image_url!r}")
-                line_items.append((li.sku, li.product_name, li.quantity, li.image_url))
+                line_items.append((li.sku, li.product_name, li.quantity, li.sku))
         elif self._ebay_order:
             for li in self._ebay_order.line_items:
-                print(f"[IMAGE DEBUG] eBay SKU={li.sku!r} image_url={li.image_url!r}")
-                line_items.append((li.sku, li.title, li.quantity, li.image_url))
+                line_items.append((li.sku, li.title, li.quantity, li.legacy_item_id))
 
-        for sku, desc, qty, image_url in line_items:
+        for sku, desc, qty, api_id in line_items:
             row = ctk.CTkFrame(items_frame, fg_color="transparent")
             row.pack(fill="x", pady=1)
 
-            img_label = ctk.CTkLabel(row, text="", width=50, height=50)
+            img_label = ctk.CTkLabel(row, text="·", width=50, height=50,
+                                     text_color="gray50", font=ctk.CTkFont(size=20))
             img_label.pack(side="left", padx=(0, 4))
-            if image_url:
-                self._load_image_async(image_url, img_label)
-                # Clicking the thumbnail opens a larger preview
-                img_label.bind(
-                    "<Button-1>",
-                    lambda e, u=image_url: self._open_image_large(u),
-                )
-                img_label.configure(cursor="hand2")
+
+            # Register for background image fetch
+            if api_id:
+                if self._neto_order:
+                    self._neto_img_pending[api_id] = img_label
+                elif self._ebay_order:
+                    self._ebay_img_pending[api_id] = img_label
 
             arrived = "✓" if sku.upper().strip() in self._matched_skus else ""
             ctk.CTkLabel(row, text=sku, width=130, anchor="w", wraplength=130).pack(side="left", padx=(0, 6))
@@ -278,22 +280,61 @@ class OrderDetailView(ctk.CTkFrame):
                 font=ctk.CTkFont(size=14, weight="bold"),
             ).pack(side="left")
 
-    def _load_image_async(self, url: str, label: ctk.CTkLabel):
-        def _fetch():
-            try:
-                resp = requests.get(url, timeout=10)
-                resp.raise_for_status()
-                data = resp.content
-                self._full_images[url] = data  # Cache raw bytes for click-to-enlarge
-                img = Image.open(io.BytesIO(data))
-                img.thumbnail(_PLACEHOLDER_SIZE, Image.Resampling.LANCZOS)
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=_PLACEHOLDER_SIZE)
-                self._image_refs.append(ctk_img)
-                label.after(0, lambda: label.configure(image=ctk_img, text=""))
-            except Exception as exc:
-                print(f"[IMAGE] Failed to load {url!r}: {exc}")
+        # Kick off background image fetch now that all labels exist
+        if self._neto_img_pending or self._ebay_img_pending:
+            threading.Thread(target=self._fetch_product_images, daemon=True).start()
 
-        threading.Thread(target=_fetch, daemon=True).start()
+    def _fetch_product_images(self):
+        """Background thread: resolve image URLs via API, then download and display."""
+        if self._neto_img_pending and self._neto_client:
+            try:
+                url_map = self._neto_client.get_product_images(list(self._neto_img_pending))
+                for sku, url in url_map.items():
+                    label = self._neto_img_pending.get(sku)
+                    if url and label:
+                        self._download_and_show_image(url, label)
+            except Exception as e:
+                print(f"[IMAGE] Neto image fetch failed: {e}")
+
+        if self._ebay_img_pending and self._ebay_client:
+            try:
+                url_map = self._ebay_client.get_item_images(list(self._ebay_img_pending))
+                for item_id, url in url_map.items():
+                    label = self._ebay_img_pending.get(item_id)
+                    if url and label:
+                        self._download_and_show_image(url, label)
+            except Exception as e:
+                print(f"[IMAGE] eBay image fetch failed: {e}")
+
+    def _download_and_show_image(self, url: str, label: ctk.CTkLabel):
+        """
+        Download an image synchronously (call from a background thread) and
+        schedule a UI update on the main thread. Also enables click-to-enlarge.
+        """
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.content
+            self._full_images[url] = data
+            img = Image.open(io.BytesIO(data))
+            img.thumbnail(_PLACEHOLDER_SIZE, Image.Resampling.LANCZOS)
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=_PLACEHOLDER_SIZE)
+            self._image_refs.append(ctk_img)
+
+            def _update(u=url, lb=label, ci=ctk_img):
+                lb.configure(image=ci, text="")
+                lb.bind("<Button-1>", lambda e, uu=u: self._open_image_large(uu))
+                lb.configure(cursor="hand2")
+
+            label.after(0, _update)
+        except Exception as exc:
+            print(f"[IMAGE] Failed to download {url!r}: {exc}")
+
+    def _load_image_async(self, url: str, label: ctk.CTkLabel):
+        """Spawn a thread to download and display an image (for use from main thread)."""
+        threading.Thread(
+            target=self._download_and_show_image, args=(url, label), daemon=True
+        ).start()
 
     def _open_image_large(self, url: str):
         """Open a plain tk.Toplevel showing a larger version of the item image."""

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from tkinter import messagebox, filedialog, Menu
+from tkinter import messagebox, filedialog, Menu, StringVar
 import tkinter.ttk as ttk
 
 import customtkinter as ctk
@@ -38,6 +38,9 @@ class OrderTreeview(ctk.CTkFrame):
         self._context_label = context_label
         self._col_spec = col_spec
         self._group_meta: dict[str, dict] = {}  # iid → {order_id, platform}
+        self._all_groups: list[dict] = []
+        self._all_flat_rows: list[list[str]] = []
+        self._search_var = StringVar()
         self._apply_style()
         self._build_tree()
 
@@ -107,12 +110,35 @@ class OrderTreeview(ctk.CTkFrame):
             self._tree.heading(col_id, text=heading, anchor="w")
             self._tree.column(col_id, width=width, minwidth=30, stretch=stretch)
 
-        # Scrollbar
+        # ── Search bar (row 0) ────────────────────────────────────────────
+        search_bar = ctk.CTkFrame(self, fg_color="transparent")
+        search_bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=2, pady=(2, 4))
+
+        ctk.CTkLabel(
+            search_bar, text="Search:", font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(4, 6))
+
+        ctk.CTkEntry(
+            search_bar, textvariable=self._search_var,
+            placeholder_text="Filter by order, customer, SKU…",
+            font=ctk.CTkFont(size=12), height=28,
+        ).pack(side="left", fill="x", expand=True)
+
+        ctk.CTkButton(
+            search_bar, text="✕", width=28, height=28,
+            fg_color="gray50", hover_color="gray40",
+            command=lambda: self._search_var.set(""),
+        ).pack(side="left", padx=(4, 4))
+
+        self._search_var.trace_add("write", self._apply_filter)
+
+        # ── Treeview + scrollbar (row 1) ─────────────────────────────────
         vsb = ttk.Scrollbar(self, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
-        self._tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        self.grid_rowconfigure(0, weight=1)
+        self._tree.grid(row=1, column=0, sticky="nsew")
+        vsb.grid(row=1, column=1, sticky="ns")
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self._configure_tags()
@@ -124,57 +150,83 @@ class OrderTreeview(ctk.CTkFrame):
 
     def load_groups(self, groups: list[dict]):
         """
-        Load data into the tree.
+        Store groups and (re-)render, respecting any active search filter.
 
         groups: list of {
-            order_id: str,
-            platform: str,
-            customer: str,
-            date: str,
-            notes: str,
+            order_id: str, platform: str, customer: str, date: str, notes: str,
             line_items: list of {sku, description, qty, is_matched}
         }
         """
-        self._tree.delete(*self._tree.get_children())
-        self._group_meta.clear()
-
-        for i, g in enumerate(groups):
-            tag_g = "group_a" if i % 2 == 0 else "group_b"
-            piid = self._tree.insert(
-                "",
-                "end",
-                text=g["order_id"],
-                values=(
-                    g["platform"],
-                    g["customer"],
-                    g["date"],
-                    "", "", "",
-                    g.get("notes", ""),
-                ),
-                tags=(tag_g, "order_hdr"),
-                open=True,
-            )
-            self._group_meta[piid] = {"order_id": g["order_id"], "platform": g["platform"]}
-
-            for item in g["line_items"]:
-                tags = [tag_g] + (["matched_sku"] if item["is_matched"] else [])
-                ciid = self._tree.insert(
-                    piid,
-                    "end",
-                    text="",
-                    values=("", "", "", item["sku"], item["description"], item["qty"], ""),
-                    tags=tags,
-                )
-                self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"]}
+        self._all_groups = groups
+        self._all_flat_rows = []
+        self._apply_filter()
 
     def load_flat(self, rows: list[list[str]]):
-        """Load flat (non-hierarchical) rows. Used for unmatched invoice items."""
+        """Store flat rows and (re-)render, respecting any active search filter."""
+        self._all_flat_rows = rows
+        self._all_groups = []
+        self._apply_filter()
+
+    # ── Filtering ─────────────────────────────────────────────────────────
+
+    def _apply_filter(self, *_):
+        """Re-render the tree showing only rows that match the search query."""
+        query = self._search_var.get().lower().strip()
         self._tree.delete(*self._tree.get_children())
         self._group_meta.clear()
 
-        for i, row in enumerate(rows):
-            tag_g = "group_a" if i % 2 == 0 else "group_b"
-            self._tree.insert("", "end", text="", values=row, tags=[tag_g])
+        if self._all_groups:
+            visible = [
+                g for g in self._all_groups
+                if not query or self._group_matches(g, query)
+            ]
+            for i, g in enumerate(visible):
+                tag_g = "group_a" if i % 2 == 0 else "group_b"
+                piid = self._tree.insert(
+                    "", "end",
+                    text=g["order_id"],
+                    values=(
+                        g["platform"], g["customer"], g["date"],
+                        "", "", "", g.get("notes", ""),
+                    ),
+                    tags=(tag_g, "order_hdr"),
+                    open=True,
+                )
+                self._group_meta[piid] = {"order_id": g["order_id"], "platform": g["platform"]}
+                for item in g["line_items"]:
+                    tags = [tag_g] + (["matched_sku"] if item["is_matched"] else [])
+                    ciid = self._tree.insert(
+                        piid, "end", text="",
+                        values=("", "", "", item["sku"], item["description"], item["qty"], ""),
+                        tags=tags,
+                    )
+                    self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"]}
+
+        elif self._all_flat_rows:
+            visible = [
+                r for r in self._all_flat_rows
+                if not query or any(query in str(v).lower() for v in r)
+            ]
+            for i, row in enumerate(visible):
+                tag_g = "group_a" if i % 2 == 0 else "group_b"
+                self._tree.insert("", "end", text="", values=row, tags=[tag_g])
+
+    def _group_matches(self, g: dict, query: str) -> bool:
+        """Return True if query appears in any field of the order or its line items."""
+        if any(
+            query in str(v).lower()
+            for v in (g.get("order_id", ""), g.get("platform", ""),
+                      g.get("customer", ""), g.get("date", ""), g.get("notes", ""))
+        ):
+            return True
+        for item in g.get("line_items", []):
+            if any(
+                query in str(v).lower()
+                for v in (item.get("sku", ""), item.get("description", ""),
+                          str(item.get("qty", "")))
+            ):
+                return True
+        return False
 
     # ── Events ────────────────────────────────────────────────────────────
 
