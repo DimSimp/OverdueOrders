@@ -213,6 +213,7 @@ def _parse_matched(d: dict) -> MatchedOrder:
         description=d.get("description", ""),
         quantity=int(d.get("quantity", 0)),
         notes=d.get("notes", ""),
+        shipping_type=d.get("shipping_type", ""),
         invoice_sku=d.get("invoice_sku", ""),
         invoice_description=d.get("invoice_description", ""),
         invoice_qty=int(d.get("invoice_qty", 0)),

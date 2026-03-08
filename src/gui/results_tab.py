@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from tkinter import messagebox, filedialog, Menu, StringVar
+import re
+from tkinter import messagebox, filedialog, Menu, StringVar, BooleanVar
 import tkinter.ttk as ttk
 
 import customtkinter as ctk
@@ -11,6 +12,26 @@ from src.data_processor import MatchedOrder, match_orders_to_invoice
 from src.exporter import export_to_xlsx
 from src.gui.order_detail_view import OrderDetailView
 from src.pdf_parser import InvoiceItem
+
+
+def _numeric_sort_key(value: str) -> tuple:
+    """Sort key that puts numeric values first, then alphabetic."""
+    match = re.match(r"^(\d+)", value.strip())
+    if match:
+        return (0, int(match.group(1)), value.lower())
+    return (1, 0, value.lower())
+
+
+def _shipping_display(shipping_type: str) -> str:
+    """Return shipping text with a colored Unicode indicator prefix."""
+    st = shipping_type.lower()
+    if "express" in st:
+        return "🔴 Express"
+    if "pickup" in st:
+        return "🟢 Local Pickup"
+    if st:
+        return "🔵 Regular"
+    return ""
 
 
 # ── OrderTreeview ──────────────────────────────────────────────────────────────
@@ -42,6 +63,16 @@ class OrderTreeview(ctk.CTkFrame):
         self._all_flat_rows: list[list[str]] = []
         self._search_var = StringVar()
         self._hovered_group: str | None = None  # parent iid of currently hovered group
+        # Sorting state
+        self._sort_col: str | None = None
+        self._sort_reverse: bool = False
+        self._shipping_cycle: int = 0  # cycles Express→Regular→Pickup priority
+        self._col_headings: dict[str, str] = {}  # col_id → original heading text
+        # Filter state
+        self._filter_visible: bool = False
+        self._filter_frame: ctk.CTkFrame | None = None
+        self._platform_filters: dict[str, BooleanVar] = {}
+        self._shipping_filters: dict[str, BooleanVar] = {}
         self._apply_style()
         self._build_tree()
 
@@ -101,15 +132,19 @@ class OrderTreeview(ctk.CTkFrame):
 
         # Tree (#0) column — only when show="tree headings"
         if w0 > 0:
-            self._tree.heading("#0", text=h0, anchor="w")
+            self._col_headings["#0"] = h0
+            self._tree.heading("#0", text=h0, anchor="w",
+                               command=lambda: self._on_header_click("#0"))
             self._tree.column("#0", width=w0, minwidth=60, stretch=False)
 
         # Data columns
         for col_id, (heading, width) in self._col_spec.items():
             if col_id == "#0":
                 continue
+            self._col_headings[col_id] = heading
             stretch = col_id in ("notes", "description")
-            self._tree.heading(col_id, text=heading, anchor="w")
+            self._tree.heading(col_id, text=heading, anchor="w",
+                               command=lambda c=col_id: self._on_header_click(c))
             self._tree.column(col_id, width=width, minwidth=30, stretch=stretch)
 
         # ── Search bar (row 0) ────────────────────────────────────────────
@@ -132,15 +167,26 @@ class OrderTreeview(ctk.CTkFrame):
             command=lambda: self._search_var.set(""),
         ).pack(side="left", padx=(4, 4))
 
+        self._filter_btn = ctk.CTkButton(
+            search_bar, text="Filter", width=60, height=28,
+            fg_color="gray50", hover_color="gray40",
+            command=self._toggle_filter_panel,
+        )
+        self._filter_btn.pack(side="left", padx=(4, 4))
+
         self._search_var.trace_add("write", self._apply_filter)
 
-        # ── Treeview + scrollbar (row 1) ─────────────────────────────────
+        # ── Filter panel (row 1, hidden by default) ──────────────────────
+        # Built on demand in _toggle_filter_panel / _rebuild_filter_panel
+
+        # ── Treeview + scrollbar (row 2) ─────────────────────────────────
         vsb = ttk.Scrollbar(self, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
-        self._tree.grid(row=1, column=0, sticky="nsew")
-        vsb.grid(row=1, column=1, sticky="ns")
+        self._tree.grid(row=2, column=0, sticky="nsew")
+        vsb.grid(row=2, column=1, sticky="ns")
         self.grid_rowconfigure(0, weight=0)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=0)
+        self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self._configure_tags()
@@ -158,12 +204,14 @@ class OrderTreeview(ctk.CTkFrame):
         Store groups and (re-)render, respecting any active search filter.
 
         groups: list of {
-            order_id: str, platform: str, customer: str, date: str, notes: str,
+            order_id: str, platform: str, customer: str, date: str,
+            shipping: str, notes: str,
             line_items: list of {sku, description, qty, is_matched}
         }
         """
         self._all_groups = groups
         self._all_flat_rows = []
+        self._rebuild_filter_options()
         self._apply_filter()
 
     def load_flat(self, rows: list[list[str]]):
@@ -175,7 +223,7 @@ class OrderTreeview(ctk.CTkFrame):
     # ── Filtering ─────────────────────────────────────────────────────────
 
     def _apply_filter(self, *_):
-        """Re-render the tree showing only rows that match the search query."""
+        """Re-render the tree showing only rows that match the search query and filters."""
         query = self._search_var.get().lower().strip()
         self._tree.delete(*self._tree.get_children())
         self._group_meta.clear()
@@ -183,20 +231,23 @@ class OrderTreeview(ctk.CTkFrame):
         if self._all_groups:
             visible = [
                 g for g in self._all_groups
-                if not query or self._group_matches(g, query)
+                if self._group_passes_filters(g, query)
             ]
             for i, g in enumerate(visible):
                 bg = self._bg_a if i % 2 == 0 else self._bg_b
                 tag_bg = f"bg_{i}"
                 self._tree.tag_configure(tag_bg, background=bg)
+                shipping = g.get("shipping", "")
+                ship_display = _shipping_display(shipping)
+                row_tags = [tag_bg, "order_hdr"]
                 piid = self._tree.insert(
                     "", "end",
                     text=g["order_id"],
                     values=(
                         g["platform"], g["customer"], g["date"],
-                        "", "", "", g.get("notes", ""),
+                        ship_display, "", "", "", g.get("notes", ""),
                     ),
-                    tags=(tag_bg, "order_hdr"),
+                    tags=row_tags,
                     open=True,
                 )
                 self._group_meta[piid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
@@ -204,7 +255,7 @@ class OrderTreeview(ctk.CTkFrame):
                     tags = [tag_bg] + (["matched_sku"] if item["is_matched"] else [])
                     ciid = self._tree.insert(
                         piid, "end", text="",
-                        values=("", "", "", item["sku"], item["description"], item["qty"], ""),
+                        values=("", "", "", "", item["sku"], item["description"], item["qty"], ""),
                         tags=tags,
                     )
                     self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
@@ -220,12 +271,34 @@ class OrderTreeview(ctk.CTkFrame):
                 self._tree.tag_configure(tag_bg, background=bg)
                 self._tree.insert("", "end", text="", values=row, tags=[tag_bg])
 
-    def _group_matches(self, g: dict, query: str) -> bool:
+    def _group_passes_filters(self, g: dict, query: str) -> bool:
+        """Return True if group passes search query + checkbox filters."""
+        # Platform filter
+        if self._platform_filters:
+            platform = g.get("platform", "")
+            var = self._platform_filters.get(platform)
+            if var is not None and not var.get():
+                return False
+
+        # Shipping filter
+        if self._shipping_filters:
+            shipping = g.get("shipping", "") or "Regular"
+            var = self._shipping_filters.get(shipping)
+            if var is not None and not var.get():
+                return False
+
+        # Search query
+        if query:
+            return self._group_matches_query(g, query)
+        return True
+
+    def _group_matches_query(self, g: dict, query: str) -> bool:
         """Return True if query appears in any field of the order or its line items."""
         if any(
             query in str(v).lower()
             for v in (g.get("order_id", ""), g.get("platform", ""),
-                      g.get("customer", ""), g.get("date", ""), g.get("notes", ""))
+                      g.get("customer", ""), g.get("date", ""),
+                      g.get("shipping", ""), g.get("notes", ""))
         ):
             return True
         for item in g.get("line_items", []):
@@ -236,6 +309,153 @@ class OrderTreeview(ctk.CTkFrame):
             ):
                 return True
         return False
+
+    # ── Sorting ──────────────────────────────────────────────────────────
+
+    def _on_header_click(self, col_id: str):
+        """Sort groups by the clicked column header."""
+        if not self._all_groups:
+            return
+
+        if col_id == "shipping":
+            # Shipping cycles through priority order instead of asc/desc
+            if self._sort_col == "shipping":
+                self._shipping_cycle = (self._shipping_cycle + 1) % 3
+            else:
+                self._sort_col = "shipping"
+                self._shipping_cycle = 0
+            self._sort_reverse = False
+        elif col_id == self._sort_col:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_col = col_id
+            self._sort_reverse = False
+
+        self._sort_groups()
+        self._update_header_indicators()
+        self._apply_filter()
+
+    def _sort_groups(self):
+        """Sort self._all_groups in place based on current sort state."""
+        col = self._sort_col
+        if not col:
+            return
+
+        def _sort_key(g: dict):
+            if col == "#0":
+                return _numeric_sort_key(g.get("order_id", ""))
+            elif col == "platform":
+                return g.get("platform", "").lower()
+            elif col == "customer":
+                return g.get("customer", "").lower()
+            elif col == "date":
+                return g.get("date", "")
+            elif col == "shipping":
+                shipping = (g.get("shipping", "") or "Regular").lower()
+                # Cycle priority: 0=Express first, 1=Regular first, 2=Local Pickup first
+                priority_maps = [
+                    {"express": 0, "regular": 1, "local pickup": 2},
+                    {"regular": 0, "express": 1, "local pickup": 2},
+                    {"local pickup": 0, "express": 1, "regular": 2},
+                ]
+                pmap = priority_maps[self._shipping_cycle]
+                return pmap.get(shipping, 3)
+            elif col == "sku":
+                items = g.get("line_items", [])
+                return _numeric_sort_key(items[0]["sku"]) if items else ("", "")
+            elif col == "qty":
+                items = g.get("line_items", [])
+                try:
+                    return sum(int(i.get("qty", 0)) for i in items)
+                except (ValueError, TypeError):
+                    return 0
+            elif col == "description":
+                items = g.get("line_items", [])
+                return items[0].get("description", "").lower() if items else ""
+            elif col == "notes":
+                return g.get("notes", "").lower()
+            return ""
+
+        self._all_groups.sort(key=_sort_key, reverse=self._sort_reverse)
+
+    def _update_header_indicators(self):
+        """Update column heading text with ▲/▼ sort indicator."""
+        for col_id, original in self._col_headings.items():
+            if col_id == self._sort_col:
+                if col_id == "shipping":
+                    labels = ["Express", "Regular", "Pickup"]
+                    indicator = f" ({labels[self._shipping_cycle]})"
+                else:
+                    indicator = " ▼" if self._sort_reverse else " ▲"
+                self._tree.heading(col_id, text=original + indicator)
+            else:
+                self._tree.heading(col_id, text=original)
+
+    # ── Filter panel ─────────────────────────────────────────────────────
+
+    def _toggle_filter_panel(self):
+        """Show or hide the filter panel."""
+        if self._filter_visible:
+            if self._filter_frame:
+                self._filter_frame.grid_remove()
+            self._filter_visible = False
+            self._filter_btn.configure(fg_color="gray50")
+        else:
+            self._rebuild_filter_panel()
+            self._filter_visible = True
+            self._filter_btn.configure(fg_color=("dodgerblue3", "dodgerblue4"))
+
+    def _rebuild_filter_options(self):
+        """Scan groups for unique platforms and update filter variables."""
+        platforms = sorted({g.get("platform", "") for g in self._all_groups if g.get("platform")})
+        # Preserve existing check states
+        old_states = {k: v.get() for k, v in self._platform_filters.items()}
+        self._platform_filters.clear()
+        for p in platforms:
+            var = BooleanVar(value=old_states.get(p, True))
+            self._platform_filters[p] = var
+
+        # Shipping types are fixed
+        if not self._shipping_filters:
+            for st in ("Express", "Regular", "Local Pickup"):
+                self._shipping_filters[st] = BooleanVar(value=True)
+
+        # Rebuild panel if visible
+        if self._filter_visible and self._filter_frame:
+            self._rebuild_filter_panel()
+
+    def _rebuild_filter_panel(self):
+        """Build or rebuild the filter panel UI."""
+        if self._filter_frame:
+            self._filter_frame.destroy()
+
+        self._filter_frame = ctk.CTkFrame(self, fg_color=("gray88", "gray20"), corner_radius=6)
+        self._filter_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(0, 4))
+
+        # Platform section
+        plat_frame = ctk.CTkFrame(self._filter_frame, fg_color="transparent")
+        plat_frame.pack(side="left", padx=(10, 20), pady=6)
+        ctk.CTkLabel(plat_frame, text="Platform:", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(0, 6))
+        for platform, var in self._platform_filters.items():
+            ctk.CTkCheckBox(
+                plat_frame, text=platform, variable=var,
+                font=ctk.CTkFont(size=11), height=24, checkbox_width=18, checkbox_height=18,
+                command=self._apply_filter,
+            ).pack(side="left", padx=(0, 8))
+
+        # Separator
+        ctk.CTkLabel(self._filter_frame, text="|", text_color="gray50").pack(side="left", padx=(0, 10))
+
+        # Shipping section
+        ship_frame = ctk.CTkFrame(self._filter_frame, fg_color="transparent")
+        ship_frame.pack(side="left", padx=(0, 10), pady=6)
+        ctk.CTkLabel(ship_frame, text="Shipping:", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(0, 6))
+        for ship_type, var in self._shipping_filters.items():
+            ctk.CTkCheckBox(
+                ship_frame, text=ship_type, variable=var,
+                font=ctk.CTkFont(size=11), height=24, checkbox_width=18, checkbox_height=18,
+                command=self._apply_filter,
+            ).pack(side="left", padx=(0, 8))
 
     # ── Events ────────────────────────────────────────────────────────────
 
@@ -308,10 +528,11 @@ _MATCHED_COL_SPEC = {
     "platform":    ("Platform",     80),
     "customer":    ("Customer",    140),
     "date":        ("Date",         90),
+    "shipping":    ("Shipping",     90),
     "sku":         ("SKU",         140),
     "description": ("Description", 200),
     "qty":         ("Qty",          40),
-    "notes":       ("Notes",       170),
+    "notes":       ("Notes",       120),
 }
 
 # Unmatched orders: same columns but no detail-view on click
@@ -320,10 +541,11 @@ _UNMATCHED_ORD_COL_SPEC = {
     "platform":    ("Platform",     80),
     "customer":    ("Customer",    140),
     "date":        ("Date",         90),
+    "shipping":    ("Shipping",     90),
     "sku":         ("SKU",         140),
     "description": ("Description", 200),
     "qty":         ("Qty",          40),
-    "notes":       ("Notes",       170),
+    "notes":       ("Notes",       120),
 }
 
 # Unmatched invoice items: flat list
@@ -537,6 +759,7 @@ class ResultsTab(ctk.CTkFrame):
                     description=line.product_name,
                     quantity=line.quantity,
                     notes=order.notes if idx == 0 else "",
+                    shipping_type=order.shipping_type,
                     invoice_sku="",
                     invoice_description="",
                     invoice_qty=0,
@@ -557,6 +780,7 @@ class ResultsTab(ctk.CTkFrame):
                     description=line.title,
                     quantity=line.quantity,
                     notes=line.notes,
+                    shipping_type=order.shipping_type,
                     invoice_sku="",
                     invoice_description="",
                     invoice_qty=0,
@@ -588,6 +812,7 @@ class ResultsTab(ctk.CTkFrame):
                     "platform": m.platform,
                     "customer": m.customer_name,
                     "date": date_str,
+                    "shipping": m.shipping_type,
                     "notes": m.notes,
                     "line_items": [],
                 })
@@ -631,6 +856,7 @@ class ResultsTab(ctk.CTkFrame):
                     "platform": channel,
                     "customer": order.customer_name,
                     "date": date_str,
+                    "shipping": order.shipping_type,
                     "notes": order.notes,
                     "line_items": [],
                 })
@@ -654,6 +880,7 @@ class ResultsTab(ctk.CTkFrame):
                     "platform": "eBay",
                     "customer": order.buyer_name,
                     "date": date_str,
+                    "shipping": order.shipping_type,
                     "notes": "",
                     "line_items": [],
                 })

@@ -1,9 +1,5 @@
 - more streamlined way to refresh orders
-- show individual item price, shipping price, shipping type, and order total on order fulfillment screen
-- filter by express, click and collect, and regular orders
-- make "re-authenticate ebay" button more out of the way, perhaps bottom left corner
+- Correct colour representation of each shipping method
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
-- able to leave notes on ebay orders
 - auto-open Kogan platform when marking kogan orders as sent
 - add order booking logic to order fulfillment screen
-- show that app is working when importing from FTP

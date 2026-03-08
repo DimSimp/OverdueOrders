@@ -18,10 +18,11 @@ class MatchedOrder:
     description: str           # Product name from the order
     quantity: int
     notes: str                 # Staff/buyer notes from the order
-    invoice_sku: str           # Matched invoice SKU; empty if line doesn't match invoice
-    invoice_description: str
-    invoice_qty: int           # 0 if line doesn't match invoice
-    is_invoice_match: bool     # True if this line item matched an invoice SKU
+    shipping_type: str = ""    # "Express", "Regular", "Local Pickup", or ""
+    invoice_sku: str = ""      # Matched invoice SKU; empty if line doesn't match invoice
+    invoice_description: str = ""
+    invoice_qty: int = 0       # 0 if line doesn't match invoice
+    is_invoice_match: bool = False  # True if this line item matched an invoice SKU
 
 
 
@@ -104,6 +105,7 @@ def match_orders_to_invoice(
                 description=line.product_name,
                 quantity=line.quantity,
                 notes=order.notes if idx == 0 else "",
+                shipping_type=order.shipping_type,
                 invoice_sku=inv.sku_with_suffix if inv else "",
                 invoice_description=inv.description if inv else "",
                 invoice_qty=inv.quantity if inv else 0,
@@ -134,6 +136,7 @@ def match_orders_to_invoice(
                 description=line.title,
                 quantity=line.quantity,
                 notes=line.notes,
+                shipping_type=order.shipping_type,
                 invoice_sku=inv.sku_with_suffix if inv else "",
                 invoice_description=inv.description if inv else "",
                 invoice_qty=inv.quantity if inv else 0,
