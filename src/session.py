@@ -158,6 +158,10 @@ def _parse_neto_order(d: dict) -> NetoOrder:
         ship_postcode=d.get("ship_postcode", ""),
         ship_country=d.get("ship_country", ""),
         ship_phone=d.get("ship_phone", ""),
+        grand_total=float(d.get("grand_total", 0)),
+        shipping_total=float(d.get("shipping_total", 0)),
+        shipping_method=d.get("shipping_method", ""),
+        shipping_type=d.get("shipping_type", ""),
     )
 
 
@@ -172,6 +176,7 @@ def _parse_ebay_order(d: dict) -> EbayOrder:
             legacy_transaction_id=li.get("legacy_transaction_id", ""),
             notes=li.get("notes", ""),
             image_url=li.get("image_url", ""),
+            unit_price=float(li.get("unit_price", 0)),
         )
         for li in d.get("line_items", [])
     ]
@@ -191,6 +196,10 @@ def _parse_ebay_order(d: dict) -> EbayOrder:
         ship_postcode=d.get("ship_postcode", ""),
         ship_country=d.get("ship_country", ""),
         ship_phone=d.get("ship_phone", ""),
+        order_total=float(d.get("order_total", 0)),
+        shipping_cost=float(d.get("shipping_cost", 0)),
+        shipping_method=d.get("shipping_method", ""),
+        shipping_type=d.get("shipping_type", ""),
     )
 
 

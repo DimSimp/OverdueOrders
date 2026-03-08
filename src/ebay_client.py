@@ -41,6 +41,7 @@ class EbayLineItem:
     legacy_transaction_id: str = "" # Trading API TransactionID
     notes: str = ""                 # PrivateNotes for this specific item
     image_url: str = ""             # Product image URL
+    unit_price: float = 0.0         # Price per unit
 
 
 @dataclass
@@ -61,6 +62,11 @@ class EbayOrder:
     ship_postcode: str = ""
     ship_country: str = ""
     ship_phone: str = ""
+    # Pricing & shipping
+    order_total: float = 0.0
+    shipping_cost: float = 0.0
+    shipping_method: str = ""
+    shipping_type: str = ""  # "Express", "Regular", "Local Pickup", or ""
 
 
 class EbayAuthError(Exception):
@@ -341,8 +347,9 @@ class EbayClient:
         now = datetime.now()
         duration_days = min(int((now - date_from).days) + 1, 60)
 
-        # Build lookup: ItemID (extracted from OLI prefix) → PrivateNotes text
+        # Build lookups: ItemID → PrivateNotes text, ItemID → TransactionID
         notes_by_item_id: dict[str, str] = {}
+        txn_id_by_item_id: dict[str, str] = {}
         page = 1
         while True:
             xml_body = self._build_sold_list_xml(token, duration_days, page)
@@ -376,8 +383,12 @@ class EbayClient:
                 oli_el = txn.find("e:OrderLineItemID", ns)
                 if oli_el is None or not oli_el.text:
                     continue
-                # OLI format: "ItemID-TransactionID" — extract ItemID prefix
-                item_id = oli_el.text.split("-")[0]
+                # OLI format: "ItemID-TransactionID" — extract both parts
+                parts = oli_el.text.split("-", 1)
+                item_id = parts[0]
+                transaction_id = parts[1] if len(parts) > 1 else ""
+                if item_id and transaction_id:
+                    txn_id_by_item_id[item_id] = transaction_id
                 note = _xml_text(txn, "e:Item/e:PrivateNotes", ns)
                 if item_id and note:
                     notes_by_item_id[item_id] = note
@@ -391,13 +402,16 @@ class EbayClient:
                 break
             page += 1
 
-        if not notes_by_item_id:
+        if not notes_by_item_id and not txn_id_by_item_id:
             return
 
-        # Apply notes per line item; also roll up into order.buyer_notes for filter_on_po
+        # Apply notes and transaction IDs per line item
         for order in orders:
             item_notes = []
             for li in order.line_items:
+                # Populate transaction ID if not already set
+                if not li.legacy_transaction_id and li.legacy_item_id:
+                    li.legacy_transaction_id = txn_id_by_item_id.get(li.legacy_item_id, "")
                 note = notes_by_item_id.get(li.legacy_item_id, "")
                 li.notes = note
                 if note:
@@ -408,6 +422,58 @@ class EbayClient:
                     order.buyer_notes = order.buyer_notes + " | " + combined
                 else:
                     order.buyer_notes = combined
+
+    def set_private_notes(
+        self,
+        item_id: str,
+        transaction_id: str,
+        note_text: str,
+        dry_run: bool = True,
+    ) -> None:
+        """
+        Set (add or update) PrivateNotes on a sold eBay item via the Trading API.
+        Uses SetUserNotes with ItemID + TransactionID to target a specific transaction.
+        Note text is limited to 255 characters by eBay.
+        """
+        note_text = note_text[:255]
+
+        if dry_run:
+            print(f"[DRY RUN] eBay SetUserNotes on {item_id}-{transaction_id}: {note_text!r}")
+            return
+
+        token = self._ensure_valid_token()
+        xml_body = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<SetUserNotesRequest xmlns="{_TRADING_NS}">'
+            f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+            f"<ItemID>{item_id}</ItemID>"
+            f"<TransactionID>{transaction_id}</TransactionID>"
+            "<Action>AddOrUpdate</Action>"
+            f"<NoteText>{_xml_escape(note_text)}</NoteText>"
+            "</SetUserNotesRequest>"
+        )
+        resp = self._session.post(
+            self._trading_url,
+            headers={
+                "X-EBAY-API-CALL-NAME": "SetUserNotes",
+                "X-EBAY-API-APP-NAME": self._config.client_id,
+                "X-EBAY-API-DEV-NAME": self._config.dev_id,
+                "X-EBAY-API-CERT-NAME": self._config.client_secret,
+                "X-EBAY-API-SITEID": EBAY_AU_SITE_ID,
+                "X-EBAY-API-COMPATIBILITY-LEVEL": EBAY_TRADING_VERSION,
+                "Content-Type": "text/xml",
+            },
+            data=xml_body.encode("utf-8"),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        root = ET.fromstring(resp.text)
+        ns = {"e": _TRADING_NS}
+        ack = root.find("e:Ack", ns)
+        if ack is None or ack.text not in ("Success", "Warning"):
+            errors = root.findall(".//e:Errors/e:ShortMessage", ns)
+            err_msg = "; ".join(e.text for e in errors if e.text) or "Unknown error"
+            raise EbayAPIError(f"SetUserNotes failed: {err_msg}")
 
     def get_item_images(self, legacy_item_ids: list[str]) -> dict[str, str]:
         """
@@ -508,6 +574,10 @@ class EbayClient:
             image_data = li.get("image")
             if isinstance(image_data, dict):
                 image_url = str(image_data.get("imageUrl", "") or "").strip()
+            try:
+                unit_price = float(str(li.get("lineItemCost", {}).get("value", 0) or 0))
+            except (ValueError, TypeError):
+                unit_price = 0.0
             line_items.append(EbayLineItem(
                 line_item_id=str(li.get("lineItemId", "")),
                 sku=str(li.get("sku", "") or "").strip(),
@@ -516,6 +586,7 @@ class EbayClient:
                 legacy_item_id=str(li.get("legacyItemId", "") or ""),
                 legacy_transaction_id=str(li.get("legacyTransactionId", "") or ""),
                 image_url=image_url,
+                unit_price=unit_price,
             ))
 
         # Extract shipping address from fulfillmentStartInstructions
@@ -528,6 +599,26 @@ class EbayClient:
                 .get("shipTo", {})
             )
         contact = ship_to.get("contactAddress", {})
+
+        # Pricing
+        pricing = raw.get("pricingSummary", {})
+        try:
+            order_total = float(str(pricing.get("total", {}).get("value", 0) or 0))
+        except (ValueError, TypeError):
+            order_total = 0.0
+        try:
+            shipping_cost = float(str(pricing.get("deliveryCost", {}).get("value", 0) or 0))
+        except (ValueError, TypeError):
+            shipping_cost = 0.0
+
+        # Shipping method from fulfillmentStartInstructions
+        shipping_method = ""
+        if instructions:
+            shipping_method = str(
+                instructions[0].get("shippingStep", {}).get("shippingServiceCode", "") or ""
+            ).strip()
+
+        shipping_type = _classify_ebay_shipping(shipping_method, instructions)
 
         return EbayOrder(
             order_id=str(raw.get("orderId", "")),
@@ -545,7 +636,29 @@ class EbayClient:
             ship_postcode=str(contact.get("postalCode", "") or "").strip(),
             ship_country=str(contact.get("countryCode", "") or "").strip(),
             ship_phone=str(ship_to.get("primaryPhone", {}).get("phoneNumber", "") or "").strip(),
+            order_total=order_total,
+            shipping_cost=shipping_cost,
+            shipping_method=shipping_method,
+            shipping_type=shipping_type,
         )
+
+
+def _classify_ebay_shipping(method: str, instructions: list[dict]) -> str:
+    """Classify eBay shipping into Express, Regular, or Local Pickup."""
+    # Check fulfillmentInstructionType for IN_STORE_PICKUP or SHIP_TO
+    if instructions:
+        instr_type = str(instructions[0].get("fulfillmentInstructionType", "") or "").upper()
+        if "PICKUP" in instr_type:
+            return "Local Pickup"
+
+    m = method.lower()
+    if not m:
+        return ""
+    if "pickup" in m or "collect" in m:
+        return "Local Pickup"
+    if "express" in m or "priority" in m or "overnight" in m or "next day" in m:
+        return "Express"
+    return "Regular"
 
 
 def _xml_text(el: ET.Element, path: str, ns: dict) -> str:
@@ -582,3 +695,14 @@ def _parse_ebay_date(raw: str) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return None
+
+
+def _xml_escape(text: str) -> str:
+    """Escape special XML characters in user-provided text."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )

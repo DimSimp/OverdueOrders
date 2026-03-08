@@ -230,6 +230,11 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._files_box.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
+        # ── Progress bar (hidden until FTP load) ─────────────────────────
+        self._progress = ctk.CTkProgressBar(self, mode="indeterminate")
+        self._progress.pack(fill="x", padx=12, pady=(0, 4))
+        self._progress.pack_forget()
+
         # ── Editable table ────────────────────────────────────────────────
         self._table = EditableTable(self, corner_radius=6)
         self._table.pack(fill="both", expand=True, padx=12, pady=4)
@@ -502,6 +507,8 @@ class InvoiceTab(ctk.CTkFrame):
         self._ftp_btn.configure(state="disabled")
         self._ftp_status_label.configure(text="Connecting to FTP...", text_color="gray60")
         self._set_error("")
+        self._progress.pack(fill="x", padx=12, pady=(0, 4), after=self._files_row)
+        self._progress.start()
 
         def _worker():
             from src.ftp_inventory import download_and_compare
@@ -518,6 +525,8 @@ class InvoiceTab(ctk.CTkFrame):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_ftp_success(self, received):
+        self._progress.stop()
+        self._progress.pack_forget()
         from src.pdf_parser import InvoiceItem
         items = [
             InvoiceItem(
@@ -545,6 +554,8 @@ class InvoiceTab(ctk.CTkFrame):
         self._ftp_btn.configure(state="normal")
 
     def _on_ftp_error(self, message: str):
+        self._progress.stop()
+        self._progress.pack_forget()
         self._set_error(f"FTP error: {message}")
         self._ftp_status_label.configure(text="Load failed.", text_color="orange")
         self._ftp_btn.configure(state="normal")

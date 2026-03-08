@@ -27,11 +27,15 @@ OUTPUT_SELECTOR = [
     "InternalOrderNotes",
     "DeliveryInstruction",
     "ShipAddress",      # Returns all ShipFirstName/LastName/Company/StreetLine1/2/City/State/PostCode/Country/Phone
+    "GrandTotal",
+    "ShippingTotal",
+    "ShippingOption",
     "OrderLine",
     "OrderLine.ProductName",
     "OrderLine.ShortDescription",
     "OrderLine.Name",
     "OrderLine.ThumbURL",
+    "OrderLine.UnitPrice",
 ]
 
 
@@ -71,6 +75,11 @@ class NetoOrder:
     ship_postcode: str = ""
     ship_country: str = ""
     ship_phone: str = ""
+    # Pricing & shipping
+    grand_total: float = 0.0
+    shipping_total: float = 0.0
+    shipping_method: str = ""
+    shipping_type: str = ""  # "Express", "Regular", "Local Pickup", or ""
 
 
 class NetoAPIError(Exception):
@@ -352,6 +361,18 @@ class NetoClient:
                 image_url=image_url,
             ))
 
+        # Pricing & shipping
+        try:
+            grand_total = float(str(raw.get("GrandTotal", 0) or 0))
+        except (ValueError, TypeError):
+            grand_total = 0.0
+        try:
+            shipping_total = float(str(raw.get("ShippingTotal", 0) or 0))
+        except (ValueError, TypeError):
+            shipping_total = 0.0
+        shipping_method = str(raw.get("ShippingOption") or "").strip()
+        shipping_type = _classify_shipping(shipping_method)
+
         return NetoOrder(
             order_id=str(order_id),
             customer_name=customer_name,
@@ -376,6 +397,10 @@ class NetoClient:
             ship_postcode=str(raw.get("ShipPostCode") or "").strip(),
             ship_country=str(raw.get("ShipCountry") or "").strip(),
             ship_phone=str(raw.get("ShipPhone") or "").strip(),
+            grand_total=grand_total,
+            shipping_total=shipping_total,
+            shipping_method=shipping_method,
+            shipping_type=shipping_type,
         )
 
 
@@ -388,3 +413,18 @@ def _parse_date(raw: str | None) -> datetime | None:
         except (ValueError, TypeError):
             continue
     return None
+
+
+def _classify_shipping(method: str) -> str:
+    """Classify a shipping method string into Express, Regular, or Local Pickup."""
+    m = method.lower()
+    if not m:
+        return ""
+    if "pickup" in m or "collect" in m:
+        return "Local Pickup"
+    if "express" in m or "priority" in m or "overnight" in m or "next day" in m:
+        return "Express"
+    if any(kw in m for kw in ("standard", "regular", "economy", "parcel", "post", "flat rate", "shipping")):
+        return "Regular"
+    # Default: if there's a method but we can't classify, call it Regular
+    return "Regular"

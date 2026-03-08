@@ -95,29 +95,6 @@ class OrdersTab(ctk.CTkFrame):
         )
         self._fetch_btn.pack(side="left")
 
-        # eBay auth status indicator
-        self._ebay_auth_frame = ctk.CTkFrame(action_frame, fg_color="transparent")
-        self._ebay_auth_frame.pack(side="left", padx=(20, 0))
-
-        self._ebay_auth_label = ctk.CTkLabel(
-            self._ebay_auth_frame,
-            text="",
-            font=ctk.CTkFont(size=12),
-        )
-        self._ebay_auth_label.pack(side="left")
-
-        self._ebay_auth_btn = ctk.CTkButton(
-            self._ebay_auth_frame,
-            text="Authenticate eBay",
-            width=140,
-            height=26,
-            font=ctk.CTkFont(size=12),
-            command=self._do_ebay_auth,
-        )
-        self._ebay_auth_btn.pack(side="left", padx=(8, 0))
-
-        self._update_ebay_status()
-
         # ── Progress bar ──────────────────────────────────────────────────
         self._progress = ctk.CTkProgressBar(self, mode="indeterminate")
         self._progress.pack(fill="x", padx=12, pady=(0, 4))
@@ -157,6 +134,26 @@ class OrdersTab(ctk.CTkFrame):
             command=self._on_complete,
         )
         self._next_btn.pack(side="right")
+
+        # eBay auth — tucked away at bottom-left
+        self._ebay_auth_label = ctk.CTkLabel(
+            bottom, text="", font=ctk.CTkFont(size=11),
+        )
+        self._ebay_auth_label.pack(side="left")
+
+        self._ebay_auth_btn = ctk.CTkButton(
+            bottom,
+            text="Authenticate eBay",
+            width=130,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="gray50",
+            hover_color="gray40",
+            command=self._do_ebay_auth,
+        )
+        self._ebay_auth_btn.pack(side="left", padx=(6, 0))
+
+        self._update_ebay_status()
 
     # ── eBay auth ─────────────────────────────────────────────────────────
 
