@@ -373,7 +373,7 @@ class InvoiceTab(ctk.CTkFrame):
         path = filedialog.askopenfilename(
             title="Load Session Snapshot",
             initialdir=initial_dir,
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            filetypes=[("Session files", "*.scar"), ("JSON files", "*.json"), ("All files", "*.*")],
         )
         if not path:
             return

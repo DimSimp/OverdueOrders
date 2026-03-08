@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from itertools import groupby
 from pathlib import Path
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from src.data_processor import MatchedOrder
@@ -13,8 +12,8 @@ from src.data_processor import MatchedOrder
 # ── Column definitions ────────────────────────────────────────────────────────
 
 # Summary sheet: hierarchical formatted view (no Arrived column — * prefix on SKU serves that purpose)
-_SUMMARY_COLS   = ["SKU", "Description", "Qty", "Notes"]
-_SUMMARY_WIDTHS = [20,     45,            6,     40]
+_SUMMARY_COLS   = ["SKU", "Qty", "Description", "Notes"]
+_SUMMARY_WIDTHS = [20,     6,    45,            40]
 _SUMMARY_LAST   = len(_SUMMARY_COLS)
 
 # Data sheet: flat pre-formatted data
@@ -26,7 +25,7 @@ _DATA_WIDTHS = [15,          18,         22,    55,            10,        6,    
 _PLATFORM_FILL  = PatternFill("solid", fgColor="1F3864")  # dark navy
 _ORDER_FILL     = PatternFill("solid", fgColor="D6DCE4")  # light grey-blue
 _HEADER_FILL    = PatternFill("solid", fgColor="4472C4")  # medium blue
-_ARRIVED_FILL   = PatternFill("solid", fgColor="E2EFDA")  # light green
+_THIN = Side(style="thin")
 
 _PLATFORM_FONT  = Font(bold=True, color="FFFFFF", size=12)
 _ORDER_FONT     = Font(bold=True, size=11)
@@ -48,7 +47,6 @@ def _platform_sort_key(platform: str) -> tuple:
 def export_to_xlsx(
     matched_orders: list[MatchedOrder],
     output_dir: str,
-    filename_prefix: str = "overdue_matches",
 ) -> str:
     """
     Export matched orders to a formatted .xlsx file with two sheets:
@@ -84,8 +82,7 @@ def export_to_xlsx(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = out_path / f"{filename_prefix}_{timestamp}.xlsx"
+    filepath = out_path / "Matched_orders.xlsx"
     wb.save(filepath)
 
     return str(filepath.resolve())
@@ -123,6 +120,7 @@ def _write_summary_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:
         platform_list = list(platform_items)
         for order_id, order_items in groupby(platform_list, key=lambda m: m.order_id):
             items = list(order_items)
+            order_start_row = row
 
             # Order header — spans all columns
             ws.merge_cells(
@@ -137,21 +135,21 @@ def _write_summary_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:
             row += 1
 
             for m in items:
-                # Col 1: SKU (* prefix if arrived), Col 2: Description,
-                # Col 3: Qty, Col 4: Notes
-                sku  = f"*{m.sku}" if m.is_invoice_match else m.sku
-                fill = _ARRIVED_FILL if m.is_invoice_match else None
-                vals = [sku, m.description, m.quantity, m.notes]
+                # Col 1: SKU (* prefix if arrived), Col 2: Qty,
+                # Col 3: Description, Col 4: Notes
+                sku = f"*{m.sku}" if m.is_invoice_match else m.sku
+                vals = [sku, m.quantity, m.description, m.notes]
                 for col_idx, val in enumerate(vals, start=1):
                     cell = ws.cell(row=row, column=col_idx, value=val)
                     cell.font = _NORMAL_FONT
                     cell.alignment = Alignment(
                         vertical="center",
-                        wrap_text=(col_idx in (2, 4)),  # Description and Notes wrap
+                        wrap_text=(col_idx in (3, 4)),  # Description and Notes wrap
                     )
-                    if fill:
-                        cell.fill = fill
                 row += 1
+
+            order_end_row = row - 1
+            _apply_order_borders(ws, order_start_row, order_end_row)
 
             # Blank separator after each order
             row += 1
@@ -166,6 +164,47 @@ def _write_summary_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:
     ws.page_margins.right  = 0.5
     ws.page_margins.top    = 0.75
     ws.page_margins.bottom = 0.75
+
+
+def _apply_order_borders(ws, start_row: int, end_row: int) -> None:
+    """
+    Apply a thin border around the order block (cols A-C) and a separate
+    thin border around the Notes column (col D), so deleting Notes doesn't
+    remove the border from the rest of the order.
+    """
+    notes_col = _SUMMARY_LAST  # col D (4)
+    main_last = notes_col - 1  # col C (3)
+
+    for r in range(start_row, end_row + 1):
+        for c in range(1, notes_col + 1):
+            cell = ws.cell(row=r, column=c)
+            existing = cell.border
+            top = existing.top
+            bottom = existing.bottom
+            left = existing.left
+            right = existing.right
+
+            # Main block (cols 1-3)
+            if c <= main_last:
+                if c == 1:
+                    left = _THIN
+                if c == main_last:
+                    right = _THIN
+                if r == start_row:
+                    top = _THIN
+                if r == end_row:
+                    bottom = _THIN
+
+            # Notes column (col 4) — independent border box
+            if c == notes_col:
+                left = _THIN
+                right = _THIN
+                if r == start_row:
+                    top = _THIN
+                if r == end_row:
+                    bottom = _THIN
+
+            cell.border = Border(top=top, bottom=bottom, left=left, right=right)
 
 
 def _write_data_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:

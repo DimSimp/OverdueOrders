@@ -61,15 +61,25 @@ class OrdersTab(ctk.CTkFrame):
             plat_frame, text="Platforms:", font=ctk.CTkFont(size=13)
         ).pack(side="left")
 
+        saved_toggles = self._app.config._raw.get("app", {}).get("platform_toggles", {})
+
         for label in _NETO_CHANNEL_MAP:
-            sw = ctk.CTkSwitch(plat_frame, text=label, font=ctk.CTkFont(size=12), width=50)
-            sw.select()
+            sw = ctk.CTkSwitch(plat_frame, text=label, font=ctk.CTkFont(size=12), width=50,
+                               command=self._save_toggle_states)
+            if saved_toggles.get(label, True):
+                sw.select()
+            else:
+                sw.deselect()
             sw.pack(side="left", padx=(14, 0))
             self._platform_switches[label] = sw
 
         # eBay direct API toggle (separate — controls whether to call eBay Fulfillment API)
-        ebay_sw = ctk.CTkSwitch(plat_frame, text="eBay (direct)", font=ctk.CTkFont(size=12), width=50)
-        ebay_sw.select()
+        ebay_sw = ctk.CTkSwitch(plat_frame, text="eBay (direct)", font=ctk.CTkFont(size=12), width=50,
+                                command=self._save_toggle_states)
+        if saved_toggles.get("eBay (direct)", True):
+            ebay_sw.select()
+        else:
+            ebay_sw.deselect()
         ebay_sw.pack(side="left", padx=(14, 0))
         self._ebay_direct_switch = ebay_sw
 
@@ -178,6 +188,12 @@ class OrdersTab(ctk.CTkFrame):
             self._set_error(str(e))
         except Exception as e:
             self._set_error(f"eBay authentication failed: {e}")
+
+    def _save_toggle_states(self):
+        states = {label: (sw.get() == 1) for label, sw in self._platform_switches.items()}
+        states["eBay (direct)"] = self._ebay_direct_switch.get() == 1
+        self._app.config._raw.setdefault("app", {})["platform_toggles"] = states
+        self._app.config.save()
 
     # ── Fetch orders ──────────────────────────────────────────────────────
 

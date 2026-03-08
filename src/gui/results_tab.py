@@ -41,6 +41,7 @@ class OrderTreeview(ctk.CTkFrame):
         self._all_groups: list[dict] = []
         self._all_flat_rows: list[list[str]] = []
         self._search_var = StringVar()
+        self._hovered_group: str | None = None  # parent iid of currently hovered group
         self._apply_style()
         self._build_tree()
 
@@ -77,8 +78,9 @@ class OrderTreeview(ctk.CTkFrame):
 
     def _configure_tags(self):
         dark = ctk.get_appearance_mode() == "Dark"
-        self._tree.tag_configure("group_a", background="#303030" if dark else "#f8f8f8")
-        self._tree.tag_configure("group_b", background="#252525" if dark else "#ebebeb")
+        self._bg_a = "#303030" if dark else "#f8f8f8"
+        self._bg_b = "#252525" if dark else "#ebebeb"
+        self._bg_hover = "#3d5a80" if dark else "#cde0f5"
         self._tree.tag_configure("order_hdr", font=("", 12, "bold"))
         self._tree.tag_configure("matched_sku", foreground="#4fc3f7")
 
@@ -145,6 +147,9 @@ class OrderTreeview(ctk.CTkFrame):
 
         self._tree.bind("<ButtonRelease-1>", self._on_click)
         self._tree.bind("<Button-3>", self._on_right_click)
+        self._tree.bind("<Motion>", self._on_hover)
+        self._tree.bind("<Leave>", self._on_leave)
+        self._tree.configure(cursor="hand2")
 
     # ── Data loading ──────────────────────────────────────────────────────
 
@@ -181,7 +186,9 @@ class OrderTreeview(ctk.CTkFrame):
                 if not query or self._group_matches(g, query)
             ]
             for i, g in enumerate(visible):
-                tag_g = "group_a" if i % 2 == 0 else "group_b"
+                bg = self._bg_a if i % 2 == 0 else self._bg_b
+                tag_bg = f"bg_{i}"
+                self._tree.tag_configure(tag_bg, background=bg)
                 piid = self._tree.insert(
                     "", "end",
                     text=g["order_id"],
@@ -189,18 +196,18 @@ class OrderTreeview(ctk.CTkFrame):
                         g["platform"], g["customer"], g["date"],
                         "", "", "", g.get("notes", ""),
                     ),
-                    tags=(tag_g, "order_hdr"),
+                    tags=(tag_bg, "order_hdr"),
                     open=True,
                 )
-                self._group_meta[piid] = {"order_id": g["order_id"], "platform": g["platform"]}
+                self._group_meta[piid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
                 for item in g["line_items"]:
-                    tags = [tag_g] + (["matched_sku"] if item["is_matched"] else [])
+                    tags = [tag_bg] + (["matched_sku"] if item["is_matched"] else [])
                     ciid = self._tree.insert(
                         piid, "end", text="",
                         values=("", "", "", item["sku"], item["description"], item["qty"], ""),
                         tags=tags,
                     )
-                    self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"]}
+                    self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
 
         elif self._all_flat_rows:
             visible = [
@@ -208,8 +215,10 @@ class OrderTreeview(ctk.CTkFrame):
                 if not query or any(query in str(v).lower() for v in r)
             ]
             for i, row in enumerate(visible):
-                tag_g = "group_a" if i % 2 == 0 else "group_b"
-                self._tree.insert("", "end", text="", values=row, tags=[tag_g])
+                bg = self._bg_a if i % 2 == 0 else self._bg_b
+                tag_bg = f"bg_{i}"
+                self._tree.tag_configure(tag_bg, background=bg)
+                self._tree.insert("", "end", text="", values=row, tags=[tag_bg])
 
     def _group_matches(self, g: dict, query: str) -> bool:
         """Return True if query appears in any field of the order or its line items."""
@@ -233,6 +242,10 @@ class OrderTreeview(ctk.CTkFrame):
     def _on_click(self, event):
         if not self._on_row_click:
             return
+        # Ignore clicks on the expand/collapse indicator
+        element = self._tree.identify_element(event.x, event.y)
+        if element == "Treeitem.indicator":
+            return
         iid = self._tree.identify_row(event.y)
         if iid and iid in self._group_meta:
             meta = self._group_meta[iid]
@@ -252,6 +265,31 @@ class OrderTreeview(ctk.CTkFrame):
             command=lambda: self._on_context_action(meta["order_id"], meta["platform"]),
         )
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _on_hover(self, event):
+        iid = self._tree.identify_row(event.y)
+        if not iid or iid not in self._group_meta:
+            self._clear_hover()
+            return
+        parent = self._tree.parent(iid)
+        group_root = parent if parent else iid
+        if group_root == self._hovered_group:
+            return
+        self._clear_hover()
+        self._hovered_group = group_root
+        meta = self._group_meta[group_root]
+        self._tree.tag_configure(meta["bg_tag"], background=self._bg_hover)
+
+    def _on_leave(self, _event):
+        self._clear_hover()
+
+    def _clear_hover(self):
+        if self._hovered_group is None:
+            return
+        meta = self._group_meta.get(self._hovered_group)
+        self._hovered_group = None
+        if meta:
+            self._tree.tag_configure(meta["bg_tag"], background=meta["bg"])
 
     def scroll_to(self, order_id: str):
         """Scroll to and select the parent row for the given order_id."""
@@ -456,23 +494,6 @@ class ResultsTab(ctk.CTkFrame):
             self._refresh_tables()
             self._error_label.configure(text="")
 
-            # Auto-save session snapshot
-            try:
-                from src.session import save_snapshot
-                save_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
-                save_snapshot(
-                    save_dir=save_dir,
-                    invoice_items=invoice_items,
-                    neto_orders=self._neto_orders,
-                    ebay_orders=self._ebay_orders,
-                    matched_orders=matched,
-                    unmatched_inv=unmatched_inv,
-                    excluded_ids=self._excluded_order_ids,
-                    force_matched_ids=self._force_matched_order_ids,
-                )
-            except Exception:
-                pass
-
         except Exception as exc:
             import traceback, sys
             traceback.print_exc(file=sys.stderr)
@@ -493,6 +514,7 @@ class ResultsTab(ctk.CTkFrame):
         self._populate_unmatched_inv(self._unmatched_inv)
         self._populate_unmatched_orders(effective_matched)
         self._update_summary(effective_matched, self._unmatched_inv)
+        self._auto_save_session()
 
     def _build_force_matched(self) -> list[MatchedOrder]:
         if not self._force_matched_order_ids:
@@ -844,6 +866,25 @@ class ResultsTab(ctk.CTkFrame):
         self._error_label.configure(text="")
 
     # ── Save session ──────────────────────────────────────────────────────
+
+    def _auto_save_session(self):
+        """Silently save session to the default location on every refresh."""
+        try:
+            from src.session import save_snapshot
+            save_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
+            invoice_items = self._app.invoice_tab.get_invoice_items()
+            save_snapshot(
+                save_dir=save_dir,
+                invoice_items=invoice_items,
+                neto_orders=self._neto_orders,
+                ebay_orders=self._ebay_orders,
+                matched_orders=self._app.matched_orders,
+                unmatched_inv=self._unmatched_inv,
+                excluded_ids=self._excluded_order_ids,
+                force_matched_ids=self._force_matched_order_ids,
+            )
+        except Exception:
+            pass
 
     def _save_session_as(self):
         from src.session import save_snapshot

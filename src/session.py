@@ -26,6 +26,9 @@ class SessionSnapshot:
     force_matched_order_ids: list[tuple[str, str]]
 
 
+SESSION_FILENAME = "Incoming_orders_session.scar"
+
+
 def save_snapshot(
     save_dir: str,
     invoice_items: list[InvoiceItem],
@@ -36,12 +39,10 @@ def save_snapshot(
     excluded_ids: set[tuple[str, str]],
     force_matched_ids: set[tuple[str, str]],
 ) -> str:
-    """Save a session snapshot to a JSON file. Returns the file path."""
+    """Save a session snapshot to a .scar file (overwrites previous). Returns the file path."""
     os.makedirs(save_dir, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"session_{timestamp}.json"
-    filepath = os.path.join(save_dir, filename)
+    filepath = os.path.join(save_dir, SESSION_FILENAME)
 
     data = {
         "version": SNAPSHOT_VERSION,
