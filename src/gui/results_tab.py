@@ -572,6 +572,7 @@ class ResultsTab(ctk.CTkFrame):
         self._force_matched_order_ids: set[tuple[str, str]] = set()
         # Navigation state
         self._detail_frame: OrderDetailView | None = None
+        self._freight_frame = None
         self._last_clicked_order_id: str | None = None
         self._build_ui()
 
@@ -983,6 +984,11 @@ class ResultsTab(ctk.CTkFrame):
         if self._detail_frame is not None:
             self._detail_frame.destroy()
 
+        # Only offer "Book Freight" if shipping is configured
+        book_freight_cb = None
+        if self._app.config.shipping is not None:
+            book_freight_cb = self._open_freight_view
+
         self._detail_frame = OrderDetailView(
             self,
             order_id=order_id,
@@ -996,6 +1002,7 @@ class ResultsTab(ctk.CTkFrame):
             on_back=self._close_detail_view,
             on_fulfilled=self._on_fulfilled,
             on_move_to_unmatched=lambda: self._exclude_order(order_id, platform),
+            on_book_freight=book_freight_cb,
         )
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()
@@ -1014,6 +1021,47 @@ class ResultsTab(ctk.CTkFrame):
     def _on_fulfilled(self):
         self._close_detail_view()
         self._refresh_orders()
+
+    # ── Freight Booking View ─────────────────────────────────────────────
+
+    def _open_freight_view(self, order_id: str, platform: str):
+        """Open the freight booking view, stacking it on top of the detail view."""
+        from src.gui.freight_booking_view import FreightBookingView
+
+        neto_order, ebay_order, _ = self._find_order_data(order_id, platform)
+
+        # Destroy previous freight frame if any
+        if hasattr(self, "_freight_frame") and self._freight_frame is not None:
+            self._freight_frame.destroy()
+
+        self._freight_frame = FreightBookingView(
+            self,
+            order_id=order_id,
+            platform=platform,
+            neto_order=neto_order,
+            ebay_order=ebay_order,
+            neto_client=self._app.neto_client,
+            shipping_config=self._app.config.shipping,
+            dry_run=self._app.config.app.dry_run,
+            on_back=self._close_freight_view,
+            on_courier_selected=lambda name: self._on_courier_selected(name),
+        )
+        self._freight_frame.grid(row=0, column=0, sticky="nsew")
+        self._freight_frame.tkraise()
+
+    def _close_freight_view(self):
+        """Close freight view, return to order detail view."""
+        if hasattr(self, "_freight_frame") and self._freight_frame is not None:
+            self._freight_frame.destroy()
+            self._freight_frame = None
+        if self._detail_frame is not None:
+            self._detail_frame.tkraise()
+
+    def _on_courier_selected(self, courier_name: str):
+        """Called when user picks a courier from the freight view."""
+        self._close_freight_view()
+        if self._detail_frame is not None:
+            self._detail_frame.set_tracking(carrier=courier_name)
 
     def _check_status_background(self, order_id: str, platform: str):
         """Check if an order is already completed; warn in the detail view if so."""

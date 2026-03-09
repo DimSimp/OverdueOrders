@@ -82,6 +82,26 @@ class AppConfig:
     sku_corrections_file: str = "sku_corrections.csv"
 
 
+@dataclass
+class SenderConfig:
+    name: str
+    company: str
+    street1: str
+    city: str
+    state: str
+    postcode: str
+    street2: str = ""
+    country: str = "AU"
+    phone: str = ""
+    email: str = ""
+
+
+@dataclass
+class ShippingConfig:
+    sender: SenderConfig
+    couriers: dict[str, dict] = field(default_factory=dict)
+
+
 class ConfigManager:
     def __init__(self):
         self._raw: dict = {}
@@ -91,6 +111,7 @@ class ConfigManager:
         self.app: AppConfig = None
         self.openai: OpenAIConfig = None
         self.ftp: Optional[FTPConfig] = None
+        self.shipping: Optional[ShippingConfig] = None
 
     def load(self) -> None:
         if not CONFIG_PATH.exists():
@@ -166,6 +187,26 @@ class ConfigManager:
                 password=ftp_raw.get("password", ""),
                 morning_filename=ftp_raw.get("morning_filename", "Morning_Inventory_Report.xlsx"),
                 afternoon_filename=ftp_raw.get("afternoon_filename", "Afternoon_Inventory_Report.xlsx"),
+            )
+
+        ship_raw = self._raw.get("shipping", {})
+        if ship_raw.get("sender"):
+            s = ship_raw["sender"]
+            sender = SenderConfig(
+                name=s.get("name", ""),
+                company=s.get("company", ""),
+                street1=s.get("street1", ""),
+                city=s.get("city", ""),
+                state=s.get("state", ""),
+                postcode=s.get("postcode", ""),
+                street2=s.get("street2", ""),
+                country=s.get("country", "AU"),
+                phone=s.get("phone", ""),
+                email=s.get("email", ""),
+            )
+            self.shipping = ShippingConfig(
+                sender=sender,
+                couriers=ship_raw.get("couriers", {}),
             )
 
     def save(self) -> None:

@@ -272,6 +272,48 @@ class NetoClient:
                 result[sku] = url
         return result
 
+    def get_item_dimensions(self, sku: str) -> dict | None:
+        """
+        Fetch shipping dimensions for a product SKU via GetItem.
+        Returns {"weight_kg", "length_cm", "width_cm", "height_cm"} or None.
+        Neto stores dimensions in metres; we convert to cm (×100).
+        Only returns dimensions if Misc06 is 'Satchel' or 'e-parcel' and height is non-zero.
+        """
+        body = {
+            "Filter": {
+                "SKU": sku,
+                "OutputSelector": [
+                    "SKU", "ShippingHeight", "ShippingLength",
+                    "ShippingWidth", "ShippingWeight", "Misc06",
+                ],
+            }
+        }
+        try:
+            data = self._post_action("GetItem", body, timeout=10)
+        except NetoAPIError:
+            return None
+        items = data.get("Item", [])
+        if isinstance(items, dict):
+            items = [items]
+        if not items:
+            return None
+        item = items[0]
+        misc06 = str(item.get("Misc06") or "").strip()
+        if misc06 == "e-parcel":
+            misc06 = "Satchel"
+        shipping_height = str(item.get("ShippingHeight") or "0").strip()
+        if misc06 != "Satchel" or shipping_height == "0.000" or shipping_height == "0":
+            return None
+        try:
+            return {
+                "weight_kg": round(float(item.get("ShippingWeight", 0)), 2),
+                "length_cm": round(float(item.get("ShippingLength", 0)) * 100, 2),
+                "width_cm": round(float(item.get("ShippingWidth", 0)) * 100, 2),
+                "height_cm": round(float(item.get("ShippingHeight", 0)) * 100, 2),
+            }
+        except (ValueError, TypeError):
+            return None
+
     def add_sticky_note(
         self,
         order_id: str,

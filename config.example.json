@@ -121,5 +121,48 @@
     "order_lookback_days": 30,
     "on_po_filter_phrase": "on po",
     "output_dir": "output"
+  },
+  "shipping": {
+    "sender": {
+      "name": "Scarlett Music",
+      "company": "Scarlett Music",
+      "street1": "286-288 Ballarat Rd",
+      "street2": "",
+      "city": "Footscray",
+      "state": "VIC",
+      "postcode": "3011",
+      "country": "AU",
+      "phone": "0393185751",
+      "email": "info@scarlettmusic.com.au"
+    },
+    "couriers": {
+      "auspost": {
+        "enabled": true,
+        "account_number": "your-auspost-account-number",
+        "api_username": "your-auspost-api-username",
+        "api_secret": "your-auspost-api-secret"
+      },
+      "aramex": {
+        "enabled": true,
+        "client_id": "your-aramex-client-id",
+        "client_secret": "your-aramex-client-secret"
+      },
+      "bonds": {
+        "enabled": true,
+        "account": "your-bonds-account",
+        "authorization_code": "your-bonds-auth-code"
+      },
+      "allied": {
+        "enabled": true,
+        "api_key": "your-allied-api-key",
+        "account_code": "your-allied-account-code",
+        "state": "VIC"
+      },
+      "dai_post": {
+        "enabled": true,
+        "postcodes_file": "data/shipping/Dai_Postcodes_dummy.xlsx",
+        "rates_file": "data/shipping/Dai_Rates_dummy.xlsx"
+      }
+    }
   }
 }

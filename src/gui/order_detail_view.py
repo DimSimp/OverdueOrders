@@ -53,6 +53,7 @@ class OrderDetailView(ctk.CTkFrame):
         on_back,
         on_fulfilled,
         on_move_to_unmatched=None,
+        on_book_freight=None,
     ):
         super().__init__(master, fg_color="transparent")
         self._order_id = order_id
@@ -66,6 +67,7 @@ class OrderDetailView(ctk.CTkFrame):
         self._on_back = on_back
         self._on_fulfilled = on_fulfilled
         self._on_move_to_unmatched = on_move_to_unmatched
+        self._on_book_freight = on_book_freight
         self._completed = False
         self._image_refs: list = []
         self._full_images: dict[str, bytes] = {}  # url → raw bytes for enlargement
@@ -633,11 +635,20 @@ class OrderDetailView(ctk.CTkFrame):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="x", padx=8, pady=6)
 
-        ctk.CTkButton(
-            frame, text="Book Freight", width=120, height=30, state="disabled",
-            fg_color="gray50",
-        ).pack(side="left", padx=10)
-        ctk.CTkLabel(frame, text="Coming soon", font=ctk.CTkFont(size=11), text_color="gray50").pack(side="left")
+        if self._on_book_freight:
+            ctk.CTkButton(
+                frame, text="Book Freight", width=120, height=30,
+                fg_color=("dodgerblue", "dodgerblue3"),
+                hover_color=("dodgerblue3", "dodgerblue"),
+                command=lambda: self._on_book_freight(self._order_id, self._platform),
+            ).pack(side="left", padx=10)
+        else:
+            ctk.CTkButton(
+                frame, text="Book Freight", width=120, height=30, state="disabled",
+                fg_color="gray50",
+            ).pack(side="left", padx=10)
+            ctk.CTkLabel(frame, text="Shipping not configured", font=ctk.CTkFont(size=11),
+                         text_color="gray50").pack(side="left")
 
     # ── Action Bar ────────────────────────────────────────────────────────
 
@@ -718,6 +729,14 @@ class OrderDetailView(ctk.CTkFrame):
         if self._on_move_to_unmatched:
             self._on_move_to_unmatched()
         self._on_back()
+
+    def set_tracking(self, tracking: str = "", carrier: str = ""):
+        """Programmatically fill the tracking entry and carrier combobox."""
+        if tracking:
+            self._tracking_entry.delete(0, "end")
+            self._tracking_entry.insert(0, tracking)
+        if carrier:
+            self._carrier_combo.set(carrier)
 
     def show_completed_warning(self):
         """Call from ResultsTab after status check confirms order is already done."""
