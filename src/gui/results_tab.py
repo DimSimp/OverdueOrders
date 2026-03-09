@@ -23,14 +23,14 @@ def _numeric_sort_key(value: str) -> tuple:
 
 
 def _shipping_display(shipping_type: str) -> str:
-    """Return shipping text with a colored Unicode indicator prefix."""
+    """Return shipping text with a distinct Unicode shape prefix."""
     st = shipping_type.lower()
     if "express" in st:
-        return "🔴 Express"
+        return "▲ Express"
     if "pickup" in st:
-        return "🟢 Local Pickup"
+        return "■ Local Pickup"
     if st:
-        return "🔵 Regular"
+        return "● Regular"
     return ""
 
 

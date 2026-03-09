@@ -247,45 +247,83 @@ class OrderDetailView(ctk.CTkFrame):
         items_frame = ctk.CTkFrame(frame, fg_color="transparent")
         items_frame.pack(fill="x", padx=10, pady=(0, 8))
 
-        # Build (sku, desc, qty, price, api_id) — api_id is used to look up images after load
-        line_items = []
         if self._neto_order:
-            for li in self._neto_order.line_items:
-                line_items.append((li.sku, li.product_name, li.quantity, li.unit_price, li.sku))
+            self._build_neto_line_items(items_frame)
         elif self._ebay_order:
-            for li in self._ebay_order.line_items:
-                line_items.append((li.sku, li.title, li.quantity, li.unit_price, li.legacy_item_id))
-
-        for sku, desc, qty, price, api_id in line_items:
-            row = ctk.CTkFrame(items_frame, fg_color="transparent")
-            row.pack(fill="x", pady=1)
-
-            img_label = ctk.CTkLabel(row, text="·", width=50, height=50,
-                                     text_color="gray50", font=ctk.CTkFont(size=20))
-            img_label.pack(side="left", padx=(0, 4))
-
-            # Register for background image fetch
-            if api_id:
-                if self._neto_order:
-                    self._neto_img_pending[api_id] = img_label
-                elif self._ebay_order:
-                    self._ebay_img_pending[api_id] = img_label
-
-            arrived = "✓" if sku.upper().strip() in self._matched_skus else ""
-            price_str = f"${price:.2f}" if price else ""
-            ctk.CTkLabel(row, text=sku, width=130, anchor="w", wraplength=130).pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(row, text=desc, width=260, anchor="w", wraplength=260).pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(row, text=str(qty), width=40, anchor="w").pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(row, text=price_str, width=70, anchor="w").pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(
-                row, text=arrived, width=60, anchor="w",
-                text_color="green" if arrived else "gray50",
-                font=ctk.CTkFont(size=14, weight="bold"),
-            ).pack(side="left")
+            self._ebay_note_widgets: list[tuple] = []
+            self._build_ebay_line_items(items_frame)
 
         # Kick off background image fetch now that all labels exist
         if self._neto_img_pending or self._ebay_img_pending:
             threading.Thread(target=self._fetch_product_images, daemon=True).start()
+
+    def _build_neto_line_items(self, items_frame):
+        for li in self._neto_order.line_items:
+            self._build_line_item_row(items_frame, li.sku, li.product_name,
+                                       li.quantity, li.unit_price, li.sku)
+
+    def _build_ebay_line_items(self, items_frame):
+        for li in self._ebay_order.line_items:
+            self._build_line_item_row(items_frame, li.sku, li.title,
+                                       li.quantity, li.unit_price, li.legacy_item_id)
+            # Compact inline note editor — single row: label, entry, char count, save btn
+            note_row = ctk.CTkFrame(items_frame, fg_color=("gray90", "gray25"), corner_radius=4)
+            note_row.pack(fill="x", padx=(54, 0), pady=(0, 6))
+
+            ctk.CTkLabel(
+                note_row, text="Notes:", width=50,
+                font=ctk.CTkFont(size=11, weight="bold"), anchor="w",
+            ).pack(side="left", padx=(6, 4), pady=4)
+
+            entry = ctk.CTkEntry(note_row, font=ctk.CTkFont(size=11), height=26, text_color="#f5c518")
+            entry.pack(side="left", fill="x", expand=True, pady=4)
+            if li.notes:
+                entry.insert(0, li.notes)
+            self._bind_context_menu(entry._entry)
+
+            char_label = ctk.CTkLabel(
+                note_row, text=f"{len(li.notes)}/255", width=50,
+                font=ctk.CTkFont(size=10), text_color="gray50",
+            )
+            char_label.pack(side="left", padx=(4, 0), pady=4)
+            entry.bind("<KeyRelease>", lambda e, en=entry, cl=char_label: self._update_char_count_entry(en, cl))
+
+            btn = ctk.CTkButton(
+                note_row, text="Save", width=55, height=24,
+                font=ctk.CTkFont(size=11),
+                command=lambda l=li, en=entry, b=None: self._save_ebay_note_entry(l, en, b),
+            )
+            btn.pack(side="left", padx=(4, 6), pady=4)
+            btn.configure(command=lambda l=li, en=entry, b=btn: self._save_ebay_note_entry(l, en, b))
+
+            self._ebay_note_widgets.append((li, entry, btn))
+
+    def _build_line_item_row(self, items_frame, sku, desc, qty, price, api_id):
+        row = ctk.CTkFrame(items_frame, fg_color="transparent")
+        row.pack(fill="x", pady=1)
+
+        img_label = ctk.CTkLabel(row, text="·", width=50, height=50,
+                                 text_color="gray50", font=ctk.CTkFont(size=20))
+        img_label.pack(side="left", padx=(0, 4))
+
+        # Register for background image fetch
+        if api_id:
+            if self._neto_order:
+                self._neto_img_pending[api_id] = img_label
+            elif self._ebay_order:
+                self._ebay_img_pending[api_id] = img_label
+
+        arrived = "✓" if sku.upper().strip() in self._matched_skus else ""
+        price_str = f"${price:.2f}" if price else ""
+        ctk.CTkLabel(row, text=sku, width=130, anchor="w", wraplength=130).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(row, text=desc, width=260, anchor="w", wraplength=260).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(row, text=str(qty), width=40, anchor="w").pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(row, text=price_str, width=70, anchor="w").pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            row, text=arrived, width=60, anchor="w",
+            text_color="green" if arrived else "gray50",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(side="left")
 
     # ── Pricing Summary ──────────────────────────────────────────────────
 
@@ -435,6 +473,10 @@ class OrderDetailView(ctk.CTkFrame):
     # ── Notes ─────────────────────────────────────────────────────────────
 
     def _build_notes(self, parent):
+        # eBay notes are shown inline with line items — no separate section needed
+        if self._ebay_order:
+            return
+
         frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
         frame.pack(fill="x", padx=8, pady=6)
 
@@ -442,10 +484,7 @@ class OrderDetailView(ctk.CTkFrame):
             anchor="w", padx=10, pady=(8, 4)
         )
 
-        if self._neto_order:
-            self._build_neto_notes(frame)
-        elif self._ebay_order:
-            self._build_ebay_notes(frame)
+        self._build_neto_notes(frame)
 
     def _build_neto_notes(self, parent):
         o = self._neto_order
@@ -494,64 +533,20 @@ class OrderDetailView(ctk.CTkFrame):
         )
         self._add_note_btn.pack(anchor="e", padx=10, pady=(0, 8))
 
-    def _build_ebay_notes(self, parent):
-        o = self._ebay_order
-        self._ebay_note_widgets: list[tuple] = []  # (EbayLineItem, textbox, button)
-
-        if o.buyer_notes:
-            ctk.CTkLabel(
-                parent, text=f"Buyer Notes: {o.buyer_notes}",
-                font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
-                text_color="#f5c518",
-            ).pack(fill="x", padx=10, pady=2)
-
-        for li in o.line_items:
-            item_frame = ctk.CTkFrame(parent, fg_color="transparent")
-            item_frame.pack(fill="x", padx=10, pady=(4, 0))
-
-            label_text = f"[{li.sku}] PrivateNotes:" if li.sku else f"[{li.title[:30]}] PrivateNotes:"
-            ctk.CTkLabel(
-                item_frame, text=label_text,
-                font=ctk.CTkFont(size=12), anchor="w",
-            ).pack(anchor="w")
-
-            tb = ctk.CTkTextbox(item_frame, height=50, font=ctk.CTkFont(size=12))
-            tb.pack(fill="x", pady=(0, 2))
-            if li.notes:
-                tb.insert("1.0", li.notes)
-            self._bind_context_menu(tb._textbox)
-
-            char_label = ctk.CTkLabel(
-                item_frame, text=f"{len(li.notes)}/255",
-                font=ctk.CTkFont(size=10), text_color="gray50",
-            )
-            char_label.pack(side="left", padx=(0, 8))
-            tb.bind("<KeyRelease>", lambda e, t=tb, cl=char_label: self._update_char_count(t, cl))
-
-            btn = ctk.CTkButton(
-                item_frame, text="Save Note", width=90, height=28,
-                command=lambda l=li, t=tb, b=None: self._save_ebay_note(l, t, b),
-            )
-            btn.pack(side="right", pady=(0, 4))
-            # Re-bind command with btn reference now that btn exists
-            btn.configure(command=lambda l=li, t=tb, b=btn: self._save_ebay_note(l, t, b))
-
-            self._ebay_note_widgets.append((li, tb, btn))
-
-        if not o.line_items:
-            ctk.CTkLabel(
-                parent, text="No line items to add notes to.",
-                font=ctk.CTkFont(size=11), text_color="gray50",
-            ).pack(anchor="w", padx=10, pady=(4, 8))
-
     def _update_char_count(self, textbox, label):
         text = textbox.get("1.0", "end").strip()
         count = len(text)
         color = "red" if count > 255 else "gray50"
         label.configure(text=f"{count}/255", text_color=color)
 
-    def _save_ebay_note(self, line_item, textbox, btn):
-        text = textbox.get("1.0", "end").strip()
+    def _update_char_count_entry(self, entry, label):
+        text = entry.get().strip()
+        count = len(text)
+        color = "red" if count > 255 else "gray50"
+        label.configure(text=f"{count}/255", text_color=color)
+
+    def _save_ebay_note_entry(self, line_item, entry, btn):
+        text = entry.get().strip()
         if not text:
             return
         if len(text) > 255:
@@ -578,7 +573,7 @@ class OrderDetailView(ctk.CTkFrame):
             line_item.notes = text
             if btn:
                 btn.configure(state="disabled", text="Saved")
-                self.after(2000, lambda b=btn: b.configure(state="normal", text="Save Note"))
+                self.after(2000, lambda b=btn: b.configure(state="normal", text="Save"))
             parent = self.winfo_toplevel()
             if self._dry_run:
                 messagebox.showinfo("Dry Run", f"[DRY RUN] PrivateNotes would be set:\n{text}", parent=parent)

@@ -3,3 +3,5 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - auto-open Kogan platform when marking kogan orders as sent
 - add order booking logic to order fulfillment screen
+- Now that orders can be altered/created on ebay orders, we can remove the currently yellow notes text at
+  the start of the notes section of the fulfillment screen
