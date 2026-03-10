@@ -37,6 +37,15 @@ class BaseCourier(ABC):
             error="Booking not yet implemented (Phase 2)",
         )
 
+    def cancel_shipment(self, tracking_number: str, **kwargs) -> tuple[bool, str]:
+        """Cancel a shipment by tracking number.
+
+        Returns (success: bool, message: str).
+        Override in subclasses that support cancellation.
+        kwargs may contain courier-specific data (e.g. shipment_id for AusPost).
+        """
+        return False, f"Cancellation not supported for {self.name}"
+
     def is_available(self, request: ShipmentRequest) -> bool:
         """Check if this courier can handle the given shipment. Override for restrictions."""
         return True

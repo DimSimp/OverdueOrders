@@ -273,3 +273,72 @@ class AusPostCourier(BaseCourier):
             label_pdf=label_pdf,
             booking_reference=str(shipment_id),
         )
+
+    def cancel_shipment(self, tracking_number: str, **kwargs) -> tuple[bool, str]:
+        """Cancel an AusPost shipment.
+
+        Requires the shipment_id (passed as kwarg or looked up via the API).
+        """
+        shipment_id = kwargs.get("shipment_id", "")
+
+        if not shipment_id:
+            # Try to find the shipment by listing recent shipments
+            shipment_id = self._find_shipment_id(tracking_number)
+
+        if not shipment_id:
+            return False, (
+                f"Could not find shipment ID for tracking {tracking_number}. "
+                "AusPost requires the shipment ID to cancel."
+            )
+
+        headers = {
+            "Accept": "application/json",
+            "Account-Number": self._account_number,
+        }
+        auth = HTTPBasicAuth(self._username, self._secret)
+
+        log.info("Cancelling AusPost shipment: shipment_id=%s  tracking=%s",
+                 shipment_id, tracking_number)
+
+        try:
+            resp = requests.delete(
+                f"https://digitalapi.auspost.com.au/shipping/v1/shipments/{shipment_id}",
+                headers=headers,
+                auth=auth,
+                timeout=20,
+            )
+            log.debug("AusPost cancel HTTP %d: %s", resp.status_code, resp.text[:500])
+
+            if resp.status_code in (200, 202, 204):
+                return True, f"Shipment {shipment_id} cancelled successfully."
+            resp.raise_for_status()
+            return True, f"Shipment {shipment_id} cancelled (HTTP {resp.status_code})."
+        except Exception as exc:
+            log.error("AusPost cancel failed: %s", exc)
+            return False, str(exc)
+
+    def _find_shipment_id(self, tracking_number: str) -> str:
+        """Look up a shipment ID from tracking number via the AusPost shipments endpoint."""
+        headers = {
+            "Accept": "application/json",
+            "Account-Number": self._account_number,
+        }
+        auth = HTTPBasicAuth(self._username, self._secret)
+
+        try:
+            resp = requests.get(
+                "https://digitalapi.auspost.com.au/shipping/v1/shipments",
+                headers=headers,
+                auth=auth,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for shipment in data.get("shipments", []):
+                for item in shipment.get("items", []):
+                    tracking = item.get("tracking_details", {}).get("consignment_id", "")
+                    if tracking == tracking_number:
+                        return shipment.get("shipment_id", "")
+        except Exception as exc:
+            log.warning("AusPost shipment lookup failed: %s", exc)
+        return ""

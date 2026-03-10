@@ -290,7 +290,7 @@ class DaiPostCourier(BaseCourier):
             booking_reference=str(job_number),
         )
 
-    def cancel_shipment(self, tracking_number: str) -> tuple[bool, str]:
+    def cancel_shipment(self, tracking_number: str, **kwargs) -> tuple[bool, str]:
         """Cancel a DAI Post shipment by tracking number.
 
         Returns (success: bool, message: str).

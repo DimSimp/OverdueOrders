@@ -680,12 +680,12 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._save_session_btn.pack(side="left", padx=(12, 0))
 
-        self._dai_cancel_btn = ctk.CTkButton(
-            bottom, text="Cancel DAI Post", width=130,
+        self._cancel_shipment_btn = ctk.CTkButton(
+            bottom, text="Cancel Shipment", width=130,
             fg_color=("firebrick3", "firebrick4"), hover_color=("firebrick4", "firebrick"),
-            command=self._open_dai_cancel_dialog,
+            command=self._open_cancel_shipment_dialog,
         )
-        self._dai_cancel_btn.pack(side="left", padx=(12, 0))
+        self._cancel_shipment_btn.pack(side="left", padx=(12, 0))
 
         self._export_label = ctk.CTkLabel(
             bottom, text="", font=ctk.CTkFont(size=12), text_color="gray60"
@@ -1198,88 +1198,235 @@ class ResultsTab(ctk.CTkFrame):
         except Exception as e:
             self._error_label.configure(text=f"Save failed: {e}")
 
-    # ── DAI Post cancellation ─────────────────────────────────────────────
+    # ── Shipment cancellation ────────────────────────────────────────────
 
-    def _open_dai_cancel_dialog(self):
-        """Open a small dialog to cancel a DAI Post shipment by tracking number."""
+    def _open_cancel_shipment_dialog(self):
+        """Open a dialog to cancel a shipment — shows today's bookings + manual entry."""
         shipping = self._app.config.shipping
         if shipping is None:
             messagebox.showerror("Not configured", "Shipping is not configured.", parent=self)
             return
-        dai_cfg = shipping.couriers.get("dai_post", {})
-        if not dai_cfg.get("enabled"):
-            messagebox.showerror("Not configured", "DAI Post is not enabled in config.", parent=self)
+
+        # Build courier instances for enabled couriers
+        from src.shipping.couriers.allied import AlliedCourier
+        from src.shipping.couriers.aramex import AramexCourier
+        from src.shipping.couriers.auspost import AusPostCourier
+        from src.shipping.couriers.bonds import BondsCourier
+        from src.shipping.couriers.dai_post import DaiPostCourier
+
+        courier_registry = {
+            "auspost": AusPostCourier,
+            "aramex": AramexCourier,
+            "bonds": BondsCourier,
+            "allied": AlliedCourier,
+            "dai_post": DaiPostCourier,
+        }
+        couriers_by_code = {}
+        courier_names = []
+        for code, cls in courier_registry.items():
+            cfg = shipping.couriers.get(code, {})
+            if cfg.get("enabled", False):
+                couriers_by_code[code] = cls(cfg)
+                courier_names.append(cls.name)
+
+        if not couriers_by_code:
+            messagebox.showerror("Not configured", "No couriers are enabled.", parent=self)
             return
 
-        from src.shipping.couriers.dai_post import DaiPostCourier
-        courier = DaiPostCourier(dai_cfg)
+        # Load today's bookings from ledger
+        bookings_dir = shipping.bookings_dir
+        todays_bookings = []
+        if bookings_dir:
+            from src.shipping.booking_ledger import get_todays_bookings
+            todays_bookings = get_todays_bookings(bookings_dir)
 
         win = tk.Toplevel(self)
-        win.title("Cancel DAI Post Shipment")
+        win.title("Cancel Shipment")
         win.resizable(False, False)
         win.grab_set()
 
-        pad = {"padx": 16, "pady": 8}
+        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=420)
+        cancel_btn = None  # forward ref
 
-        tk.Label(win, text="Enter the DAI Post tracking number to cancel:",
-                 font=("Segoe UI", 11)).pack(**pad)
+        # ── Today's bookings list ──
+        if todays_bookings:
+            tk.Label(
+                win, text="Today's bookings:", font=("Segoe UI", 11, "bold"),
+            ).pack(padx=16, pady=(12, 4), anchor="w")
 
+            list_frame = tk.Frame(win)
+            list_frame.pack(fill="x", padx=16, pady=(0, 8))
+
+            columns = ("courier", "tracking", "order", "recipient", "time")
+            tree = ttk.Treeview(
+                list_frame, columns=columns, show="headings", height=min(len(todays_bookings), 8),
+                selectmode="browse",
+            )
+            tree.heading("courier", text="Courier")
+            tree.heading("tracking", text="Tracking #")
+            tree.heading("order", text="Order")
+            tree.heading("recipient", text="Recipient")
+            tree.heading("time", text="Time")
+            tree.column("courier", width=110, stretch=False)
+            tree.column("tracking", width=140)
+            tree.column("order", width=90, stretch=False)
+            tree.column("recipient", width=120)
+            tree.column("time", width=70, stretch=False)
+
+            for b in todays_bookings:
+                booked_time = b.get("booked_at", "")
+                if "T" in booked_time:
+                    booked_time = booked_time.split("T")[1][:5]
+                tree.insert("", "end", values=(
+                    b.get("courier_name", ""),
+                    b.get("tracking_number", ""),
+                    b.get("order_id", ""),
+                    b.get("recipient", ""),
+                    booked_time,
+                ))
+            tree.pack(fill="x")
+
+            def _cancel_selected():
+                sel = tree.selection()
+                if not sel:
+                    status_lbl.configure(text="Select a booking from the list.", fg="red")
+                    return
+                vals = tree.item(sel[0], "values")
+                courier_name, tracking = vals[0], vals[1]
+                _do_cancel(courier_name, tracking)
+
+            sel_btn_frame = tk.Frame(win)
+            sel_btn_frame.pack(pady=(0, 4))
+            tk.Button(
+                sel_btn_frame, text="Cancel Selected Booking", font=("Segoe UI", 10),
+                bg="#b22222", fg="white", activebackground="#8b0000",
+                width=24, command=_cancel_selected,
+            ).pack()
+
+            # Separator
+            ttk.Separator(win, orient="horizontal").pack(fill="x", padx=16, pady=8)
+
+        # ── Manual entry fallback ──
+        tk.Label(
+            win, text="Or enter tracking number manually:",
+            font=("Segoe UI", 11, "bold" if not todays_bookings else "normal"),
+        ).pack(padx=16, pady=(12 if not todays_bookings else 0, 4), anchor="w")
+
+        manual_frame = tk.Frame(win)
+        manual_frame.pack(fill="x", padx=16, pady=(0, 8))
+
+        tk.Label(manual_frame, text="Courier:", font=("Segoe UI", 10)).grid(
+            row=0, column=0, sticky="w", pady=2)
+        courier_var = tk.StringVar(value=courier_names[0] if courier_names else "")
+        courier_dropdown = ttk.Combobox(
+            manual_frame, textvariable=courier_var, values=courier_names,
+            state="readonly", width=20, font=("Segoe UI", 10),
+        )
+        courier_dropdown.grid(row=0, column=1, sticky="w", padx=(8, 0), pady=2)
+
+        tk.Label(manual_frame, text="Tracking #:", font=("Segoe UI", 10)).grid(
+            row=1, column=0, sticky="w", pady=2)
         entry_var = tk.StringVar()
-        entry = tk.Entry(win, textvariable=entry_var, width=36, font=("Segoe UI", 11))
-        entry.pack(padx=16, pady=(0, 8))
+        entry = tk.Entry(manual_frame, textvariable=entry_var, width=28, font=("Segoe UI", 10))
+        entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=2)
         entry.focus_set()
 
-        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=380)
-        status_lbl.pack(padx=16, pady=(0, 4))
+        manual_btn_frame = tk.Frame(win)
+        manual_btn_frame.pack(pady=(4, 4))
 
-        btn_frame = tk.Frame(win)
-        btn_frame.pack(pady=(4, 12))
-
-        def _do_cancel():
+        def _cancel_manual():
+            courier_name = courier_var.get().strip()
             tracking = entry_var.get().strip()
+            if not courier_name:
+                status_lbl.configure(text="Please select a courier.", fg="red")
+                return
             if not tracking:
                 status_lbl.configure(text="Please enter a tracking number.", fg="red")
                 return
+            _do_cancel(courier_name, tracking)
+
+        tk.Button(
+            manual_btn_frame, text="Cancel This Shipment", font=("Segoe UI", 10),
+            bg="#b22222", fg="white", activebackground="#8b0000",
+            width=24, command=_cancel_manual,
+        ).pack()
+
+        # ── Status & close ──
+        status_lbl.pack(padx=16, pady=(8, 4))
+
+        close_frame = tk.Frame(win)
+        close_frame.pack(pady=(0, 12))
+        tk.Button(
+            close_frame, text="Close", font=("Segoe UI", 10), width=10,
+            command=win.destroy,
+        ).pack()
+
+        # ── Shared cancel logic ──
+        def _do_cancel(courier_name: str, tracking: str):
+            # Find the courier instance by display name
+            courier = None
+            courier_code = ""
+            for code, c in couriers_by_code.items():
+                if c.name == courier_name:
+                    courier = c
+                    courier_code = code
+                    break
+            if courier is None:
+                status_lbl.configure(
+                    text=f"No enabled courier found for '{courier_name}'.", fg="red")
+                return
+
             confirm = messagebox.askyesno(
                 "Confirm cancellation",
-                f"Cancel DAI Post shipment\n{tracking}\n\nThis cannot be undone.",
+                f"Cancel {courier_name} shipment\n{tracking}\n\nThis cannot be undone.",
                 parent=win,
             )
             if not confirm:
                 return
-            cancel_btn.configure(state="disabled")
+
             status_lbl.configure(text="Cancelling…", fg="gray")
             win.update_idletasks()
 
-            def _run():
-                ok, msg = courier.cancel_shipment(tracking)
-                win.after(0, _on_done, ok, msg)
+            # Look up extras from ledger (e.g. shipment_id for AusPost, postcode for Allied)
+            cancel_kwargs = {}
+            for b in todays_bookings:
+                if b.get("tracking_number") == tracking and not b.get("cancelled"):
+                    extras = b.get("extras", {})
+                    if extras.get("booking_reference"):
+                        cancel_kwargs["shipment_id"] = extras["booking_reference"]
+                    if extras.get("postcode"):
+                        cancel_kwargs["postcode"] = extras["postcode"]
+                    break
 
-            def _on_done(ok: bool, msg: str):
-                cancel_btn.configure(state="normal")
+            def _run():
+                ok, msg = courier.cancel_shipment(tracking, **cancel_kwargs)
+                win.after(0, _on_done, ok, msg, tracking)
+
+            def _on_done(ok: bool, msg: str, trk: str):
                 if ok:
                     status_lbl.configure(
                         text=f"Cancelled successfully.\n{msg}", fg="green")
+                    # Mark cancelled in ledger
+                    if bookings_dir:
+                        try:
+                            from src.shipping.booking_ledger import mark_cancelled
+                            mark_cancelled(bookings_dir, trk)
+                        except Exception:
+                            pass
+                    # Remove from treeview if present
+                    if todays_bookings:
+                        for item in tree.get_children():
+                            if tree.item(item, "values")[1] == trk:
+                                tree.delete(item)
+                                break
                 else:
                     status_lbl.configure(
                         text=f"Cancellation failed:\n{msg}", fg="red")
 
             threading.Thread(target=_run, daemon=True).start()
 
-        cancel_btn = tk.Button(
-            btn_frame, text="Cancel Shipment", font=("Segoe UI", 10),
-            bg="#b22222", fg="white", activebackground="#8b0000",
-            width=18, command=_do_cancel,
-        )
-        cancel_btn.pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            btn_frame, text="Close", font=("Segoe UI", 10), width=10,
-            command=win.destroy,
-        ).pack(side="left")
-
-        # Allow Enter key to trigger cancel
-        win.bind("<Return>", lambda _e: _do_cancel())
+        # Allow Enter key to trigger manual cancel
+        win.bind("<Return>", lambda _e: _cancel_manual())
 
     # ── Export ────────────────────────────────────────────────────────────
 

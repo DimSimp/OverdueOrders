@@ -123,6 +123,7 @@
     "output_dir": "output"
   },
   "shipping": {
+    "bookings_dir": "data/shipping/bookings",
     "sender": {
       "name": "Scarlett Music",
       "company": "Scarlett Music",

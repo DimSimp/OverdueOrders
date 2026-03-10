@@ -792,6 +792,33 @@ class FreightBookingView(ctk.CTkFrame):
         log.info("Booking confirmed — courier=%s  tracking=%s  reference=%s",
                  result.courier_name, result.tracking_number, result.booking_reference)
 
+        # Record booking in daily ledger
+        bookings_dir = self._shipping_config.bookings_dir
+        if bookings_dir and result.tracking_number:
+            try:
+                from src.shipping.booking_ledger import add_booking
+                courier_code = ""
+                for code, c in self._couriers_by_code.items():
+                    if c.name == result.courier_name:
+                        courier_code = code
+                        break
+                extras = {}
+                if result.booking_reference:
+                    extras["booking_reference"] = result.booking_reference
+                if self._receiver.postcode:
+                    extras["postcode"] = self._receiver.postcode
+                add_booking(
+                    directory=bookings_dir,
+                    courier_code=courier_code,
+                    courier_name=result.courier_name,
+                    tracking_number=result.tracking_number,
+                    order_id=self._order_id,
+                    recipient=self._receiver.name,
+                    extras=extras if extras else None,
+                )
+            except Exception as exc:
+                log.warning("Failed to record booking in ledger: %s", exc)
+
         # Print label in background thread (non-fatal if it fails).
         # Navigation happens immediately below (freight view is destroyed), so we
         # show any error via the root window which outlives this widget.

@@ -100,6 +100,7 @@ class SenderConfig:
 class ShippingConfig:
     sender: SenderConfig
     couriers: dict[str, dict] = field(default_factory=dict)
+    bookings_dir: str = ""
 
 
 class ConfigManager:
@@ -207,6 +208,7 @@ class ConfigManager:
             self.shipping = ShippingConfig(
                 sender=sender,
                 couriers=ship_raw.get("couriers", {}),
+                bookings_dir=ship_raw.get("bookings_dir", ""),
             )
 
     def save(self) -> None:
