@@ -314,6 +314,35 @@ class NetoClient:
         except (ValueError, TypeError):
             return None
 
+    def update_item_dimensions(
+        self,
+        sku: str,
+        weight_kg: float,
+        length_cm: float,
+        width_cm: float,
+        height_cm: float,
+        dry_run: bool = True,
+    ) -> dict:
+        """
+        Upload shipping dimensions for a product SKU via UpdateItem.
+        Stores dimensions in metres (cm / 100) and sets Misc06='Satchel'.
+        """
+        item_data = {
+            "SKU": sku,
+            "Misc06": "Satchel",
+            "ShippingWeight": weight_kg,
+            "ShippingHeight": height_cm / 100,
+            "ShippingLength": length_cm / 100,
+            "ShippingWidth": width_cm / 100,
+        }
+
+        if dry_run:
+            print(f"[DRY RUN] Neto UpdateItem dimensions for {sku}: {item_data}")
+            return {"Ack": "Success", "DryRun": True}
+
+        body = {"Item": item_data}
+        return self._post_action("UpdateItem", body)
+
     def add_sticky_note(
         self,
         order_id: str,

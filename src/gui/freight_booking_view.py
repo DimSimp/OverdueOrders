@@ -22,6 +22,9 @@ from src.shipping.models import (
 from src.shipping.quote_engine import QuoteEngine
 
 
+# Couriers that support express shipping
+EXPRESS_CAPABLE_COURIERS = {"auspost", "allied", "bonds"}
+
 # ── Courier registry ─────────────────────────────────────────────────────────
 
 def _build_couriers(courier_configs: dict):
@@ -255,22 +258,30 @@ class FreightBookingView(ctk.CTkFrame):
 
         self._package_rows: list[PackageRow] = []
         self._courier_toggles: dict[str, ctk.BooleanVar] = {}
+        self._courier_switches: dict[str, ctk.CTkSwitch] = {}
+        self._courier_enabled_config: dict[str, bool] = {}
         self._quote_cards: list[QuoteCard] = []
         self._selected_quote: Quote | None = None
         self._last_request: ShipmentRequest | None = None
         self._couriers_by_code: dict = {}
+        self._dims_auto_filled: bool = False  # True if Neto already had dimensions
 
         # Determine receiver address from order data
+        self._single_sku: str | None = None  # Set if single line, qty 1
         if neto_order:
             self._receiver = address_from_neto_order(neto_order)
             self._shipping_type = neto_order.shipping_type or "Standard"
             self._order_value = neto_order.grand_total
             self._line_skus = [li.sku for li in neto_order.line_items]
+            if len(neto_order.line_items) == 1 and neto_order.line_items[0].quantity == 1:
+                self._single_sku = neto_order.line_items[0].sku
         elif ebay_order:
             self._receiver = address_from_ebay_order(ebay_order)
             self._shipping_type = ebay_order.shipping_type or "Standard"
             self._order_value = ebay_order.order_total
             self._line_skus = [li.sku for li in ebay_order.line_items]
+            if len(ebay_order.line_items) == 1 and ebay_order.line_items[0].quantity == 1:
+                self._single_sku = ebay_order.line_items[0].sku
         else:
             self._receiver = Address("", "", "", "", "", "", "", "AU")
             self._shipping_type = "Standard"
@@ -328,11 +339,14 @@ class FreightBookingView(ctk.CTkFrame):
         type_row = ctk.CTkFrame(section, fg_color="transparent")
         type_row.pack(fill="x", padx=10, pady=(0, 4))
         ctk.CTkLabel(type_row, text="Shipping Type:", font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 6))
-        self._shipping_type_var = ctk.StringVar(value=self._shipping_type)
+        # Default to "Standard" unless the order's shipping type is "Express"
+        default_type = "Express" if self._shipping_type == "Express" else "Standard"
+        self._shipping_type_var = ctk.StringVar(value=default_type)
         for val in ("Standard", "Express"):
             ctk.CTkRadioButton(
                 type_row, text=val, variable=self._shipping_type_var, value=val,
                 font=ctk.CTkFont(size=11),
+                command=self._on_shipping_type_changed,
             ).pack(side="left", padx=(0, 12))
 
         # Two-column grid for address fields
@@ -407,6 +421,20 @@ class FreightBookingView(ctk.CTkFrame):
                 self._add_package_row(sku=sku)
         else:
             self._add_package_row()
+
+        # "Save dimensions to Neto" checkbox — only for single-line, qty-1 orders
+        self._save_dims_var = ctk.BooleanVar(value=False)
+        self._save_dims_check = None
+        if self._single_sku and self._neto_client and self._platform.lower() == "neto":
+            check_frame = ctk.CTkFrame(section, fg_color="transparent")
+            check_frame.pack(fill="x", padx=10, pady=(0, 8))
+            self._save_dims_check = ctk.CTkCheckBox(
+                check_frame,
+                text=f"Save dimensions to Neto for SKU: {self._single_sku}",
+                variable=self._save_dims_var,
+                font=ctk.CTkFont(size=11),
+            )
+            self._save_dims_check.pack(side="left")
 
     def _add_package_row(self, sku: str = ""):
         row = PackageRow(
@@ -487,6 +515,7 @@ class FreightBookingView(ctk.CTkFrame):
             "dai_post": "DAI Post",
         }
 
+        self._courier_switches: dict[str, ctk.CTkSwitch] = {}
         for code, display_name in courier_names.items():
             cfg = courier_configs.get(code, {})
             enabled = cfg.get("enabled", False)
@@ -499,6 +528,24 @@ class FreightBookingView(ctk.CTkFrame):
                 switch.configure(state="disabled")
             switch.pack(side="left", padx=(0, 16))
             self._courier_toggles[code] = var
+            self._courier_switches[code] = switch
+            self._courier_enabled_config[code] = enabled
+
+        # Apply express restrictions if the order defaults to express
+        self._on_shipping_type_changed()
+
+    def _on_shipping_type_changed(self):
+        """Enable/disable courier switches based on the selected shipping type."""
+        is_express = self._shipping_type_var.get() == "Express"
+        for code, switch in self._courier_switches.items():
+            configured = self._courier_enabled_config.get(code, False)
+            if not configured:
+                continue  # Already disabled, leave it
+            if is_express and code not in EXPRESS_CAPABLE_COURIERS:
+                switch.deselect()
+                switch.configure(state="disabled")
+            else:
+                switch.configure(state="normal")
 
     # ── Section 4: Action ────────────────────────────────────────────────
 
@@ -541,7 +588,16 @@ class FreightBookingView(ctk.CTkFrame):
         def _fetch():
             dims = self._neto_client.get_item_dimensions(sku)
             if dims:
-                self.after(0, lambda: row.set_from_dimensions(dims, source="auto-filled from Neto"))
+                def _apply():
+                    row.set_from_dimensions(dims, source="auto-filled from Neto")
+                    self._dims_auto_filled = True
+                    # Dimensions already exist — change checkbox to "overwrite" mode
+                    if self._save_dims_check is not None:
+                        self._save_dims_check.configure(
+                            text=f"Overwrite dimensions on Neto for SKU: {self._single_sku}"
+                        )
+                        self._save_dims_var.set(False)
+                self.after(0, _apply)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -648,9 +704,42 @@ class FreightBookingView(ctk.CTkFrame):
         if hasattr(self, "_use_selected_btn"):
             self._use_selected_btn.configure(state="normal")
 
+    def _upload_dimensions_if_checked(self):
+        """Upload package dimensions to Neto if the checkbox is checked."""
+        if not self._save_dims_var.get() or not self._single_sku or not self._neto_client:
+            return
+        if not self._package_rows:
+            return
+        pkg = self._package_rows[0].get_package()
+        if pkg is None:
+            return
+
+        sku = self._single_sku
+        log.info("Uploading dimensions for SKU %s: %.2fkg  %.1fx%.1fx%.1fcm",
+                 sku, pkg.weight_kg, pkg.length_cm, pkg.width_cm, pkg.height_cm)
+
+        def _upload():
+            try:
+                self._neto_client.update_item_dimensions(
+                    sku=sku,
+                    weight_kg=pkg.weight_kg,
+                    length_cm=pkg.length_cm,
+                    width_cm=pkg.width_cm,
+                    height_cm=pkg.height_cm,
+                    dry_run=self._dry_run,
+                )
+                log.info("Dimensions uploaded for SKU %s", sku)
+            except Exception as exc:
+                log.error("Failed to upload dimensions for SKU %s: %s", sku, exc)
+
+        threading.Thread(target=_upload, daemon=True).start()
+
     def _use_selected(self):
         if not self._selected_quote or not self._last_request:
             return
+
+        # Upload dimensions to Neto if checkbox is checked
+        self._upload_dimensions_if_checked()
 
         quote = self._selected_quote
         log.info("Courier selected: %s (%s)  price=$%.2f",
