@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import re
+import tkinter as tk
 from tkinter import messagebox, filedialog, Menu, StringVar, BooleanVar
 import tkinter.ttk as ttk
 
@@ -679,6 +680,13 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._save_session_btn.pack(side="left", padx=(12, 0))
 
+        self._dai_cancel_btn = ctk.CTkButton(
+            bottom, text="Cancel DAI Post", width=130,
+            fg_color=("firebrick3", "firebrick4"), hover_color=("firebrick4", "firebrick"),
+            command=self._open_dai_cancel_dialog,
+        )
+        self._dai_cancel_btn.pack(side="left", padx=(12, 0))
+
         self._export_label = ctk.CTkLabel(
             bottom, text="", font=ctk.CTkFont(size=12), text_color="gray60"
         )
@@ -1044,7 +1052,7 @@ class ResultsTab(ctk.CTkFrame):
             shipping_config=self._app.config.shipping,
             dry_run=self._app.config.app.dry_run,
             on_back=self._close_freight_view,
-            on_courier_selected=lambda name: self._on_courier_selected(name),
+            on_courier_selected=lambda name, tracking="": self._on_courier_selected(name, tracking),
         )
         self._freight_frame.grid(row=0, column=0, sticky="nsew")
         self._freight_frame.tkraise()
@@ -1057,11 +1065,14 @@ class ResultsTab(ctk.CTkFrame):
         if self._detail_frame is not None:
             self._detail_frame.tkraise()
 
-    def _on_courier_selected(self, courier_name: str):
-        """Called when user picks a courier from the freight view."""
+    def _on_courier_selected(self, courier_name: str, tracking_number: str = ""):
+        """Called when booking is confirmed in the freight view."""
         self._close_freight_view()
         if self._detail_frame is not None:
-            self._detail_frame.set_tracking(carrier=courier_name)
+            self._detail_frame.set_tracking(tracking=tracking_number, carrier=courier_name)
+            if tracking_number:
+                # Booking was confirmed with courier — auto-mark as sent
+                self._detail_frame._mark_as_sent()
 
     def _check_status_background(self, order_id: str, platform: str):
         """Check if an order is already completed; warn in the detail view if so."""
@@ -1186,6 +1197,89 @@ class ResultsTab(ctk.CTkFrame):
             self._export_label.configure(text=f"Session saved: {path}", text_color="green")
         except Exception as e:
             self._error_label.configure(text=f"Save failed: {e}")
+
+    # ── DAI Post cancellation ─────────────────────────────────────────────
+
+    def _open_dai_cancel_dialog(self):
+        """Open a small dialog to cancel a DAI Post shipment by tracking number."""
+        shipping = self._app.config.shipping
+        if shipping is None:
+            messagebox.showerror("Not configured", "Shipping is not configured.", parent=self)
+            return
+        dai_cfg = shipping.couriers.get("dai_post", {})
+        if not dai_cfg.get("enabled"):
+            messagebox.showerror("Not configured", "DAI Post is not enabled in config.", parent=self)
+            return
+
+        from src.shipping.couriers.dai_post import DaiPostCourier
+        courier = DaiPostCourier(dai_cfg)
+
+        win = tk.Toplevel(self)
+        win.title("Cancel DAI Post Shipment")
+        win.resizable(False, False)
+        win.grab_set()
+
+        pad = {"padx": 16, "pady": 8}
+
+        tk.Label(win, text="Enter the DAI Post tracking number to cancel:",
+                 font=("Segoe UI", 11)).pack(**pad)
+
+        entry_var = tk.StringVar()
+        entry = tk.Entry(win, textvariable=entry_var, width=36, font=("Segoe UI", 11))
+        entry.pack(padx=16, pady=(0, 8))
+        entry.focus_set()
+
+        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=380)
+        status_lbl.pack(padx=16, pady=(0, 4))
+
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(pady=(4, 12))
+
+        def _do_cancel():
+            tracking = entry_var.get().strip()
+            if not tracking:
+                status_lbl.configure(text="Please enter a tracking number.", fg="red")
+                return
+            confirm = messagebox.askyesno(
+                "Confirm cancellation",
+                f"Cancel DAI Post shipment\n{tracking}\n\nThis cannot be undone.",
+                parent=win,
+            )
+            if not confirm:
+                return
+            cancel_btn.configure(state="disabled")
+            status_lbl.configure(text="Cancelling…", fg="gray")
+            win.update_idletasks()
+
+            def _run():
+                ok, msg = courier.cancel_shipment(tracking)
+                win.after(0, _on_done, ok, msg)
+
+            def _on_done(ok: bool, msg: str):
+                cancel_btn.configure(state="normal")
+                if ok:
+                    status_lbl.configure(
+                        text=f"Cancelled successfully.\n{msg}", fg="green")
+                else:
+                    status_lbl.configure(
+                        text=f"Cancellation failed:\n{msg}", fg="red")
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        cancel_btn = tk.Button(
+            btn_frame, text="Cancel Shipment", font=("Segoe UI", 10),
+            bg="#b22222", fg="white", activebackground="#8b0000",
+            width=18, command=_do_cancel,
+        )
+        cancel_btn.pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            btn_frame, text="Close", font=("Segoe UI", 10), width=10,
+            command=win.destroy,
+        ).pack(side="left")
+
+        # Allow Enter key to trigger cancel
+        win.bind("<Return>", lambda _e: _do_cancel())
 
     # ── Export ────────────────────────────────────────────────────────────
 

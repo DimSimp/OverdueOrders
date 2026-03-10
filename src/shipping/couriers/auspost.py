@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 import requests
 from requests.auth import HTTPBasicAuth
 
 from src.shipping.base_courier import BaseCourier
-from src.shipping.models import Quote, ShipmentRequest
+from src.shipping.models import BookingResult, Quote, ShipmentRequest
+
+log = logging.getLogger("courier.auspost")
 
 QUOTE_URL = "https://digitalapi.auspost.com.au/shipping/v1/prices/shipments"
 
@@ -104,3 +108,168 @@ class AusPostCourier(BaseCourier):
                 estimated_days="",
                 error=str(exc),
             )]
+
+    def book(self, request: ShipmentRequest, quote=None) -> BookingResult:
+        """Create an AusPost shipment, download the label PDF, return tracking + label."""
+        product_id = EXPRESS_PRODUCT if request.shipping_type == "Express" else STANDARD_PRODUCT
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Account-Number": self._account_number,
+        }
+        auth = HTTPBasicAuth(self._username, self._secret)
+
+        # Build items array from packages
+        items = []
+        for i, pkg in enumerate(request.packages, 1):
+            items.append({
+                "item_reference": f"{request.order_id}-{i}",
+                "product_id": product_id,
+                "length": pkg.length_cm,
+                "height": pkg.height_cm,
+                "width": pkg.width_cm,
+                "weight": pkg.weight_kg,
+                "authority_to_leave": "false",
+                "allow_partial_delivery": "true",
+            })
+
+        recv = request.receiver
+        sender = request.sender
+        shipment_payload = {
+            "shipments": [{
+                "shipment_reference": request.order_id,
+                "customer_reference_1": request.order_id,
+                "email_tracking_enabled": True,
+                "from": {
+                    "name": sender.name,
+                    "business_name": sender.company,
+                    "lines": [sender.street1],
+                    "suburb": sender.city.upper(),
+                    "state": sender.state,
+                    "postcode": sender.postcode,
+                    "phone": sender.phone,
+                    "email": sender.email,
+                },
+                "to": {
+                    "name": recv.name,
+                    "business_name": (recv.company or recv.name)[:40],
+                    "lines": [recv.street1[:50], (recv.street2 or "")[:50]],
+                    "suburb": recv.city.upper(),
+                    "state": recv.state,
+                    "postcode": recv.postcode,
+                    "phone": recv.phone or "",
+                    "email": recv.email or "",
+                },
+                "items": items,
+            }]
+        }
+
+        log.info("Booking AusPost shipment for order %s (product=%s)", request.order_id, product_id)
+        log.debug("AusPost shipment payload: %s", shipment_payload)
+
+        try:
+            resp = requests.post(
+                "https://digitalapi.auspost.com.au/shipping/v1/shipments",
+                headers=headers,
+                auth=auth,
+                json=shipment_payload,
+                timeout=20,
+            )
+            log.debug("AusPost shipment HTTP %d: %s", resp.status_code, resp.text[:500])
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return BookingResult(
+                courier_name=self.name, tracking_number="", label_pdf=None,
+                booking_reference="", error=f"AusPost shipment creation failed: {exc}",
+            )
+
+        if "errors" in data:
+            return BookingResult(
+                courier_name=self.name, tracking_number="", label_pdf=None,
+                booking_reference="", error=f"AusPost API error: {data['errors']}",
+            )
+
+        try:
+            shipment = data["shipments"][0]
+            shipment_id = shipment["shipment_id"]
+            item_ids = [{"item_id": x["item_id"]} for x in shipment["items"]]
+            tracking = shipment["items"][0]["tracking_details"]["consignment_id"]
+        except (KeyError, IndexError) as exc:
+            return BookingResult(
+                courier_name=self.name, tracking_number="", label_pdf=None,
+                booking_reference="", error=f"AusPost response missing fields: {exc}",
+            )
+
+        log.info("AusPost shipment created: tracking=%s  shipment_id=%s", tracking, shipment_id)
+
+        # Request label PDF
+        label_payload = {
+            "wait_for_label_url": True,
+            "preferences": [{
+                "type": "PRINT",
+                "format": "PDF",
+                "groups": [
+                    {
+                        "group": "Parcel Post",
+                        "layout": "THERMAL-LABEL-A6-1PP",
+                        "branded": True,
+                        "left_offset": 0,
+                        "top_offset": 0,
+                    },
+                    {
+                        "group": "Express Post",
+                        "layout": "THERMAL-LABEL-A6-1PP",
+                        "branded": False,
+                        "left_offset": 0,
+                        "top_offset": 0,
+                    },
+                ],
+            }],
+            "shipments": [{"shipment_id": shipment_id, "items": item_ids}],
+        }
+
+        try:
+            resp = requests.post(
+                "https://digitalapi.auspost.com.au/shipping/v1/labels",
+                headers=headers,
+                auth=auth,
+                json=label_payload,
+                timeout=20,
+            )
+            log.debug("AusPost label HTTP %d: %s", resp.status_code, resp.text[:300])
+            resp.raise_for_status()
+            label_data = resp.json()
+            label_url = label_data["labels"][0]["url"]
+        except Exception as exc:
+            log.error("AusPost label request failed: %s", exc)
+            return BookingResult(
+                courier_name=self.name,
+                tracking_number=str(tracking),
+                label_pdf=None,
+                booking_reference=str(shipment_id),
+                error=f"Shipment created (tracking: {tracking}) but label request failed: {exc}",
+            )
+
+        try:
+            pdf_resp = requests.get(label_url, timeout=30)
+            pdf_resp.raise_for_status()
+            label_pdf = pdf_resp.content
+            log.info("AusPost label downloaded: %d bytes  url=%s", len(label_pdf), label_url)
+        except Exception as exc:
+            log.error("AusPost label download failed: %s", exc)
+            return BookingResult(
+                courier_name=self.name,
+                tracking_number=str(tracking),
+                label_pdf=None,
+                booking_reference=str(shipment_id),
+                error=f"Shipment created (tracking: {tracking}) but label download failed: {exc}",
+            )
+
+        return BookingResult(
+            courier_name=self.name,
+            tracking_number=str(tracking),
+            label_pdf=label_pdf,
+            booking_reference=str(shipment_id),
+        )

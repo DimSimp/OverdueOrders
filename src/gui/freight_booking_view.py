@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import threading
 import tkinter as tk
+
+log = logging.getLogger("freight_booking")
 
 import customtkinter as ctk
 
@@ -254,6 +257,8 @@ class FreightBookingView(ctk.CTkFrame):
         self._courier_toggles: dict[str, ctk.BooleanVar] = {}
         self._quote_cards: list[QuoteCard] = []
         self._selected_quote: Quote | None = None
+        self._last_request: ShipmentRequest | None = None
+        self._couriers_by_code: dict = {}
 
         # Determine receiver address from order data
         if neto_order:
@@ -577,8 +582,10 @@ class FreightBookingView(ctk.CTkFrame):
         self._progress_label.configure(text="Fetching quotes...", text_color=("gray20", "gray80"))
         self._clear_results()
 
-        # Build couriers and engine
+        # Build couriers and engine — store instances for later booking
         couriers = _build_couriers(self._shipping_config.couriers)
+        self._couriers_by_code = {c.code: c for c in couriers}
+        self._last_request = request
         engine = QuoteEngine(couriers)
 
         def _progress(name: str, status: str):
@@ -642,5 +649,85 @@ class FreightBookingView(ctk.CTkFrame):
             self._use_selected_btn.configure(state="normal")
 
     def _use_selected(self):
-        if self._selected_quote:
-            self._on_courier_selected(self._selected_quote.courier_name)
+        if not self._selected_quote or not self._last_request:
+            return
+
+        quote = self._selected_quote
+        log.info("Courier selected: %s (%s)  price=$%.2f",
+                 quote.courier_name, quote.courier_code, quote.price)
+
+        # Dry-run: skip real booking
+        if self._dry_run:
+            log.info("Dry-run mode — skipping real booking")
+            self._on_courier_selected(quote.courier_name, "DRY-RUN-TRACKING")
+            return
+
+        courier = self._couriers_by_code.get(quote.courier_code)
+        if courier is None:
+            log.warning("Courier code '%s' not found in couriers_by_code — manual tracking only",
+                        quote.courier_code)
+            self._on_courier_selected(quote.courier_name, "")
+            return
+
+        log.info("Starting booking thread for courier '%s', order '%s'",
+                 quote.courier_code, self._last_request.order_id)
+        self._use_selected_btn.configure(state="disabled", text="Booking...")
+        self._progress_label.configure(text="Confirming booking with courier...",
+                                        text_color=("gray20", "gray80"))
+        request = self._last_request
+
+        def _do_book():
+            log.debug("Calling %s.book() for order %s", courier.code, request.order_id)
+            result = courier.book(request, quote)
+            log.debug("book() returned: tracking=%r  reference=%r  error=%r",
+                      result.tracking_number, result.booking_reference, result.error or None)
+            self.after(0, lambda: self._on_booking_result(result))
+
+        threading.Thread(target=_do_book, daemon=True).start()
+
+    def _on_booking_result(self, result):
+        self._use_selected_btn.configure(state="normal", text="Use Selected Courier")
+
+        if result.error:
+            if "not yet implemented" in result.error.lower():
+                log.info("'%s' has no booking API — returning for manual tracking entry",
+                         result.courier_name)
+                self._on_courier_selected(result.courier_name, "")
+            else:
+                log.error("Booking failed for '%s': %s", result.courier_name, result.error)
+                self._progress_label.configure(
+                    text=f"Booking failed: {result.error}", text_color="red"
+                )
+            return
+
+        log.info("Booking confirmed — courier=%s  tracking=%s  reference=%s",
+                 result.courier_name, result.tracking_number, result.booking_reference)
+
+        # Print label in background thread (non-fatal if it fails).
+        # Navigation happens immediately below (freight view is destroyed), so we
+        # show any error via the root window which outlives this widget.
+        if result.label_pdf:
+            log.debug("Label PDF received (%d bytes) — starting print thread", len(result.label_pdf))
+            label_bytes = result.label_pdf
+            root = self.winfo_toplevel()
+
+            def _print():
+                from src.shipping.label_printer import print_label
+                from tkinter import messagebox
+                err = print_label(label_bytes)
+                if err:
+                    log.error("Label print failed: %s", err)
+                    root.after(0, lambda: messagebox.showwarning(
+                        "Label Print Failed",
+                        f"The booking was confirmed but the label could not be printed:\n\n{err}\n\n"
+                        "You can re-print manually from the Aramex portal.",
+                        parent=root,
+                    ))
+                else:
+                    log.info("Label printed successfully")
+
+            threading.Thread(target=_print, daemon=True).start()
+        else:
+            log.warning("No label PDF in booking result — nothing to print")
+
+        self._on_courier_selected(result.courier_name, result.tracking_number)

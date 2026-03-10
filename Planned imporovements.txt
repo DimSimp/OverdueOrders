@@ -2,3 +2,8 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - auto-open Kogan platform when marking kogan orders as sent
 - add order booking logic to order fulfillment screen
+- fix adding notes to neto orders (possibly ebay too)
+- Only allow express services to be quoted/booked
+- experiment to find the best label sizes
+- auspost express labels need to print in a single label
+

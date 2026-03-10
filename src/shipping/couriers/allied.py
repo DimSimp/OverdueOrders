@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 
 from src.shipping.base_courier import BaseCourier
-from src.shipping.models import Quote, ShipmentRequest
+from src.shipping.models import Quote, ShipmentRequest, next_business_day
 
 WSDL_URL = "http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS?wsdl"
 PROXY_URL = "http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS"
@@ -127,11 +127,13 @@ class AlliedCourier(BaseCourier):
             total_items += 1
             total_cubic += pkg.cubic_weight_kg
 
-        # Extract numeric job number from order ID
+        # Extract numeric job number from order ID, capped to Java int range
         job_number_str = re.sub(r"[^0-9]", "", request.order_id)
-        job_number = int(job_number_str) if job_number_str else 0
+        job_number = int(job_number_str) % 2_000_000_000 if job_number_str else 0
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        # Allied requires next business day as a Python datetime (zeep serialises to xs:dateTime)
+        nd = next_business_day()
+        pickup_date = nd.replace(hour=10, minute=0, second=0, microsecond=0)
         pickup_instructions = "The music shop, open 9am-6pm. Best parking is at The Palms across the road."
 
         job = {
@@ -148,7 +150,7 @@ class AlliedCourier(BaseCourier):
             "serviceLevel": SERVICE_LEVEL,
             "referenceNumbers": request.order_id,
             "bookedBy": "Kyal Scarlett",
-            "readyDate": today,
+            "readyDate": pickup_date,
             "jobNumber": job_number,
             "vehicle": {"vehicleID": 1},
         }
