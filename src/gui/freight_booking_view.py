@@ -792,16 +792,18 @@ class FreightBookingView(ctk.CTkFrame):
         log.info("Booking confirmed — courier=%s  tracking=%s  reference=%s",
                  result.courier_name, result.tracking_number, result.booking_reference)
 
+        # Resolve courier_code for ledger, capture, and printing
+        courier_code = ""
+        for code, c in self._couriers_by_code.items():
+            if c.name == result.courier_name:
+                courier_code = code
+                break
+
         # Record booking in daily ledger
         bookings_dir = self._shipping_config.bookings_dir
         if bookings_dir and result.tracking_number:
             try:
                 from src.shipping.booking_ledger import add_booking
-                courier_code = ""
-                for code, c in self._couriers_by_code.items():
-                    if c.name == result.courier_name:
-                        courier_code = code
-                        break
                 extras = {}
                 if result.booking_reference:
                     extras["booking_reference"] = result.booking_reference
@@ -819,6 +821,24 @@ class FreightBookingView(ctk.CTkFrame):
             except Exception as exc:
                 log.warning("Failed to record booking in ledger: %s", exc)
 
+        # AusPost Express has a vertical barcode spanning the full label height — print as single strip
+        _no_split = (
+            courier_code == "auspost"
+            and self._last_request is not None
+            and self._last_request.shipping_type == "Express"
+        )
+        _print_courier_code = "auspost_express" if (
+            courier_code == "auspost" and _no_split
+        ) else courier_code
+
+        # Always save the latest label for this courier (overwrites previous)
+        if result.label_pdf and _print_courier_code:
+            try:
+                from src.shipping.label_capture import save_label
+                save_label(_print_courier_code, result.label_pdf)
+            except Exception as exc:
+                log.warning("Label save failed: %s", exc)
+
         # Print label in background thread (non-fatal if it fails).
         # Navigation happens immediately below (freight view is destroyed), so we
         # show any error via the root window which outlives this widget.
@@ -830,7 +850,7 @@ class FreightBookingView(ctk.CTkFrame):
             def _print():
                 from src.shipping.label_printer import print_label
                 from tkinter import messagebox
-                err = print_label(label_bytes)
+                err = print_label(label_bytes, courier_code=_print_courier_code, no_split=_no_split)
                 if err:
                     log.error("Label print failed: %s", err)
                     root.after(0, lambda: messagebox.showwarning(

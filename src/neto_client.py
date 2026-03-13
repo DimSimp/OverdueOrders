@@ -177,6 +177,27 @@ class NetoClient:
             raise NetoAPIError(f"Neto API error: {messages}")
         return data
 
+    def get_orders_by_ids(self, order_ids: list[str]) -> list[NetoOrder]:
+        """Fetch specific orders by ID. Returns only Pick-status orders."""
+        if not order_ids:
+            return []
+        body = {
+            "Filter": {
+                "OrderID": order_ids,
+                "OutputSelector": OUTPUT_SELECTOR,
+            }
+        }
+        data = self._post(body)
+        raw_orders = data.get("Order", [])
+        if isinstance(raw_orders, dict):
+            raw_orders = [raw_orders]
+        orders = []
+        for raw in raw_orders:
+            order = self._parse_order(raw)
+            if order and order.status in UNDISPATCHED_STATUSES:
+                orders.append(order)
+        return orders
+
     def get_order_status(self, order_id: str) -> str:
         """Lightweight call to check current order status."""
         body = {
@@ -360,7 +381,7 @@ class NetoClient:
         body = {
             "Order": [{
                 "OrderID": order_id,
-                "StickyNotes": [note],
+                "StickyNotes": {"StickyNote": [note]},
             }]
         }
         return self._post_action("UpdateOrder", body)

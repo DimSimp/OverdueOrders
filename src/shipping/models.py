@@ -136,13 +136,25 @@ class BookingResult:
 
 # ── Address extraction helpers ───────────────────────────────────────────────
 
+def _normalise_streets(street1: str, street2: str) -> tuple:
+    """Drop eBay delivery codes (e.g. 'ebay:dq7kkcb') from street1.
+
+    eBay sometimes puts internal tracking codes as the first address line.
+    When that happens, promote street2 to street1 and clear street2.
+    """
+    if street1 and street1.lower().startswith("ebay:"):
+        return (street2 or ""), ""
+    return street1, street2
+
+
 def address_from_neto_order(order) -> Address:
     """Build an Address from a NetoOrder instance."""
+    s1, s2 = _normalise_streets(order.ship_street1, order.ship_street2)
     return Address(
         name=f"{order.ship_first_name} {order.ship_last_name}".strip(),
         company=order.ship_company,
-        street1=order.ship_street1,
-        street2=order.ship_street2,
+        street1=s1,
+        street2=s2,
         city=order.ship_city,
         state=order.ship_state,
         postcode=order.ship_postcode,
@@ -154,11 +166,12 @@ def address_from_neto_order(order) -> Address:
 
 def address_from_ebay_order(order) -> Address:
     """Build an Address from an EbayOrder instance."""
+    s1, s2 = _normalise_streets(order.ship_street1, order.ship_street2)
     return Address(
         name=order.ship_name,
         company="",
-        street1=order.ship_street1,
-        street2=order.ship_street2,
+        street1=s1,
+        street2=s2,
         city=order.ship_city,
         state=order.ship_state,
         postcode=order.ship_postcode,

@@ -155,11 +155,11 @@ class OrderDetailView(ctk.CTkFrame):
         if self._neto_order:
             customer = self._neto_order.customer_name
             d = self._neto_order.date_paid or self._neto_order.date_placed
-            date_str = d.strftime("%Y-%m-%d") if d else ""
+            date_str = d.strftime("%d/%m/%Y") if d else ""
         elif self._ebay_order:
             customer = self._ebay_order.buyer_name
             date_str = (
-                self._ebay_order.creation_date.strftime("%Y-%m-%d")
+                self._ebay_order.creation_date.strftime("%d/%m/%Y")
                 if self._ebay_order.creation_date else ""
             )
 
@@ -475,8 +475,22 @@ class OrderDetailView(ctk.CTkFrame):
     # ── Notes ─────────────────────────────────────────────────────────────
 
     def _build_notes(self, parent):
-        # eBay notes are shown inline with line items — no separate section needed
         if self._ebay_order:
+            # Show buyer checkout notes (read-only) when present
+            # Per-item PrivateNotes editors are shown inline in _build_ebay_line_items
+            notes = self._ebay_order.buyer_notes
+            if not notes:
+                return
+            frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
+            frame.pack(fill="x", padx=8, pady=6)
+            ctk.CTkLabel(frame, text="Notes", font=ctk.CTkFont(size=13, weight="bold")).pack(
+                anchor="w", padx=10, pady=(8, 4)
+            )
+            ctk.CTkLabel(
+                frame, text=f"Buyer notes: {notes}",
+                font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
+                text_color="#f5c518",
+            ).pack(fill="x", padx=10, pady=(0, 8))
             return
 
         frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import time
 import webbrowser
 import xml.etree.ElementTree as ET
@@ -9,6 +10,8 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode, parse_qs, urlparse
 
 import requests
+
+log = logging.getLogger("ebay_client")
 
 from src.config import EbayConfig
 
@@ -86,6 +89,7 @@ class EbayClient:
         self._config = config
         self._save_tokens = token_save_callback
         self._session = requests.Session()
+        self.notes_warning: str = ""  # set by _enrich_with_private_notes on failure
 
     # ----- Auth helpers -----
 
@@ -259,7 +263,44 @@ class EbayClient:
         # Enrich buyer_notes with PrivateNotes from the Trading API (if credentials configured)
         if self._config.dev_id:
             self._enrich_with_private_notes(orders, date_from, date_to)
+        else:
+            log.warning(
+                "eBay Trading API credentials not configured (dev_id missing) — "
+                "PrivateNotes will not be fetched. Add dev_id to config.json to enable."
+            )
 
+        return orders
+
+    def get_orders_by_ids(self, order_ids: list[str]) -> list[EbayOrder]:
+        """Fetch specific orders by ID. Returns only paid, unfulfilled orders."""
+        if not order_ids:
+            return []
+        token = self._ensure_valid_token()
+        resp = self._session.get(
+            f"{self._api_base}/sell/fulfillment/v1/order",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
+                "Content-Type": "application/json",
+            },
+            params={"orderIds": ",".join(order_ids)},
+            timeout=30,
+        )
+        self._raise_for_ebay_error(resp)
+        data = resp.json()
+        raw_orders = data.get("orders", [])
+        filtered = [
+            o for o in raw_orders
+            if o.get("orderPaymentStatus") == "PAID"
+            and o.get("orderFulfillmentStatus") in ("NOT_STARTED", "IN_PROGRESS")
+        ]
+        orders = [self._parse_order(o) for o in filtered]
+        if orders and self._config.dev_id:
+            # Use a wide window (60 days) since we don't have an explicit date_from
+            from datetime import timedelta
+            date_from = datetime.now() - timedelta(days=60)
+            date_to = datetime.now()
+            self._enrich_with_private_notes(orders, date_from, date_to)
         return orders
 
     def get_order_status(self, order_id: str) -> str:
@@ -324,40 +365,33 @@ class EbayClient:
     def _trading_url(self) -> str:
         return EBAY_SANDBOX_TRADING_URL if self._config.environment == "sandbox" else EBAY_PROD_TRADING_URL
 
-    def _enrich_with_private_notes(
-        self,
-        orders: list[EbayOrder],
-        date_from: datetime,
-        date_to: datetime,
-    ) -> None:
+    def _call_trading_api(self, xml_template: str, call_name: str) -> ET.Element:
+        """Make a Trading API call, injecting the best available token.
+
+        Tries user_token first if configured.  If the response returns error 931
+        (Auth token is invalid / expired), automatically retries with the OAuth
+        access token.  Raises EbayAPIError on unrecoverable failure.
+
+        *xml_template* must contain ``{TOKEN}`` as a placeholder for the token.
         """
-        Fetch PrivateNotes from the Trading API (GetMyeBaySelling) and populate
-        buyer_notes on each EbayOrder. PrivateNotes are returned per OrderLineItemID
-        (ItemID-TransactionID). We extract the ItemID prefix and match against
-        legacyItemId from the Fulfillment API.
+        ns = {"e": _TRADING_NS}
+        tokens_tried: list[tuple[str, str]] = []
 
-        If any line item on an order has a PrivateNote, the combined notes are
-        appended to buyer_notes so filter_on_po can detect them.
-        """
-        token = self._ensure_valid_token()
+        if self._config.user_token:
+            tokens_tried.append(("user_token", self._config.user_token))
+        try:
+            tokens_tried.append(("oauth", self._ensure_valid_token()))
+        except Exception:
+            pass  # no OAuth token yet; user_token is the only hope
 
-        # GetMyeBaySelling uses DurationInDays, not a date range.
-        # Calculate days since date_from; cap at 60 (API limit for sold list).
-        from datetime import timezone as _tz
-        now = datetime.now()
-        duration_days = min(int((now - date_from).days) + 1, 60)
-
-        # Build lookups: ItemID → PrivateNotes text, ItemID → TransactionID
-        notes_by_item_id: dict[str, str] = {}
-        txn_id_by_item_id: dict[str, str] = {}
-        page = 1
-        while True:
-            xml_body = self._build_sold_list_xml(token, duration_days, page)
+        last_detail = "no tokens available"
+        for token_type, token in tokens_tried:
+            xml_body = xml_template.replace("{TOKEN}", token)
             try:
                 resp = self._session.post(
                     self._trading_url,
                     headers={
-                        "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
+                        "X-EBAY-API-CALL-NAME": call_name,
                         "X-EBAY-API-APP-NAME": self._config.client_id,
                         "X-EBAY-API-DEV-NAME": self._config.dev_id,
                         "X-EBAY-API-CERT-NAME": self._config.client_secret,
@@ -369,39 +403,115 @@ class EbayClient:
                     timeout=30,
                 )
                 resp.raise_for_status()
-            except Exception:
-                break  # Trading API unavailable — silently skip note enrichment
+            except Exception as exc:
+                log.warning("Trading API HTTP error with %s: %s", token_type, exc)
+                last_detail = str(exc)
+                continue
 
             root = ET.fromstring(resp.text)
-            ns = {"e": _TRADING_NS}
-
             ack = root.find("e:Ack", ns)
-            if ack is None or ack.text not in ("Success", "Warning"):
+            if ack is not None and ack.text in ("Success", "Warning"):
+                if token_type == "user_token":
+                    log.debug("Trading API call %s succeeded with user_token", call_name)
+                else:
+                    log.debug("Trading API call %s succeeded with oauth token", call_name)
+                return root
+
+            # Extract error details
+            errors = root.findall(".//e:Errors", ns)
+            error_msgs = []
+            error_codes = []
+            for err in errors:
+                code_el = err.find("e:ErrorCode", ns)
+                msg_el = err.find("e:LongMessage", ns) or err.find("e:ShortMessage", ns)
+                if code_el is not None and code_el.text:
+                    error_codes.append(code_el.text)
+                if msg_el is not None and msg_el.text:
+                    code = code_el.text if code_el is not None else ""
+                    error_msgs.append(f"[{code}] {msg_el.text}" if code else msg_el.text)
+            last_detail = "; ".join(error_msgs) if error_msgs else "Ack=Failure (no detail)"
+
+            if "931" in error_codes and token_type == "user_token":
+                log.warning(
+                    "Trading API: user_token expired or invalid (931), retrying with OAuth token"
+                )
+                continue  # retry with next token
+
+            log.warning("Trading API %s failed with %s: %s", call_name, token_type, last_detail)
+            break  # non-recoverable error
+
+        raise EbayAPIError(f"Trading API {call_name} failed: {last_detail}")
+
+    def _enrich_with_private_notes(
+        self,
+        orders: list[EbayOrder],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> None:
+        """
+        Fetch PrivateNotes from the Trading API (GetSellerTransactions) and populate
+        li.notes on each EbayLineItem. Also populates legacy_transaction_id where missing.
+
+        If any line item on an order has a PrivateNote, the combined notes are
+        appended to buyer_notes so filter_on_po can detect them.
+        """
+        self.notes_warning = ""
+
+        # GetMyeBaySelling uses DurationInDays, not a date range.
+        # Calculate days since date_from; cap at 60 (API limit for sold list).
+        now = datetime.now()
+        duration_days = min(int((now - date_from).days) + 1, 60)
+
+        # Build lookups: ItemID → PrivateNotes text, ItemID → TransactionID
+        notes_by_item_id: dict[str, str] = {}
+        txn_id_by_item_id: dict[str, str] = {}
+        ns = {"e": _TRADING_NS}
+        page = 1
+        while True:
+            xml_template = self._build_sold_list_xml(duration_days, page)
+            try:
+                root = self._call_trading_api(xml_template, "GetMyeBaySelling")
+            except EbayAPIError as exc:
+                self.notes_warning = f"PrivateNotes unavailable: {exc}"
                 break
 
-            for txn in root.findall(".//e:Transaction", ns):
+            for i, txn in enumerate(root.findall(".//e:Transaction", ns)):
+                # Log first transaction's field names once to help diagnose missing PrivateNotes
+                if i == 0 and page == 1:
+                    item_el = txn.find("e:Item", ns)
+                    item_tags = [c.tag.split("}")[-1] for c in item_el] if item_el is not None else []
+                    log.debug("GetMyeBaySelling first Transaction/Item fields: %s", item_tags)
+
                 oli_el = txn.find("e:OrderLineItemID", ns)
                 if oli_el is None or not oli_el.text:
                     continue
-                # OLI format: "ItemID-TransactionID" — extract both parts
+                # OLI format: "ItemID-TransactionID"
                 parts = oli_el.text.split("-", 1)
                 item_id = parts[0]
                 transaction_id = parts[1] if len(parts) > 1 else ""
                 if item_id and transaction_id:
                     txn_id_by_item_id[item_id] = transaction_id
+                # PrivateNotes is under Item within Transaction (confirmed from legacy code)
                 note = _xml_text(txn, "e:Item/e:PrivateNotes", ns)
                 if item_id and note:
                     notes_by_item_id[item_id] = note
 
             # Paginate through SoldList pages
-            total_pages_el = root.find(
-                ".//e:SoldList/e:PaginationResult/e:TotalNumberOfPages", ns
-            )
+            total_pages_el = root.find(".//e:SoldList/e:PaginationResult/e:TotalNumberOfPages", ns)
             total_pages = int(total_pages_el.text) if total_pages_el is not None and total_pages_el.text else 1
             if page >= total_pages:
                 break
             page += 1
 
+        log.debug(
+            "Trading API enrichment complete: %d notes, %d transaction IDs found",
+            len(notes_by_item_id), len(txn_id_by_item_id),
+        )
+        if txn_id_by_item_id and not notes_by_item_id:
+            self.notes_warning = (
+                "PrivateNotes not returned — eBay Trading token may be expired. "
+                "Use 'Update Trading Token' to renew it."
+            )
         if not notes_by_item_id and not txn_id_by_item_id:
             return
 
@@ -441,98 +551,62 @@ class EbayClient:
             print(f"[DRY RUN] eBay SetUserNotes on {item_id}-{transaction_id}: {note_text!r}")
             return
 
-        token = self._ensure_valid_token()
-        xml_body = (
+        if not self._config.dev_id:
+            raise EbayAPIError(
+                "Trading API credentials not configured (dev_id missing in config.json). "
+                "Add your eBay Developer Program App ID (dev_id) to enable PrivateNotes."
+            )
+
+        xml_template = (
             '<?xml version="1.0" encoding="utf-8"?>'
             f'<SetUserNotesRequest xmlns="{_TRADING_NS}">'
-            f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
             f"<ItemID>{item_id}</ItemID>"
             f"<TransactionID>{transaction_id}</TransactionID>"
             "<Action>AddOrUpdate</Action>"
             f"<NoteText>{_xml_escape(note_text)}</NoteText>"
             "</SetUserNotesRequest>"
         )
-        resp = self._session.post(
-            self._trading_url,
-            headers={
-                "X-EBAY-API-CALL-NAME": "SetUserNotes",
-                "X-EBAY-API-APP-NAME": self._config.client_id,
-                "X-EBAY-API-DEV-NAME": self._config.dev_id,
-                "X-EBAY-API-CERT-NAME": self._config.client_secret,
-                "X-EBAY-API-SITEID": EBAY_AU_SITE_ID,
-                "X-EBAY-API-COMPATIBILITY-LEVEL": EBAY_TRADING_VERSION,
-                "Content-Type": "text/xml",
-            },
-            data=xml_body.encode("utf-8"),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        root = ET.fromstring(resp.text)
-        ns = {"e": _TRADING_NS}
-        ack = root.find("e:Ack", ns)
-        if ack is None or ack.text not in ("Success", "Warning"):
-            errors = root.findall(".//e:Errors/e:ShortMessage", ns)
-            err_msg = "; ".join(e.text for e in errors if e.text) or "Unknown error"
-            raise EbayAPIError(f"SetUserNotes failed: {err_msg}")
+        self._call_trading_api(xml_template, "SetUserNotes")
 
     def get_item_images(self, legacy_item_ids: list[str]) -> dict[str, str]:
         """
         Fetch the primary listing image for each ItemID via Trading API GetItem.
         Returns {legacy_item_id: image_url}. Silently skips items that fail.
         """
-        if not legacy_item_ids:
-            return {}
-        try:
-            token = self._ensure_valid_token()
-        except Exception:
+        if not legacy_item_ids or not self._config.dev_id:
             return {}
 
+        ns = {"e": _TRADING_NS}
         result = {}
         for item_id in legacy_item_ids:
             if not item_id:
                 continue
-            xml_body = (
+            xml_template = (
                 '<?xml version="1.0" encoding="utf-8"?>'
                 f'<GetItemRequest xmlns="{_TRADING_NS}">'
-                f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+                "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
                 f"<ItemID>{item_id}</ItemID>"
                 "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
                 "<OutputSelector>PictureDetails</OutputSelector>"
                 "</GetItemRequest>"
             )
             try:
-                resp = self._session.post(
-                    self._trading_url,
-                    headers={
-                        "X-EBAY-API-CALL-NAME": "GetItem",
-                        "X-EBAY-API-APP-NAME": self._config.client_id,
-                        "X-EBAY-API-DEV-NAME": self._config.dev_id,
-                        "X-EBAY-API-CERT-NAME": self._config.client_secret,
-                        "X-EBAY-API-SITEID": EBAY_AU_SITE_ID,
-                        "X-EBAY-API-COMPATIBILITY-LEVEL": EBAY_TRADING_VERSION,
-                        "Content-Type": "text/xml",
-                    },
-                    data=xml_body.encode("utf-8"),
-                    timeout=15,
-                )
-                resp.raise_for_status()
-                root = ET.fromstring(resp.text)
-                ns = {"e": _TRADING_NS}
-                ack = root.find("e:Ack", ns)
-                if ack is not None and ack.text in ("Success", "Warning"):
-                    pic_url = _xml_text(root, ".//e:PictureDetails/e:PictureURL", ns)
-                    if pic_url:
-                        result[item_id] = pic_url
+                root = self._call_trading_api(xml_template, "GetItem")
+                pic_url = _xml_text(root, ".//e:PictureDetails/e:PictureURL", ns)
+                if pic_url:
+                    result[item_id] = pic_url
             except Exception:
                 continue
 
         return result
 
-    def _build_sold_list_xml(self, token: str, duration_days: int, page: int) -> str:
+    def _build_sold_list_xml(self, duration_days: int, page: int) -> str:
+        """Build GetMyeBaySelling XML with {TOKEN} placeholder for _call_trading_api."""
         return (
             '<?xml version="1.0" encoding="utf-8"?>'
             f'<GetMyeBaySellingRequest xmlns="{_TRADING_NS}">'
-            f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
             "<SoldList>"
             "<Include>true</Include>"
             f"<DurationInDays>{duration_days}</DurationInDays>"
@@ -542,13 +616,14 @@ class EbayClient:
             "</GetMyeBaySellingRequest>"
         )
 
-    def _build_transactions_xml(self, token: str, date_from: datetime, date_to: datetime, page: int) -> str:
+    def _build_transactions_xml(self, date_from: datetime, date_to: datetime, page: int) -> str:
+        """Build GetSellerTransactions XML with {TOKEN} placeholder for _call_trading_api."""
         from_str = date_from.strftime("%Y-%m-%dT00:00:00.000Z")
         to_str = date_to.strftime("%Y-%m-%dT23:59:59.000Z")
         return (
             '<?xml version="1.0" encoding="utf-8"?>'
             f'<GetSellerTransactionsRequest xmlns="{_TRADING_NS}">'
-            f"<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>"
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
             f"<CreateTimeFrom>{from_str}</CreateTimeFrom>"
             f"<CreateTimeTo>{to_str}</CreateTimeTo>"
             "<IncludeVariations>true</IncludeVariations>"

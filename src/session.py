@@ -26,7 +26,8 @@ class SessionSnapshot:
     force_matched_order_ids: list[tuple[str, str]]
 
 
-SESSION_FILENAME = "Incoming_orders_session.scar"
+def _session_filename() -> str:
+    return f"{datetime.now().strftime('%Y-%m-%d')} overdue orders session.scar"
 
 
 def save_snapshot(
@@ -42,7 +43,7 @@ def save_snapshot(
     """Save a session snapshot to a .scar file (overwrites previous). Returns the file path."""
     os.makedirs(save_dir, exist_ok=True)
 
-    filepath = os.path.join(save_dir, SESSION_FILENAME)
+    filepath = os.path.join(save_dir, _session_filename())
 
     data = {
         "version": SNAPSHOT_VERSION,

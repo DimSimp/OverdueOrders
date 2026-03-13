@@ -1,14 +1,4 @@
-- more streamlined way to refresh orders
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - auto-open Kogan platform when marking kogan orders as sent
-- fix adding notes to neto orders (possibly ebay too)
-- experiment to find the best label sizes
-- auspost express labels need to print in a single label
-- make sure orders stay in matched/unmatched if moved after refreshing orders
-
-My next request involves the labels themselves. Since we use label printers that are too small for a standard shipping label, we split the PDF and print in two sections as well. So far, I'm not entirely satisfied with the dimensions we've set, and each courier will likely need to be scaled/split differently.
-
-To help solve this issue, I want to make a small program that will help us find the ideal dimensions. Firstly, I want the main application to save the next label PDF from each courier next time it is created. So for example, the next DAI Post label that gets created should be saved separately before the splitting/printing process continues. Once the next DAI Post label is saved, we can set a flag so this step can be skipped in the future. We can save the label to the folder called "Test Labels". We will include this process for Aramex, Australia Post, Allied Express, and Bonds couriers.
-
-With the labels saved, I then want to open a simple applicaiton in which we can change the scale/slicing position and re-print the label to test if it looks okay. Once I am satisfied, we can store the values used and incorporate them into the main app. These values will be courier specific, so this is why I want to save one of each courier label, as we will need to differentiate them
-
+- add an option to the order fulfillment screen to send an order to unmatched
+- ebay notes are being displayed successfully, but not updated. We also need to remove the notes section from the bottom of the fulfillment screen, as it just summarises all of the individual notes.

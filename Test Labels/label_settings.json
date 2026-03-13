@@ -1,0 +1,17 @@
+{
+  "aramex": {
+    "scale": 1.5,
+    "split_ratio": 0.55,
+    "label_length_mm": 80.0
+  },
+  "dai_post": {
+    "scale": 1.5,
+    "split_ratio": 0.54,
+    "label_length_mm": 0.0
+  },
+  "auspost": {
+    "scale": 1.5,
+    "split_ratio": 0.58,
+    "label_length_mm": 70.0
+  }
+}

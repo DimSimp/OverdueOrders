@@ -140,7 +140,7 @@ class AusPostCourier(BaseCourier):
             "shipments": [{
                 "shipment_reference": request.order_id,
                 "customer_reference_1": request.order_id,
-                "email_tracking_enabled": True,
+                "email_tracking_enabled": bool(recv.email),
                 "from": {
                     "name": sender.name,
                     "business_name": sender.company,

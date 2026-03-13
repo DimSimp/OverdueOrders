@@ -82,7 +82,9 @@ def export_to_xlsx(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    filepath = out_path / "Matched_orders.xlsx"
+    from datetime import date
+    filename = f"{date.today().isoformat()} matched orders.xlsx"
+    filepath = out_path / filename
     wb.save(filepath)
 
     return str(filepath.resolve())
@@ -154,16 +156,22 @@ def _write_summary_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:
             # Blank separator after each order
             row += 1
 
-    # Print setup: A4 landscape, fit all columns to one page wide, auto height
-    ws.page_setup.paperSize  = "9"          # A4
-    ws.page_setup.orientation = "landscape"
+    # Print setup: A4 portrait, fit all columns to one page wide, auto height
+    ws.page_setup.paperSize   = "9"          # A4
+    ws.page_setup.orientation = "portrait"
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0           # unlimited rows
     ws.page_margins.left   = 0.5
     ws.page_margins.right  = 0.5
-    ws.page_margins.top    = 0.75
+    ws.page_margins.top    = 0.90           # extra space for header
     ws.page_margins.bottom = 0.75
+    ws.page_margins.header = 0.3
+
+    # Page number top-right in size-20 font
+    ws.oddHeader.right.text = "&20&P"
+    ws.evenHeader.right.text = "&20&P"
+    ws.page_setup.differentOddEven = False
 
 
 def _apply_order_borders(ws, start_row: int, end_row: int) -> None:

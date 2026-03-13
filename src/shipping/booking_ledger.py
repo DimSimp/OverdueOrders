@@ -76,17 +76,56 @@ def get_todays_bookings(directory: str | Path) -> list[dict]:
     return [r for r in records if not r.get("cancelled")]
 
 
-def mark_cancelled(directory: str | Path, tracking_number: str) -> bool:
-    """Mark a booking as cancelled in today's ledger. Returns True if found."""
-    path = _today_file(directory)
-    records = _read(path)
-    found = False
-    for r in records:
-        if r.get("tracking_number") == tracking_number and not r.get("cancelled"):
-            r["cancelled"] = True
-            found = True
+def get_all_bookings(directory: str | Path, days: int = 60) -> list[dict]:
+    """Return all non-cancelled bookings from the last *days* days, newest first.
+
+    Each record is augmented with a ``"date"`` key (ISO date string from the
+    filename) so callers can display when the booking was made.
+    """
+    from datetime import timedelta
+    dir_path = Path(directory)
+    if not dir_path.exists():
+        return []
+
+    cutoff = date.today() - timedelta(days=days)
+    results: list[dict] = []
+
+    for json_file in sorted(dir_path.glob("????-??-??.json"), reverse=True):
+        try:
+            file_date = date.fromisoformat(json_file.stem)
+        except ValueError:
+            continue
+        if file_date < cutoff:
             break
-    if found:
-        _write(path, records)
-        log.info("Ledger: marked %s as cancelled", tracking_number)
-    return found
+        for record in _read(json_file):
+            if not record.get("cancelled"):
+                results.append({**record, "date": json_file.stem})
+
+    return results
+
+
+def mark_cancelled(
+    directory: str | Path,
+    tracking_number: str,
+    booking_date: str | None = None,
+) -> bool:
+    """Mark a booking as cancelled in the ledger. Returns True if found.
+
+    If *booking_date* (ISO date string, e.g. ``"2026-03-11"``) is supplied the
+    matching day-file is updated directly; otherwise today's file is searched.
+    """
+    dir_path = Path(directory)
+    if booking_date:
+        candidates = [dir_path / f"{booking_date}.json"]
+    else:
+        candidates = [_today_file(directory)]
+
+    for path in candidates:
+        records = _read(path)
+        for r in records:
+            if r.get("tracking_number") == tracking_number and not r.get("cancelled"):
+                r["cancelled"] = True
+                _write(path, records)
+                log.info("Ledger: marked %s as cancelled in %s", tracking_number, path.name)
+                return True
+    return False

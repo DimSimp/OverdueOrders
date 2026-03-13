@@ -78,6 +78,8 @@ class AppConfig:
     output_dir: str
     dry_run: bool = True
     snapshot_dir: str = ""
+    lists_dir: str = ""    # preferred save location for exported spreadsheets
+    session_dir: str = ""  # preferred save location for session files
     inventory_csv: str = "inventory.CSV"
     sku_corrections_file: str = "sku_corrections.csv"
 
@@ -170,6 +172,8 @@ class ConfigManager:
             output_dir=a.get("output_dir", "output"),
             dry_run=a.get("dry_run", True),
             snapshot_dir=a.get("snapshot_dir", ""),
+            lists_dir=a.get("lists_dir", ""),
+            session_dir=a.get("session_dir", ""),
             inventory_csv=a.get("inventory_csv", "inventory.CSV"),
             sku_corrections_file=a.get("sku_corrections_file", "sku_corrections.csv"),
         )
@@ -231,6 +235,11 @@ class ConfigManager:
         self.ebay.access_token_expires_at = expires_at
         if refresh_token is not None:
             self.ebay.refresh_token = refresh_token
+
+    def save_ebay_user_token(self, user_token: str) -> None:
+        self._raw["ebay"]["user_token"] = user_token
+        self.save()
+        self.ebay.user_token = user_token
 
     def get_supplier_by_name(self, name: str) -> SupplierConfig | None:
         for s in self.suppliers:

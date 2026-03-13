@@ -15,6 +15,19 @@ from src.gui.order_detail_view import OrderDetailView
 from src.pdf_parser import InvoiceItem
 
 
+def _resolve_save_dir(preferred: str, fallback: str) -> str:
+    """Return *preferred* if it can be created/accessed, otherwise *fallback*."""
+    from pathlib import Path
+    if preferred:
+        try:
+            Path(preferred).mkdir(parents=True, exist_ok=True)
+            return preferred
+        except Exception:
+            pass
+    Path(fallback).mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
 def _numeric_sort_key(value: str) -> tuple:
     """Sort key that puts numeric values first, then alphabetic."""
     match = re.match(r"^(\d+)", value.strip())
@@ -620,15 +633,31 @@ class ResultsTab(ctk.CTkFrame):
         for name in ("Matched Orders", "Unmatched Invoice Items", "Unmatched Orders"):
             self._inner_tabs.add(name)
 
-        # Matched Orders tree
+        # Matched Orders tab — treeview + refresh button row
+        _matched_container = ctk.CTkFrame(
+            self._inner_tabs.tab("Matched Orders"), fg_color="transparent"
+        )
+        _matched_container.pack(fill="both", expand=True)
+        _matched_container.grid_rowconfigure(0, weight=1)
+        _matched_container.grid_columnconfigure(0, weight=1)
+
         self._matched_tree = OrderTreeview(
-            self._inner_tabs.tab("Matched Orders"),
+            _matched_container,
             col_spec=_MATCHED_COL_SPEC,
             on_row_click=self._open_detail_view,
             on_context_action=self._exclude_order,
             context_label="Move to Unmatched",
         )
-        self._matched_tree.pack(fill="both", expand=True)
+        self._matched_tree.grid(row=0, column=0, sticky="nsew")
+
+        _matched_btn_row = ctk.CTkFrame(_matched_container, fg_color="transparent")
+        _matched_btn_row.grid(row=1, column=0, sticky="ew", pady=(4, 2))
+        self._refresh_matched_btn = ctk.CTkButton(
+            _matched_btn_row, text="Refresh Matched", width=140,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._refresh_matched_orders,
+        )
+        self._refresh_matched_btn.pack(side="left", padx=(4, 0))
 
         # Unmatched Invoice Items tree (flat)
         self._inv_tree = OrderTreeview(
@@ -637,9 +666,16 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._inv_tree.pack(fill="both", expand=True)
 
-        # Unmatched Orders tree
+        # Unmatched Orders tab — label, treeview, refresh button row
+        _unmatched_container = ctk.CTkFrame(
+            self._inner_tabs.tab("Unmatched Orders"), fg_color="transparent"
+        )
+        _unmatched_container.pack(fill="both", expand=True)
+        _unmatched_container.grid_rowconfigure(1, weight=1)
+        _unmatched_container.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            self._inner_tabs.tab("Unmatched Orders"),
+            _unmatched_container,
             text=(
                 "Neto: 'on PO' orders (paid, undispatched) whose SKUs did not match the invoice.\n"
                 "eBay: all paid, unfulfilled orders whose SKUs did not match the invoice.\n\n"
@@ -647,15 +683,24 @@ class ResultsTab(ctk.CTkFrame):
             ),
             font=ctk.CTkFont(size=13),
             justify="left",
-        ).pack(padx=20, pady=(16, 4), anchor="nw")
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 4))
 
         self._unmatched_orders_tree = OrderTreeview(
-            self._inner_tabs.tab("Unmatched Orders"),
+            _unmatched_container,
             col_spec=_UNMATCHED_ORD_COL_SPEC,
             on_context_action=self._include_order,
             context_label="Move to Matched",
         )
-        self._unmatched_orders_tree.pack(fill="both", expand=True)
+        self._unmatched_orders_tree.grid(row=1, column=0, sticky="nsew")
+
+        _unmatched_btn_row = ctk.CTkFrame(_unmatched_container, fg_color="transparent")
+        _unmatched_btn_row.grid(row=2, column=0, sticky="ew", pady=(4, 2))
+        self._refresh_unmatched_btn = ctk.CTkButton(
+            _unmatched_btn_row, text="Refresh Unmatched", width=150,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._refresh_unmatched_orders,
+        )
+        self._refresh_unmatched_btn.pack(side="left", padx=(4, 0))
 
         # ── Bottom row ────────────────────────────────────────────────────
         bottom = ctk.CTkFrame(parent, fg_color="transparent")
@@ -665,13 +710,6 @@ class ResultsTab(ctk.CTkFrame):
             bottom, text="Export to Excel", width=140, command=self._export_csv,
         )
         self._export_btn.pack(side="left")
-
-        self._refresh_btn = ctk.CTkButton(
-            bottom, text="Refresh Orders", width=130,
-            fg_color=("dodgerblue3", "dodgerblue4"),
-            command=self._refresh_orders,
-        )
-        self._refresh_btn.pack(side="left", padx=(12, 0))
 
         self._save_session_btn = ctk.CTkButton(
             bottom, text="Save Session As", width=130,
@@ -814,7 +852,7 @@ class ResultsTab(ctk.CTkFrame):
         for m in sorted(matched, key=_platform_key):
             key = (m.platform, m.order_id)
             if key not in seen:
-                date_str = m.order_date.strftime("%Y-%m-%d") if m.order_date else ""
+                date_str = m.order_date.strftime("%d/%m/%Y") if m.order_date else ""
                 seen[key] = len(groups)
                 groups.append({
                     "order_id": m.order_id,
@@ -856,7 +894,7 @@ class ResultsTab(ctk.CTkFrame):
             channel = order.sales_channel or "Neto"
             if (channel, order.order_id) in matched_ids:
                 continue
-            date_str = order.date_paid.strftime("%Y-%m-%d") if order.date_paid else ""
+            date_str = order.date_paid.strftime("%d/%m/%Y") if order.date_paid else ""
             key = (channel, order.order_id)
             if key not in seen:
                 seen[key] = len(groups)
@@ -880,7 +918,7 @@ class ResultsTab(ctk.CTkFrame):
         for order in self._ebay_orders:
             if ("eBay", order.order_id) in matched_ids:
                 continue
-            date_str = order.creation_date.strftime("%Y-%m-%d") if order.creation_date else ""
+            date_str = order.creation_date.strftime("%d/%m/%Y") if order.creation_date else ""
             key = ("eBay", order.order_id)
             if key not in seen:
                 seen[key] = len(groups)
@@ -890,7 +928,7 @@ class ResultsTab(ctk.CTkFrame):
                     "customer": order.buyer_name,
                     "date": date_str,
                     "shipping": order.shipping_type,
-                    "notes": "",
+                    "notes": order.buyer_notes,
                     "line_items": [],
                 })
             for line in order.line_items:
@@ -1028,7 +1066,7 @@ class ResultsTab(ctk.CTkFrame):
 
     def _on_fulfilled(self):
         self._close_detail_view()
-        self._refresh_orders()
+        self._refresh_matched_orders()
 
     # ── Freight Booking View ─────────────────────────────────────────────
 
@@ -1105,36 +1143,41 @@ class ResultsTab(ctk.CTkFrame):
 
     # ── Orders refresh ────────────────────────────────────────────────────
 
-    def _refresh_orders(self):
-        self._error_label.configure(text="Refreshing orders...")
-        self._refresh_btn.configure(state="disabled")
-        self.update_idletasks()
+    # ── Targeted refresh helpers ──────────────────────────────────────────
 
-        def _fetch():
-            try:
-                from datetime import datetime, timedelta
-                lookback = self._app.config.app.order_lookback_days
-                date_to = datetime.now()
-                date_from = date_to - timedelta(days=lookback)
+    def _targeted_fetch(self, neto_ids: list[str], ebay_ids: list[str]):
+        """Background: fetch specific Neto + eBay orders by ID. Returns (neto, ebay) lists."""
+        fresh_neto = self._app.neto_client.get_orders_by_ids(neto_ids) if neto_ids else []
+        fresh_ebay = []
+        if ebay_ids and self._app.ebay_client.is_authenticated():
+            fresh_ebay = self._app.ebay_client.get_orders_by_ids(ebay_ids)
+        return fresh_neto, fresh_ebay
 
-                neto_orders = self._app.neto_client.get_overdue_orders(date_from, date_to)
-                ebay_orders = []
-                if self._app.ebay_client.is_authenticated():
-                    ebay_orders = self._app.ebay_client.get_overdue_orders(date_from, date_to)
+    def _apply_targeted_refresh(
+        self,
+        fresh_neto: list,
+        fresh_ebay: list,
+        old_neto_ids: list[str],
+        old_ebay_ids: list[str],
+    ):
+        """Merge fresh order data into in-memory lists, drop any no longer valid."""
+        fresh_neto_map = {o.order_id: o for o in fresh_neto}
+        fresh_ebay_map = {o.order_id: o for o in fresh_ebay}
+        old_neto_set = set(old_neto_ids)
+        old_ebay_set = set(old_ebay_ids)
 
-                self.after(0, lambda: self._apply_refreshed_orders(neto_orders, ebay_orders))
-            except Exception as e:
-                err_msg = f"Refresh failed: {e}"
-                self.after(0, lambda m=err_msg: self._error_label.configure(text=m))
-                self.after(0, lambda: self._refresh_btn.configure(state="normal"))
-
-        threading.Thread(target=_fetch, daemon=True).start()
-
-    def _apply_refreshed_orders(self, neto_orders, ebay_orders):
-        self._app.neto_orders = neto_orders
-        self._app.ebay_orders = ebay_orders
-        self._neto_orders = neto_orders
-        self._ebay_orders = ebay_orders
+        self._neto_orders = [
+            fresh_neto_map[o.order_id] if o.order_id in old_neto_set else o
+            for o in self._neto_orders
+            if o.order_id not in old_neto_set or o.order_id in fresh_neto_map
+        ]
+        self._ebay_orders = [
+            fresh_ebay_map[o.order_id] if o.order_id in old_ebay_set else o
+            for o in self._ebay_orders
+            if o.order_id not in old_ebay_set or o.order_id in fresh_ebay_map
+        ]
+        self._app.neto_orders = self._neto_orders
+        self._app.ebay_orders = self._ebay_orders
 
         invoice_items = self._app.invoice_tab.get_invoice_items()
         matched, unmatched_inv = match_orders_to_invoice(
@@ -1145,19 +1188,82 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._matched = matched
         self._unmatched_inv = unmatched_inv
-        self._excluded_order_ids.clear()
-        self._force_matched_order_ids.clear()
         self._refresh_tables()
-        self._refresh_btn.configure(state="normal")
         self._error_label.configure(text="")
+        self._auto_save_session()
+
+    # ── Matched orders refresh ────────────────────────────────────────────
+
+    def _refresh_matched_orders(self):
+        """Re-fetch only the orders currently in the matched list."""
+        neto_ids = list(dict.fromkeys(
+            m.order_id for m in self._matched if m.platform.lower() != "ebay"
+        ))
+        ebay_ids = list(dict.fromkeys(
+            m.order_id for m in self._matched if m.platform.lower() == "ebay"
+        ))
+        self._refresh_matched_btn.configure(state="disabled")
+        self._error_label.configure(text="Refreshing matched orders…")
+
+        def _fetch():
+            try:
+                fresh_neto, fresh_ebay = self._targeted_fetch(neto_ids, ebay_ids)
+                self.after(0, lambda: self._on_matched_refresh_done(
+                    fresh_neto, fresh_ebay, neto_ids, ebay_ids))
+            except Exception as e:
+                msg = f"Refresh failed: {e}"
+                self.after(0, lambda m=msg: self._error_label.configure(text=m))
+                self.after(0, lambda: self._refresh_matched_btn.configure(state="normal"))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_matched_refresh_done(self, fresh_neto, fresh_ebay, neto_ids, ebay_ids):
+        self._apply_targeted_refresh(fresh_neto, fresh_ebay, neto_ids, ebay_ids)
+        self._refresh_matched_btn.configure(state="normal")
+
+    # ── Unmatched orders refresh ──────────────────────────────────────────
+
+    def _refresh_unmatched_orders(self):
+        """Re-fetch only the orders currently in the unmatched orders list."""
+        matched_ids = {(m.platform, m.order_id) for m in self._matched}
+        neto_ids = list(dict.fromkeys(
+            o.order_id for o in self._neto_orders
+            if ((o.sales_channel or "Neto"), o.order_id) not in matched_ids
+        ))
+        ebay_ids = list(dict.fromkeys(
+            o.order_id for o in self._ebay_orders
+            if ("eBay", o.order_id) not in matched_ids
+        ))
+        self._refresh_unmatched_btn.configure(state="disabled")
+        self._error_label.configure(text="Refreshing unmatched orders…")
+
+        def _fetch():
+            try:
+                fresh_neto, fresh_ebay = self._targeted_fetch(neto_ids, ebay_ids)
+                self.after(0, lambda: self._on_unmatched_refresh_done(
+                    fresh_neto, fresh_ebay, neto_ids, ebay_ids))
+            except Exception as e:
+                msg = f"Refresh failed: {e}"
+                self.after(0, lambda m=msg: self._error_label.configure(text=m))
+                self.after(0, lambda: self._refresh_unmatched_btn.configure(state="normal"))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_unmatched_refresh_done(self, fresh_neto, fresh_ebay, neto_ids, ebay_ids):
+        self._apply_targeted_refresh(fresh_neto, fresh_ebay, neto_ids, ebay_ids)
+        self._refresh_unmatched_btn.configure(state="normal")
 
     # ── Save session ──────────────────────────────────────────────────────
 
     def _auto_save_session(self):
-        """Silently save session to the default location on every refresh."""
+        """Silently save session to the preferred location on every refresh."""
         try:
             from src.session import save_snapshot
-            save_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
+            cfg = self._app.config.app
+            save_dir = _resolve_save_dir(
+                preferred=cfg.session_dir,
+                fallback=cfg.snapshot_dir or cfg.output_dir,
+            )
             invoice_items = self._app.invoice_tab.get_invoice_items()
             save_snapshot(
                 save_dir=save_dir,
@@ -1174,14 +1280,11 @@ class ResultsTab(ctk.CTkFrame):
 
     def _save_session_as(self):
         from src.session import save_snapshot
-        initial_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
-        save_dir = filedialog.askdirectory(
-            title="Choose snapshot save location",
-            initialdir=initial_dir,
-            parent=self,
+        cfg = self._app.config.app
+        save_dir = _resolve_save_dir(
+            preferred=cfg.session_dir,
+            fallback=cfg.snapshot_dir or cfg.output_dir,
         )
-        if not save_dir:
-            return
         try:
             invoice_items = self._app.invoice_tab.get_invoice_items()
             path = save_snapshot(
@@ -1201,19 +1304,26 @@ class ResultsTab(ctk.CTkFrame):
     # ── Shipment cancellation ────────────────────────────────────────────
 
     def _open_cancel_shipment_dialog(self):
-        """Open a dialog to cancel a shipment — shows today's bookings + manual entry."""
+        """Open a dialog listing all recent bookings — click one to cancel it."""
         shipping = self._app.config.shipping
         if shipping is None:
             messagebox.showerror("Not configured", "Shipping is not configured.", parent=self)
             return
 
-        # Build courier instances for enabled couriers
+        bookings_dir = shipping.bookings_dir
+        if not bookings_dir:
+            messagebox.showerror("Not configured", "Bookings directory is not configured.", parent=self)
+            return
+
+        from src.shipping.booking_ledger import get_all_bookings, mark_cancelled
+        all_bookings = get_all_bookings(bookings_dir)
+
+        # Build courier instances (needed for the cancel API call)
         from src.shipping.couriers.allied import AlliedCourier
         from src.shipping.couriers.aramex import AramexCourier
         from src.shipping.couriers.auspost import AusPostCourier
         from src.shipping.couriers.bonds import BondsCourier
         from src.shipping.couriers.dai_post import DaiPostCourier
-
         courier_registry = {
             "auspost": AusPostCourier,
             "aramex": AramexCourier,
@@ -1222,211 +1332,166 @@ class ResultsTab(ctk.CTkFrame):
             "dai_post": DaiPostCourier,
         }
         couriers_by_code = {}
-        courier_names = []
         for code, cls in courier_registry.items():
             cfg = shipping.couriers.get(code, {})
             if cfg.get("enabled", False):
                 couriers_by_code[code] = cls(cfg)
-                courier_names.append(cls.name)
 
-        if not couriers_by_code:
-            messagebox.showerror("Not configured", "No couriers are enabled.", parent=self)
-            return
-
-        # Load today's bookings from ledger
-        bookings_dir = shipping.bookings_dir
-        todays_bookings = []
-        if bookings_dir:
-            from src.shipping.booking_ledger import get_todays_bookings
-            todays_bookings = get_todays_bookings(bookings_dir)
-
+        # ── Window ──
         win = tk.Toplevel(self)
         win.title("Cancel Shipment")
-        win.resizable(False, False)
+        win.resizable(True, False)
         win.grab_set()
 
-        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=420)
-        cancel_btn = None  # forward ref
+        tk.Label(
+            win, text="Select a booking to cancel:",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(padx=16, pady=(12, 6), anchor="w")
 
-        # ── Today's bookings list ──
-        if todays_bookings:
-            tk.Label(
-                win, text="Today's bookings:", font=("Segoe UI", 11, "bold"),
-            ).pack(padx=16, pady=(12, 4), anchor="w")
+        # ── Treeview ──
+        tree_frame = tk.Frame(win)
+        tree_frame.pack(fill="x", padx=16, pady=(0, 8))
 
-            list_frame = tk.Frame(win)
-            list_frame.pack(fill="x", padx=16, pady=(0, 8))
+        columns = ("date", "time", "courier", "order", "recipient", "tracking")
+        tree = ttk.Treeview(
+            tree_frame, columns=columns, show="headings",
+            height=min(max(len(all_bookings), 1), 12),
+            selectmode="browse",
+        )
+        tree.heading("date",      text="Date")
+        tree.heading("time",      text="Time")
+        tree.heading("courier",   text="Courier")
+        tree.heading("order",     text="Order")
+        tree.heading("recipient", text="Recipient")
+        tree.heading("tracking",  text="Tracking #")
+        tree.column("date",      width=90,  stretch=False)
+        tree.column("time",      width=55,  stretch=False)
+        tree.column("courier",   width=120, stretch=False)
+        tree.column("order",     width=90,  stretch=False)
+        tree.column("recipient", width=140)
+        tree.column("tracking",  width=160)
 
-            columns = ("courier", "tracking", "order", "recipient", "time")
-            tree = ttk.Treeview(
-                list_frame, columns=columns, show="headings", height=min(len(todays_bookings), 8),
-                selectmode="browse",
-            )
-            tree.heading("courier", text="Courier")
-            tree.heading("tracking", text="Tracking #")
-            tree.heading("order", text="Order")
-            tree.heading("recipient", text="Recipient")
-            tree.heading("time", text="Time")
-            tree.column("courier", width=110, stretch=False)
-            tree.column("tracking", width=140)
-            tree.column("order", width=90, stretch=False)
-            tree.column("recipient", width=120)
-            tree.column("time", width=70, stretch=False)
+        # iid → booking record (so we can look up extras + date on cancel)
+        _iid_to_booking: dict[str, dict] = {}
 
-            for b in todays_bookings:
+        if all_bookings:
+            for b in all_bookings:
                 booked_time = b.get("booked_at", "")
                 if "T" in booked_time:
                     booked_time = booked_time.split("T")[1][:5]
-                tree.insert("", "end", values=(
+                iid = tree.insert("", "end", values=(
+                    b.get("date", ""),
+                    booked_time,
                     b.get("courier_name", ""),
-                    b.get("tracking_number", ""),
                     b.get("order_id", ""),
                     b.get("recipient", ""),
-                    booked_time,
+                    b.get("tracking_number", ""),
                 ))
-            tree.pack(fill="x")
+                _iid_to_booking[iid] = b
+        else:
+            tree.insert("", "end", values=("", "", "No bookings found", "", "", ""))
 
-            def _cancel_selected():
-                sel = tree.selection()
-                if not sel:
-                    status_lbl.configure(text="Select a booking from the list.", fg="red")
-                    return
-                vals = tree.item(sel[0], "values")
-                courier_name, tracking = vals[0], vals[1]
-                _do_cancel(courier_name, tracking)
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        tree_frame.grid_columnconfigure(0, weight=1)
 
-            sel_btn_frame = tk.Frame(win)
-            sel_btn_frame.pack(pady=(0, 4))
-            tk.Button(
-                sel_btn_frame, text="Cancel Selected Booking", font=("Segoe UI", 10),
-                bg="#b22222", fg="white", activebackground="#8b0000",
-                width=24, command=_cancel_selected,
-            ).pack()
+        # ── Buttons ──
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(pady=(4, 4))
 
-            # Separator
-            ttk.Separator(win, orient="horizontal").pack(fill="x", padx=16, pady=8)
-
-        # ── Manual entry fallback ──
-        tk.Label(
-            win, text="Or enter tracking number manually:",
-            font=("Segoe UI", 11, "bold" if not todays_bookings else "normal"),
-        ).pack(padx=16, pady=(12 if not todays_bookings else 0, 4), anchor="w")
-
-        manual_frame = tk.Frame(win)
-        manual_frame.pack(fill="x", padx=16, pady=(0, 8))
-
-        tk.Label(manual_frame, text="Courier:", font=("Segoe UI", 10)).grid(
-            row=0, column=0, sticky="w", pady=2)
-        courier_var = tk.StringVar(value=courier_names[0] if courier_names else "")
-        courier_dropdown = ttk.Combobox(
-            manual_frame, textvariable=courier_var, values=courier_names,
-            state="readonly", width=20, font=("Segoe UI", 10),
-        )
-        courier_dropdown.grid(row=0, column=1, sticky="w", padx=(8, 0), pady=2)
-
-        tk.Label(manual_frame, text="Tracking #:", font=("Segoe UI", 10)).grid(
-            row=1, column=0, sticky="w", pady=2)
-        entry_var = tk.StringVar()
-        entry = tk.Entry(manual_frame, textvariable=entry_var, width=28, font=("Segoe UI", 10))
-        entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=2)
-        entry.focus_set()
-
-        manual_btn_frame = tk.Frame(win)
-        manual_btn_frame.pack(pady=(4, 4))
-
-        def _cancel_manual():
-            courier_name = courier_var.get().strip()
-            tracking = entry_var.get().strip()
-            if not courier_name:
-                status_lbl.configure(text="Please select a courier.", fg="red")
-                return
-            if not tracking:
-                status_lbl.configure(text="Please enter a tracking number.", fg="red")
-                return
-            _do_cancel(courier_name, tracking)
-
-        tk.Button(
-            manual_btn_frame, text="Cancel This Shipment", font=("Segoe UI", 10),
+        cancel_btn = tk.Button(
+            btn_frame, text="Cancel Selected Shipment", font=("Segoe UI", 10),
             bg="#b22222", fg="white", activebackground="#8b0000",
-            width=24, command=_cancel_manual,
-        ).pack()
+            width=26, state="disabled", command=lambda: _confirm_cancel(),
+        )
+        cancel_btn.pack(side="left", padx=(0, 8))
 
-        # ── Status & close ──
-        status_lbl.pack(padx=16, pady=(8, 4))
-
-        close_frame = tk.Frame(win)
-        close_frame.pack(pady=(0, 12))
         tk.Button(
-            close_frame, text="Close", font=("Segoe UI", 10), width=10,
+            btn_frame, text="Close", font=("Segoe UI", 10), width=10,
             command=win.destroy,
-        ).pack()
+        ).pack(side="left")
 
-        # ── Shared cancel logic ──
-        def _do_cancel(courier_name: str, tracking: str):
-            # Find the courier instance by display name
-            courier = None
-            courier_code = ""
-            for code, c in couriers_by_code.items():
-                if c.name == courier_name:
-                    courier = c
-                    courier_code = code
-                    break
+        # ── Status label ──
+        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=500, fg="gray40")
+        status_lbl.pack(padx=16, pady=(4, 12))
+
+        # Enable cancel button when a row is selected
+        def _on_select(_event=None):
+            sel = tree.selection()
+            has_bookings = bool(all_bookings)
+            cancel_btn.configure(state="normal" if sel and has_bookings else "disabled")
+
+        tree.bind("<<TreeviewSelect>>", _on_select)
+        tree.bind("<Double-1>", lambda _e: _confirm_cancel())
+
+        # ── Cancel logic ──
+        def _confirm_cancel():
+            sel = tree.selection()
+            if not sel:
+                return
+            iid = sel[0]
+            booking = _iid_to_booking.get(iid)
+            if not booking:
+                return
+
+            courier_code = booking.get("courier_code", "")
+            courier_name = booking.get("courier_name", "")
+            tracking = booking.get("tracking_number", "")
+            booking_date = booking.get("date", "")
+
+            courier = couriers_by_code.get(courier_code)
             if courier is None:
                 status_lbl.configure(
-                    text=f"No enabled courier found for '{courier_name}'.", fg="red")
+                    text=f"Courier '{courier_name}' is not enabled — cannot cancel via API.",
+                    fg="red",
+                )
                 return
 
-            confirm = messagebox.askyesno(
-                "Confirm cancellation",
-                f"Cancel {courier_name} shipment\n{tracking}\n\nThis cannot be undone.",
+            confirmed = messagebox.askyesno(
+                "Confirm Cancellation",
+                f"Cancel {courier_name} shipment?\n\n"
+                f"Order:    {booking.get('order_id', '')}\n"
+                f"Tracking: {tracking}\n"
+                f"Date:     {booking_date}\n\n"
+                "This cannot be undone.",
                 parent=win,
             )
-            if not confirm:
+            if not confirmed:
                 return
 
-            status_lbl.configure(text="Cancelling…", fg="gray")
+            cancel_btn.configure(state="disabled")
+            status_lbl.configure(text="Cancelling…", fg="gray40")
             win.update_idletasks()
 
-            # Look up extras from ledger (e.g. shipment_id for AusPost, postcode for Allied)
+            # Build courier-specific kwargs from extras
             cancel_kwargs = {}
-            for b in todays_bookings:
-                if b.get("tracking_number") == tracking and not b.get("cancelled"):
-                    extras = b.get("extras", {})
-                    if extras.get("booking_reference"):
-                        cancel_kwargs["shipment_id"] = extras["booking_reference"]
-                    if extras.get("postcode"):
-                        cancel_kwargs["postcode"] = extras["postcode"]
-                    break
+            extras = booking.get("extras", {})
+            if extras.get("booking_reference"):
+                cancel_kwargs["shipment_id"] = extras["booking_reference"]
+            if extras.get("postcode"):
+                cancel_kwargs["postcode"] = extras["postcode"]
 
             def _run():
                 ok, msg = courier.cancel_shipment(tracking, **cancel_kwargs)
-                win.after(0, _on_done, ok, msg, tracking)
+                win.after(0, lambda: _on_done(ok, msg, iid, tracking, booking_date))
 
-            def _on_done(ok: bool, msg: str, trk: str):
+            def _on_done(ok: bool, msg: str, row_iid: str, trk: str, bdate: str):
                 if ok:
                     status_lbl.configure(
-                        text=f"Cancelled successfully.\n{msg}", fg="green")
-                    # Mark cancelled in ledger
-                    if bookings_dir:
-                        try:
-                            from src.shipping.booking_ledger import mark_cancelled
-                            mark_cancelled(bookings_dir, trk)
-                        except Exception:
-                            pass
-                    # Remove from treeview if present
-                    if todays_bookings:
-                        for item in tree.get_children():
-                            if tree.item(item, "values")[1] == trk:
-                                tree.delete(item)
-                                break
+                        text=f"Cancelled successfully.  {msg}", fg="green")
+                    try:
+                        mark_cancelled(bookings_dir, trk, booking_date=bdate)
+                    except Exception:
+                        pass
+                    tree.delete(row_iid)
+                    del _iid_to_booking[row_iid]
                 else:
-                    status_lbl.configure(
-                        text=f"Cancellation failed:\n{msg}", fg="red")
+                    status_lbl.configure(text=f"Cancellation failed:\n{msg}", fg="red")
+                    cancel_btn.configure(state="normal")
 
             threading.Thread(target=_run, daemon=True).start()
-
-        # Allow Enter key to trigger manual cancel
-        win.bind("<Return>", lambda _e: _cancel_manual())
 
     # ── Export ────────────────────────────────────────────────────────────
 
@@ -1435,9 +1500,14 @@ class ResultsTab(ctk.CTkFrame):
             messagebox.showinfo("No Data", "There are no matched orders to export.")
             return
         try:
+            cfg = self._app.config.app
+            output_dir = _resolve_save_dir(
+                preferred=cfg.lists_dir,
+                fallback=cfg.output_dir,
+            )
             path = export_to_xlsx(
                 self._app.matched_orders,
-                output_dir=self._app.config.app.output_dir,
+                output_dir=output_dir,
             )
             self._export_label.configure(text=f"Saved: {path}", text_color="green")
             self._error_label.configure(text="")

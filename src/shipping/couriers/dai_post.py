@@ -52,6 +52,12 @@ class DaiPostCourier(BaseCourier):
         self._password = config.get("password", "")
         self._account = config.get("account", "SCA")
         self._origin_terminal = config.get("origin_terminal", "TME")
+        # Legacy PostgreSQL connection (dai_post manifest table)
+        self._db_host = config.get("db_host", "")
+        self._db_port = int(config.get("db_port", 5432))
+        self._db_name = config.get("db_name", "postgres")
+        self._db_user = config.get("db_user", "")
+        self._db_password = config.get("db_password", "")
 
     def is_available(self, request: ShipmentRequest) -> bool:
         if not self._postcodes_file or not self._rates_file:
@@ -185,6 +191,74 @@ class DaiPostCourier(BaseCourier):
                 error=str(exc),
             )]
 
+    # ── Legacy DB helpers ─────────────────────────────────────────────────
+
+    def _db_connect(self):
+        """Return a psycopg2 connection to the legacy PostgreSQL database, or None."""
+        if not self._db_host or not self._db_user:
+            return None
+        try:
+            import psycopg2  # type: ignore
+            return psycopg2.connect(
+                host=self._db_host,
+                port=self._db_port,
+                database=self._db_name,
+                user=self._db_user,
+                password=self._db_password,
+                connect_timeout=5,
+            )
+        except Exception as exc:
+            log.warning("DAI Post: cannot connect to legacy DB: %s", exc)
+            return None
+
+    def _db_next_job_number(self) -> int | None:
+        """Return MAX(job_number) from the dai_post table, or None on failure.
+
+        The legacy manifest script also uses MAX (not MAX+1), so all bookings
+        in the same batch share the same job_number and appear together in the
+        legacy delete-orders list.
+        """
+        conn = self._db_connect()
+        if conn is None:
+            return None
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(job_number) FROM dai_post;")
+            row = cur.fetchone()
+            cur.close()
+            max_val = row[0] if row and row[0] is not None else 0
+            return int(max_val)
+        except Exception as exc:
+            log.warning("DAI Post: failed to fetch max job_number: %s", exc)
+            return None
+        finally:
+            conn.close()
+
+    def _db_insert_booking(self, customer_name: str, tracking_number: str, job_number: int) -> None:
+        """Insert a completed booking into the legacy dai_post manifest table."""
+        conn = self._db_connect()
+        if conn is None:
+            return
+        try:
+            from datetime import datetime
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO dai_post(customer_name, tracking_number, time_created, job_number) "
+                "VALUES (%s, %s, %s, %s);",
+                (customer_name, tracking_number, now, job_number),
+            )
+            conn.commit()
+            cur.close()
+            log.info(
+                "DAI Post: inserted manifest record — tracking=%s job=%d",
+                tracking_number, job_number,
+            )
+        except Exception as exc:
+            log.warning("DAI Post: failed to insert manifest record: %s", exc)
+        finally:
+            conn.close()
+
     def book(self, request: ShipmentRequest, quote=None) -> BookingResult:
         """Book a DAI Post shipment and return tracking number + label PDF."""
         if not self._username or not self._password:
@@ -200,8 +274,10 @@ class DaiPostCourier(BaseCourier):
         signature = "1" if round(order_value) > 200 else "0"
         now = datetime.now()
         current_time = f"{now.strftime('%Y-%m-%d')}T{now.strftime('%H:%M:%S')}"
-        # Use Unix timestamp as job number (unique per call, no DB required)
-        job_number = int(time.time())
+        # Prefer the next sequential job_number from the legacy DB so the
+        # manifest system can identify this booking; fall back to Unix timestamp.
+        db_job = self._db_next_job_number()
+        job_number = db_job if db_job is not None else int(time.time())
 
         payload = {
             "shipment": {
@@ -282,6 +358,13 @@ class DaiPostCourier(BaseCourier):
                 courier_name=self.name, tracking_number="", label_pdf=None,
                 booking_reference="", error=f"Unexpected DAI Post response: {exc}",
             )
+
+        # Insert into the legacy dai_post manifest table (non-fatal if it fails)
+        self._db_insert_booking(
+            customer_name=receiver.name,
+            tracking_number=str(tracking_number),
+            job_number=job_number,
+        )
 
         return BookingResult(
             courier_name=self.name,

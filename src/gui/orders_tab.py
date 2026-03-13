@@ -43,14 +43,14 @@ class OrdersTab(ctk.CTkFrame):
         default_from = (datetime.today() - timedelta(days=self._app.config.app.order_lookback_days))
         default_to = datetime.today()
 
-        self._from_entry = ctk.CTkEntry(date_frame, width=110, placeholder_text="YYYY-MM-DD")
-        self._from_entry.insert(0, default_from.strftime("%Y-%m-%d"))
+        self._from_entry = ctk.CTkEntry(date_frame, width=110, placeholder_text="DD/MM/YYYY")
+        self._from_entry.insert(0, default_from.strftime("%d/%m/%Y"))
         self._from_entry.pack(side="left", padx=(6, 12))
 
         ctk.CTkLabel(date_frame, text="to:", font=ctk.CTkFont(size=13)).pack(side="left")
 
-        self._to_entry = ctk.CTkEntry(date_frame, width=110, placeholder_text="YYYY-MM-DD")
-        self._to_entry.insert(0, default_to.strftime("%Y-%m-%d"))
+        self._to_entry = ctk.CTkEntry(date_frame, width=110, placeholder_text="DD/MM/YYYY")
+        self._to_entry.insert(0, default_to.strftime("%d/%m/%Y"))
         self._to_entry.pack(side="left", padx=(6, 0))
 
         # ── Platform toggles ──────────────────────────────────────────────
@@ -153,6 +153,18 @@ class OrdersTab(ctk.CTkFrame):
         )
         self._ebay_auth_btn.pack(side="left", padx=(6, 0))
 
+        self._trading_token_btn = ctk.CTkButton(
+            bottom,
+            text="Update Trading Token",
+            width=150,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="gray50",
+            hover_color="gray40",
+            command=self._do_update_trading_token,
+        )
+        self._trading_token_btn.pack(side="left", padx=(6, 0))
+
         self._update_ebay_status()
 
     # ── eBay auth ─────────────────────────────────────────────────────────
@@ -185,6 +197,27 @@ class OrdersTab(ctk.CTkFrame):
             self._set_error(str(e))
         except Exception as e:
             self._set_error(f"eBay authentication failed: {e}")
+
+    def _do_update_trading_token(self):
+        token = simpledialog.askstring(
+            title="eBay Trading Token",
+            prompt=(
+                "Paste your eBay Trading API user token.\n"
+                "Get one from: developer.ebay.com → My Account → User Tokens\n\n"
+                "Token starts with: v^1.1#i^1#..."
+            ),
+            parent=self,
+        )
+        if not token:
+            return
+        token = token.strip()
+        if not token.startswith("v^"):
+            self._set_error("Invalid token format. Token should start with 'v^1.1#...'")
+            return
+        self._app.config.save_ebay_user_token(token)
+        self._app.ebay_client._config.user_token = token
+        self._ebay_auth_label.configure(text="eBay: Trading token updated", text_color="green")
+        self._set_error("")
 
     def _save_toggle_states(self):
         states = {label: (sw.get() == 1) for label, sw in self._platform_switches.items()}
@@ -284,9 +317,14 @@ class OrdersTab(ctk.CTkFrame):
                 ),
             )
             self._app.ebay_orders = orders
-            self.after(0, lambda n=len(orders): self._on_platform_done(
-                "ebay", f"eBay: {n} order{'s' if n != 1 else ''} fetched.", "green"
-            ))
+            warn = self._app.ebay_client.notes_warning
+            if warn:
+                msg = f"eBay: {len(orders)} order{'s' if len(orders) != 1 else ''} fetched. ⚠ {warn}"
+                self.after(0, lambda m=msg: self._on_platform_done("ebay", m, "orange"))
+            else:
+                self.after(0, lambda n=len(orders): self._on_platform_done(
+                    "ebay", f"eBay: {n} order{'s' if n != 1 else ''} fetched.", "green"
+                ))
         except EbayAuthError as e:
             self.after(0, lambda msg=str(e): self._on_platform_error("ebay", f"eBay auth error: {msg}"))
         except EbayAPIError as e:
@@ -348,14 +386,14 @@ class OrdersTab(ctk.CTkFrame):
         from_str = self._from_entry.get().strip()
         to_str = self._to_entry.get().strip()
         try:
-            date_from = datetime.strptime(from_str, "%Y-%m-%d")
+            date_from = datetime.strptime(from_str, "%d/%m/%Y")
         except ValueError:
-            self._set_error(f"Invalid 'From' date: '{from_str}'. Use YYYY-MM-DD format.")
+            self._set_error(f"Invalid 'From' date: '{from_str}'. Use DD/MM/YYYY format.")
             return None, None
         try:
-            date_to = datetime.strptime(to_str, "%Y-%m-%d")
+            date_to = datetime.strptime(to_str, "%d/%m/%Y")
         except ValueError:
-            self._set_error(f"Invalid 'To' date: '{to_str}'. Use YYYY-MM-DD format.")
+            self._set_error(f"Invalid 'To' date: '{to_str}'. Use DD/MM/YYYY format.")
             return None, None
         if date_from > date_to:
             self._set_error("'From' date must be before 'To' date.")

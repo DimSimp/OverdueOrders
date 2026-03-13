@@ -123,8 +123,8 @@ def match_orders_to_invoice(
 
         matched_invoice_keys.update(matching_keys)
 
-        # eBay notes are item-level (PrivateNotes per listing)
-        for line in order.line_items:
+        # Show order-level notes (checkout + PrivateNotes) on the first line item only
+        for idx, line in enumerate(order.line_items):
             key = line.sku.upper().strip()
             inv = invoice_lookup.get(key)
             matched.append(MatchedOrder(
@@ -135,7 +135,7 @@ def match_orders_to_invoice(
                 sku=line.sku,
                 description=line.title,
                 quantity=line.quantity,
-                notes=line.notes,
+                notes=order.buyer_notes if idx == 0 else "",
                 shipping_type=order.shipping_type,
                 invoice_sku=inv.sku_with_suffix if inv else "",
                 invoice_description=inv.description if inv else "",
