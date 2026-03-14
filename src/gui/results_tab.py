@@ -588,6 +588,7 @@ class ResultsTab(ctk.CTkFrame):
         self._detail_frame: OrderDetailView | None = None
         self._freight_frame = None
         self._last_clicked_order_id: str | None = None
+        self._detail_order_already_completed: bool = False
         self._build_ui()
 
     # ── UI construction ───────────────────────────────────────────────────
@@ -1063,6 +1064,9 @@ class ResultsTab(ctk.CTkFrame):
         self._list_frame.tkraise()
         if self._last_clicked_order_id:
             self._matched_tree.scroll_to(self._last_clicked_order_id)
+        if self._detail_order_already_completed:
+            self._detail_order_already_completed = False
+            self._refresh_matched_orders()
 
     def _on_fulfilled(self):
         self._close_detail_view()
@@ -1140,6 +1144,7 @@ class ResultsTab(ctk.CTkFrame):
             and self._last_clicked_order_id == order_id
         ):
             self._detail_frame.show_completed_warning()
+            self._detail_order_already_completed = True
 
     # ── Orders refresh ────────────────────────────────────────────────────
 
@@ -1202,6 +1207,14 @@ class ResultsTab(ctk.CTkFrame):
         ebay_ids = list(dict.fromkeys(
             m.order_id for m in self._matched if m.platform.lower() == "ebay"
         ))
+        # Force-matched orders are not in self._matched — include them too
+        for platform, order_id in self._force_matched_order_ids:
+            if platform.lower() == "ebay":
+                if order_id not in ebay_ids:
+                    ebay_ids.append(order_id)
+            else:
+                if order_id not in neto_ids:
+                    neto_ids.append(order_id)
         self._refresh_matched_btn.configure(state="disabled")
         self._error_label.configure(text="Refreshing matched orders…")
 

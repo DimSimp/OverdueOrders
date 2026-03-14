@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -59,6 +60,11 @@ def save_snapshot(
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+    # Also keep a fixed-name copy so a desktop shortcut always points to
+    # the latest session without needing to be updated each day
+    current_path = os.path.join(save_dir, "CURRENT SESSION.scar")
+    shutil.copy2(filepath, current_path)
 
     return filepath
 

@@ -1,4 +1,0 @@
-- make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
-- auto-open Kogan platform when marking kogan orders as sent
-- add an option to the order fulfillment screen to send an order to unmatched
-- ebay notes are being displayed successfully, but not updated. We also need to remove the notes section from the bottom of the fulfillment screen, as it just summarises all of the individual notes.

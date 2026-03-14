@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -476,21 +477,22 @@ class OrderDetailView(ctk.CTkFrame):
 
     def _build_notes(self, parent):
         if self._ebay_order:
-            # Show buyer checkout notes (read-only) when present
-            # Per-item PrivateNotes editors are shown inline in _build_ebay_line_items
-            notes = self._ebay_order.buyer_notes
-            if not notes:
-                return
-            frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
-            frame.pack(fill="x", padx=8, pady=6)
-            ctk.CTkLabel(frame, text="Notes", font=ctk.CTkFont(size=13, weight="bold")).pack(
-                anchor="w", padx=10, pady=(8, 4)
-            )
-            ctk.CTkLabel(
-                frame, text=f"Buyer notes: {notes}",
-                font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
-                text_color="#f5c518",
-            ).pack(fill="x", padx=10, pady=(0, 8))
+            # Bottom notes section disabled — per-item notes are shown inline in
+            # _build_ebay_line_items, making this compiled summary redundant.
+            # Uncomment to restore:
+            # notes = self._ebay_order.buyer_notes
+            # if not notes:
+            #     return
+            # frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
+            # frame.pack(fill="x", padx=8, pady=6)
+            # ctk.CTkLabel(frame, text="Notes", font=ctk.CTkFont(size=13, weight="bold")).pack(
+            #     anchor="w", padx=10, pady=(8, 4)
+            # )
+            # ctk.CTkLabel(
+            #     frame, text=f"Buyer notes: {notes}",
+            #     font=ctk.CTkFont(size=12), anchor="w", wraplength=700,
+            #     text_color="#f5c518",
+            # ).pack(fill="x", padx=10, pady=(0, 8))
             return
 
         frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
@@ -516,10 +518,22 @@ class OrderDetailView(ctk.CTkFrame):
             ctk.CTkLabel(parent, text="Existing Sticky Notes:", font=ctk.CTkFont(size=12, weight="bold")).pack(
                 anchor="w", padx=10, pady=(6, 2)
             )
-            for note in o.sticky_notes:
+            # Sort newest first by StickyNoteID (higher ID = more recently created)
+            def _note_sort_key(n):
+                try:
+                    return int(n.get("StickyNoteID") or 0)
+                except (ValueError, TypeError):
+                    return 0
+            for note in sorted(o.sticky_notes, key=_note_sort_key, reverse=True):
                 title = note.get("Title", "")
                 desc = note.get("Description", "")
-                text = f"{title}: {desc}" if title else desc
+                # DateAdded is the field Neto uses; fall back to other common names
+                date_str = (
+                    note.get("DateAdded") or note.get("DateCreated") or
+                    note.get("CreatedDate") or ""
+                )
+                header = f"[{date_str}] " if date_str else ""
+                text = f"{header}{title}: {desc}" if title else f"{header}{desc}"
                 tb = ctk.CTkTextbox(
                     parent, height=50, font=ctk.CTkFont(size=12),
                     text_color="#f5c518", fg_color=("gray90", "gray25"),
@@ -599,20 +613,22 @@ class OrderDetailView(ctk.CTkFrame):
             messagebox.showerror("Error", f"Failed to save note:\n{e}", parent=self.winfo_toplevel())
 
     def _add_neto_note(self):
+        from datetime import date
         text = self._note_textbox.get("1.0", "end").strip()
         if not text:
             return
+        dated_text = f"[{date.today().strftime('%d/%m/%Y')}] {text}"
         try:
             self._neto_client.add_sticky_note(
                 self._order_id,
                 title="Packing Note",
-                description=text,
+                description=dated_text,
                 dry_run=self._dry_run,
             )
             self._add_note_btn.configure(state="disabled", text="Note Added")
             parent = self.winfo_toplevel()
             if self._dry_run:
-                messagebox.showinfo("Dry Run", f"[DRY RUN] Sticky note would be added:\n{text}", parent=parent)
+                messagebox.showinfo("Dry Run", f"[DRY RUN] Sticky note would be added:\n{dated_text}", parent=parent)
             else:
                 messagebox.showinfo("Success", "Sticky note added.", parent=parent)
         except Exception as e:
@@ -734,6 +750,13 @@ class OrderDetailView(ctk.CTkFrame):
                 self._status_label.configure(text="[DRY RUN] Order marked as sent", text_color="orange")
             else:
                 self._status_label.configure(text="Order marked as sent!", text_color="green")
+                # Kogan orders are tracked via Neto but must be manually dispatched
+                # on the Kogan portal — open it automatically after marking as sent
+                if (
+                    self._neto_order
+                    and self._neto_order.sales_channel.lower() == "kogan"
+                ):
+                    webbrowser.open("https://dispatch.aws.kgn.io/Manage")
                 self._on_fulfilled()
 
         except Exception as e:

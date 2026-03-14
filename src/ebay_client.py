@@ -462,6 +462,15 @@ class EbayClient:
         now = datetime.now()
         duration_days = min(int((now - date_from).days) + 1, 60)
 
+        # Collect the item IDs we actually need, so we can stop early once found.
+        # GetMyeBaySelling returns newest-first, so recent orders are on early pages.
+        target_item_ids: set[str] = {
+            li.legacy_item_id
+            for o in orders
+            for li in o.line_items
+            if li.legacy_item_id
+        }
+
         # Build lookups: ItemID → PrivateNotes text, ItemID → TransactionID
         notes_by_item_id: dict[str, str] = {}
         txn_id_by_item_id: dict[str, str] = {}
@@ -475,13 +484,7 @@ class EbayClient:
                 self.notes_warning = f"PrivateNotes unavailable: {exc}"
                 break
 
-            for i, txn in enumerate(root.findall(".//e:Transaction", ns)):
-                # Log first transaction's field names once to help diagnose missing PrivateNotes
-                if i == 0 and page == 1:
-                    item_el = txn.find("e:Item", ns)
-                    item_tags = [c.tag.split("}")[-1] for c in item_el] if item_el is not None else []
-                    log.debug("GetMyeBaySelling first Transaction/Item fields: %s", item_tags)
-
+            for txn in root.findall(".//e:Transaction", ns):
                 oli_el = txn.find("e:OrderLineItemID", ns)
                 if oli_el is None or not oli_el.text:
                     continue
@@ -499,6 +502,16 @@ class EbayClient:
             # Paginate through SoldList pages
             total_pages_el = root.find(".//e:SoldList/e:PaginationResult/e:TotalNumberOfPages", ns)
             total_pages = int(total_pages_el.text) if total_pages_el is not None and total_pages_el.text else 1
+
+            # Stop early if we've found transaction IDs for all target orders —
+            # all remaining pages contain older sold items we don't need
+            if target_item_ids and target_item_ids.issubset(txn_id_by_item_id):
+                log.debug(
+                    "GetMyeBaySelling: all %d target items found on page %d/%d — stopping early",
+                    len(target_item_ids), page, total_pages,
+                )
+                break
+
             if page >= total_pages:
                 break
             page += 1
@@ -519,9 +532,12 @@ class EbayClient:
         for order in orders:
             item_notes = []
             for li in order.line_items:
-                # Populate transaction ID if not already set
-                if not li.legacy_transaction_id and li.legacy_item_id:
-                    li.legacy_transaction_id = txn_id_by_item_id.get(li.legacy_item_id, "")
+                # Populate (or correct) transaction ID — Fulfillment API may give "0"
+                # for fixed-price items; prefer the real ID from GetMyeBaySelling
+                if li.legacy_item_id:
+                    better = txn_id_by_item_id.get(li.legacy_item_id, "")
+                    if better and (not li.legacy_transaction_id or li.legacy_transaction_id == "0"):
+                        li.legacy_transaction_id = better
                 note = notes_by_item_id.get(li.legacy_item_id, "")
                 li.notes = note
                 if note:
@@ -557,6 +573,10 @@ class EbayClient:
                 "Add your eBay Developer Program App ID (dev_id) to enable PrivateNotes."
             )
 
+        log.debug(
+            "SetUserNotes: item_id=%r transaction_id=%r note=%r",
+            item_id, transaction_id, note_text,
+        )
         xml_template = (
             '<?xml version="1.0" encoding="utf-8"?>'
             f'<SetUserNotesRequest xmlns="{_TRADING_NS}">'
@@ -568,6 +588,7 @@ class EbayClient:
             "</SetUserNotesRequest>"
         )
         self._call_trading_api(xml_template, "SetUserNotes")
+        log.debug("SetUserNotes succeeded for item %s txn %s", item_id, transaction_id)
 
     def get_item_images(self, legacy_item_ids: list[str]) -> dict[str, str]:
         """

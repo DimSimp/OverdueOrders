@@ -37,7 +37,11 @@ def main():
         messagebox.showerror("Configuration Error", f"Failed to load config.json:\n\n{e}")
         sys.exit(1)
 
-    app = App(config)
+    # If a .scar file was passed as an argument (e.g. via file association),
+    # open it automatically on startup
+    startup_session = sys.argv[1] if len(sys.argv) > 1 else None
+
+    app = App(config, startup_session=startup_session)
     app.mainloop()
 
 

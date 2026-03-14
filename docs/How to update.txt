@@ -1,0 +1,22 @@
+How to push an update (the GitHub releases workflow)
+Every time you want to release a new version:
+
+
+# 1. Bump the version in src/version.py  (e.g. "1.0.0" → "1.1.0")
+# 2. Commit it
+git add src/version.py
+git commit -m "Bump version to 1.1.0"
+
+# 3. Tag the commit
+git tag v1.1.0
+
+# 4. Push both the commit and the tag
+git push origin main
+git push origin v1.1.0
+Then on GitHub.com:
+
+Go to Releases → Draft a new release
+Choose the tag v1.1.0
+Add release notes (what changed, bug fixes, etc.)
+Click Publish release
+That's it. Any machine running an older version will see the blue banner on next launch, and clicking "View release" opens the GitHub release page where you can post instructions or download links.

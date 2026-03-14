@@ -1,0 +1,1 @@
+- make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run

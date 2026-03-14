@@ -1,18 +1,31 @@
+from __future__ import annotations
+
+import os
+import threading
+import webbrowser
+
 import customtkinter as ctk
 
 from src.config import ConfigManager
 from src.ebay_client import EbayClient
 from src.neto_client import NetoClient
+from src.version import __version__
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_APP_ICON = os.path.join(_ROOT, "AIO.ico")
 
 
 class App(ctk.CTk):
-    def __init__(self, config: ConfigManager):
+    def __init__(self, config: ConfigManager, startup_session: str | None = None):
         super().__init__()
         self.config = config
+        self._startup_session = startup_session
 
         self.title("Scarlett Music — Overdue Orders Matcher")
         self.geometry("1150x720")
         self.minsize(900, 600)
+        if os.path.exists(_APP_ICON):
+            self.iconbitmap(_APP_ICON)
 
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
@@ -31,6 +44,7 @@ class App(ctk.CTk):
         )
 
         self._build_ui()
+        self._start_update_check()
 
     def _build_ui(self):
         # Header bar
@@ -42,6 +56,12 @@ class App(ctk.CTk):
             text="Scarlett Music  —  Overdue Orders Matcher",
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(side="left", padx=20, pady=10)
+        ctk.CTkLabel(
+            header,
+            text=f"v{__version__}",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        ).pack(side="right", padx=16, pady=10)
 
         # Dry-run banner
         if self.config.app.dry_run:
@@ -89,7 +109,55 @@ class App(ctk.CTk):
 
         self.tabview.set("1. Invoice")
 
+        if self._startup_session:
+            # Defer until after the window renders so the UI is fully ready
+            self.after(200, lambda: self.invoice_tab.load_session_from_path(self._startup_session))
+
     def _activate_results(self):
         self.tabview.set("3. Results")
         # Defer loading so the tab renders first, then populates
         self.after(50, self.results_tab.load_results)
+
+    # ── Auto-update ───────────────────────────────────────────────────────────
+
+    def _start_update_check(self):
+        """Kick off a background thread to check GitHub for a newer release."""
+        def _check():
+            from src.updater import check_for_update
+            result = check_for_update(__version__)
+            if result:
+                version, url = result
+                # Schedule UI update on the main thread
+                self.after(0, lambda: self._show_update_banner(version, url))
+
+        t = threading.Thread(target=_check, daemon=True)
+        t.start()
+
+    def _show_update_banner(self, version: str, url: str):
+        """Show a slim banner below the header when a new version is available."""
+        banner = ctk.CTkFrame(self, height=30, corner_radius=0, fg_color=("#2a6099", "#1a4a77"))
+        # Insert between header (index 0) and whatever follows
+        banner.pack(fill="x", side="top", after=self.winfo_children()[0])
+        banner.pack_propagate(False)
+
+        inner = ctk.CTkFrame(banner, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(
+            inner,
+            text=f"Update available: v{version}  —  ",
+            font=ctk.CTkFont(size=12),
+            text_color="white",
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            inner,
+            text="View release",
+            font=ctk.CTkFont(size=12, underline=True),
+            fg_color="transparent",
+            hover_color=("#1a4a77", "#0d3055"),
+            text_color=("#9ecfff", "#9ecfff"),
+            border_width=0,
+            height=20,
+            command=lambda: webbrowser.open(url),
+        ).pack(side="left")

@@ -116,22 +116,23 @@ class InvoiceTab(ctk.CTkFrame):
         self._on_complete = on_complete
         self._loaded_filenames: list[str] = []
         self._invoice_items: list[InvoiceItem] = []
+        self._last_session_dir: str | None = None
         self._build_ui()
 
     def _build_ui(self):
         # ── Mode switcher ─────────────────────────────────────────────────
-        self._mode_var = ctk.StringVar(value="PDF Invoice")
+        self._mode_var = ctk.StringVar(value="FTP Inventory")
         self._mode_switcher = ctk.CTkSegmentedButton(
             self,
-            values=["PDF Invoice", "FTP Inventory"],
+            values=["FTP Inventory", "PDF Invoice"],
             variable=self._mode_var,
             command=self._on_mode_change,
         )
         self._mode_switcher.pack(fill="x", padx=12, pady=(12, 4))
 
-        # ── PDF controls row ─────────────────────────────────────────────
+        # ── PDF controls row (initially hidden — FTP is the default mode) ─
         self._pdf_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._pdf_frame.pack(fill="x", padx=12, pady=(0, 6))
+        # Not packed here — only shown when mode switches to PDF Invoice
 
         ctk.CTkLabel(self._pdf_frame, text="Supplier:", font=ctk.CTkFont(size=13)).pack(side="left")
 
@@ -172,15 +173,6 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._clear_btn.pack(side="left", padx=(8, 0))
 
-        self._load_session_btn = ctk.CTkButton(
-            self._pdf_frame,
-            text="Load Session",
-            width=110,
-            fg_color=("dodgerblue3", "dodgerblue4"),
-            command=self._load_session,
-        )
-        self._load_session_btn.pack(side="left", padx=(8, 0))
-
         self._status_label = ctk.CTkLabel(
             self._pdf_frame,
             text="No items loaded.",
@@ -189,9 +181,9 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._status_label.pack(side="left", padx=(16, 0))
 
-        # ── FTP controls row (initially hidden) ──────────────────────────
+        # ── FTP controls row (default mode — packed immediately) ─────────
         self._ftp_frame = ctk.CTkFrame(self, fg_color="transparent")
-        # Not packed yet — only shown when mode switches to FTP
+        self._ftp_frame.pack(fill="x", padx=12, pady=(0, 6))
 
         ctk.CTkLabel(
             self._ftp_frame,
@@ -207,6 +199,15 @@ class InvoiceTab(ctk.CTkFrame):
             command=self._load_from_ftp,
         )
         self._ftp_btn.pack(side="left")
+
+        self._load_session_btn = ctk.CTkButton(
+            self._ftp_frame,
+            text="Load Session",
+            width=110,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._load_session,
+        )
+        self._load_session_btn.pack(side="left", padx=(8, 0))
 
         self._ftp_status_label = ctk.CTkLabel(
             self._ftp_frame,
@@ -373,8 +374,12 @@ class InvoiceTab(ctk.CTkFrame):
         self._error_label.configure(text=text)
 
     def _load_session(self):
-        """Load a previously saved session snapshot."""
-        initial_dir = self._app.config.app.snapshot_dir or self._app.config.app.output_dir
+        """Open a file dialog and load a session snapshot."""
+        initial_dir = (
+            self._last_session_dir
+            or self._app.config.app.snapshot_dir
+            or self._app.config.app.output_dir
+        )
         path = filedialog.askopenfilename(
             title="Load Session Snapshot",
             initialdir=initial_dir,
@@ -382,7 +387,11 @@ class InvoiceTab(ctk.CTkFrame):
         )
         if not path:
             return
+        self._last_session_dir = os.path.dirname(path)
+        self.load_session_from_path(path)
 
+    def load_session_from_path(self, path: str):
+        """Load a session snapshot directly from a file path (no dialog)."""
         try:
             from src.session import load_snapshot
             snapshot = load_snapshot(path)
@@ -399,7 +408,10 @@ class InvoiceTab(ctk.CTkFrame):
             self._loaded_filenames = [os.path.basename(path)]
             self._update_files_box()
             count = self._table.row_count()
-            self._set_status(f"Session loaded: {count} item{'s' if count != 1 else ''}.", color="green")
+            self._ftp_status_label.configure(
+                text=f"Session loaded: {count} item{'s' if count != 1 else ''}.",
+                text_color="green",
+            )
             self._next_btn.configure(state="normal")
 
             # Set results tab state and jump to it
@@ -416,6 +428,7 @@ class InvoiceTab(ctk.CTkFrame):
             self._app.tabview.set("3. Results")
 
         except Exception as e:
+            self._ftp_status_label.configure(text="Load failed.", text_color="orange")
             self._set_error(f"Failed to load session: {e}")
 
     def _scan_with_phone(self):

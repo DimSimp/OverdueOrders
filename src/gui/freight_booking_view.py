@@ -664,7 +664,13 @@ class FreightBookingView(ctk.CTkFrame):
             w.destroy()
 
     def _show_results(self, quotes: list[Quote]):
-        self._quote_btn.configure(state="normal", text="Get Quotes")
+        # Quotes received — lock Get Quotes button (turn blue) so user is
+        # directed toward "Use Selected Courier" instead
+        self._quote_btn.configure(
+            state="disabled", text="Get Quotes",
+            fg_color=("dodgerblue", "dodgerblue3"),
+            hover_color=("dodgerblue3", "dodgerblue4"),
+        )
 
         if not quotes:
             self._progress_label.configure(text="No quotes returned", text_color="orange")
@@ -687,11 +693,11 @@ class FreightBookingView(ctk.CTkFrame):
             card.pack(fill="x", pady=3)
             self._quote_cards.append(card)
 
-        # "Use Selected Courier" button
+        # "Use Selected Courier" button — starts disabled/neutral; turns green when a quote is selected
         self._use_selected_btn = ctk.CTkButton(
             self._use_btn_frame, text="Use Selected Courier", width=180, height=36,
             font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=("dodgerblue", "dodgerblue3"),
+            fg_color=("gray50", "gray40"),
             state="disabled",
             command=self._use_selected,
         )
@@ -702,7 +708,11 @@ class FreightBookingView(ctk.CTkFrame):
         for card in self._quote_cards:
             card.set_selected(card._quote is quote)
         if hasattr(self, "_use_selected_btn"):
-            self._use_selected_btn.configure(state="normal")
+            self._use_selected_btn.configure(
+                state="normal",
+                fg_color=("green3", "green4"),
+                hover_color=("green4", "green3"),
+            )
 
     def _upload_dimensions_if_checked(self):
         """Upload package dimensions to Neto if the checkbox is checked."""
