@@ -4,3 +4,6 @@
 - add sorting logic to shipment deletion modal
 - upgrade the deletion modal to a delete/reprint modal. This means we'll need to store all labels created temporarily. Maybe we have them auto-delete after 1 week. They should be stored on the server (set up via settings window)
 - refresh single order after note is added via fulfillment screen
+- make config .json move to the correct folder automatically when updating
+- check that printer settings are either part of config file, or can be applied across all devices
+- items sometimes double up when refreshing session

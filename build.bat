@@ -29,12 +29,16 @@ set VERSION=%VERSION:"=%
 echo Version: %VERSION%
 
 echo.
+echo === Waiting for file locks to release ===
+timeout /t 5 /nobreak >nul
+
+echo.
 echo === Creating release zip ===
 set ZIPNAME=Scarlett AIO v%VERSION%.zip
 if exist "%ZIPNAME%" del "%ZIPNAME%"
-powershell -Command "Compress-Archive -Path 'dist\Scarlett AIO\*' -DestinationPath '%ZIPNAME%'"
+powershell -Command "Compress-Archive -Path 'dist\Scarlett AIO' -DestinationPath '%ZIPNAME%' -Force"
 if errorlevel 1 (
-    echo [WARNING] Zip creation failed — distribute dist\Scarlett AIO\ manually.
+    echo [WARNING] Zip creation failed -- distribute dist\Scarlett AIO\ manually.
 ) else (
     echo Created: %ZIPNAME%
 )

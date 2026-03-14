@@ -23,7 +23,7 @@ missing module named urllib.unquote_plus - imported by urllib (optional), lxml.h
 missing module named urllib.quote - imported by urllib (optional), commonmark.common (optional)
 missing module named urllib.urlopen - imported by urllib (delayed, optional), lxml.html (delayed, optional), pygments.lexers._lua_builtins (conditional, optional), pygments.lexers._postgres_builtins (conditional, optional)
 missing module named urllib.urlencode - imported by urllib (delayed, optional), lxml.html (delayed, optional), requests_toolbelt._compat (conditional)
-missing module named posix - imported by shutil (conditional), os (conditional, optional)
+missing module named posix - imported by os (conditional, optional), shutil (conditional)
 missing module named resource - imported by posix (top-level)
 missing module named grp - imported by shutil (optional), tarfile (optional), pathlib (delayed, optional), subprocess (optional), distutils.archive_util (optional)
 missing module named pwd - imported by posixpath (delayed, conditional), shutil (optional), tarfile (optional), pathlib (delayed, conditional, optional), subprocess (optional), webbrowser (delayed), distutils.util (delayed, conditional, optional), distutils.archive_util (optional), http.server (delayed, optional), netrc (delayed, conditional), getpass (delayed)
