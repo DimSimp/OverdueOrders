@@ -19,4 +19,16 @@ Go to Releases → Draft a new release
 Choose the tag v1.1.0
 Add release notes (what changed, bug fixes, etc.)
 Click Publish release
-That's it. Any machine running an older version will see the blue banner on next launch, and clicking "View release" opens the GitHub release page where you can post instructions or download links.
+That's it. Any machine running an older version will see the blue banner on next launch, and clicking "View release" opens the GitHub release page where you can post instructions or download links
+
+The complete update workflow (end to end)
+When releasing a new version:
+
+Bump src/version.py → commit → tag → push (as per the instructions you already have)
+Run build.bat — it now automatically creates Scarlett AIO v1.0.1.zip in the project root alongside the dist\ folder
+On GitHub → Releases → Draft a new release → pick tag v1.0.1 → drag the zip into the "Attach binaries" area → Publish
+What users on other machines see:
+
+On next app launch, the blue banner appears: "Update available: v1.0.1 — Download update | View release notes"
+Clicking "Download update" downloads the zip directly
+They extract it, copy their config.json into the new folder, and replace the old folder

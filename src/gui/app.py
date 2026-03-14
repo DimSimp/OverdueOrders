@@ -126,14 +126,14 @@ class App(ctk.CTk):
             from src.updater import check_for_update
             result = check_for_update(__version__)
             if result:
-                version, url = result
+                version, page_url, download_url = result
                 # Schedule UI update on the main thread
-                self.after(0, lambda: self._show_update_banner(version, url))
+                self.after(0, lambda: self._show_update_banner(version, page_url, download_url))
 
         t = threading.Thread(target=_check, daemon=True)
         t.start()
 
-    def _show_update_banner(self, version: str, url: str):
+    def _show_update_banner(self, version: str, page_url: str, download_url: str):
         """Show a slim banner below the header when a new version is available."""
         banner = ctk.CTkFrame(self, height=30, corner_radius=0, fg_color=("#2a6099", "#1a4a77"))
         # Insert between header (index 0) and whatever follows
@@ -150,14 +150,31 @@ class App(ctk.CTk):
             text_color="white",
         ).pack(side="left")
 
+        # If the release has a zip asset, offer a direct download link
+        if download_url:
+            ctk.CTkButton(
+                inner,
+                text="Download update",
+                font=ctk.CTkFont(size=12, underline=True),
+                fg_color="transparent",
+                hover_color=("#1a4a77", "#0d3055"),
+                text_color=("#9ecfff", "#9ecfff"),
+                border_width=0,
+                height=20,
+                command=lambda: webbrowser.open(download_url),
+            ).pack(side="left")
+            ctk.CTkLabel(
+                inner, text="  |  ", font=ctk.CTkFont(size=12), text_color=("gray70", "gray60"),
+            ).pack(side="left")
+
         ctk.CTkButton(
             inner,
-            text="View release",
+            text="View release notes",
             font=ctk.CTkFont(size=12, underline=True),
             fg_color="transparent",
             hover_color=("#1a4a77", "#0d3055"),
             text_color=("#9ecfff", "#9ecfff"),
             border_width=0,
             height=20,
-            command=lambda: webbrowser.open(url),
+            command=lambda: webbrowser.open(page_url),
         ).pack(side="left")

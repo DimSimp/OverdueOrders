@@ -23,7 +23,31 @@ if errorlevel 1 (
 )
 
 echo.
+echo === Reading version number ===
+for /f "tokens=3 delims= " %%v in ('findstr "__version__" src\version.py') do set VERSION=%%~v
+set VERSION=%VERSION:"=%
+echo Version: %VERSION%
+
+echo.
+echo === Creating release zip ===
+set ZIPNAME=Scarlett AIO v%VERSION%.zip
+if exist "%ZIPNAME%" del "%ZIPNAME%"
+powershell -Command "Compress-Archive -Path 'dist\Scarlett AIO\*' -DestinationPath '%ZIPNAME%'"
+if errorlevel 1 (
+    echo [WARNING] Zip creation failed — distribute dist\Scarlett AIO\ manually.
+) else (
+    echo Created: %ZIPNAME%
+)
+
+echo.
 echo === Build complete ===
-echo Output: dist\Scarlett AIO\
+echo   Exe folder : dist\Scarlett AIO\
+echo   Release zip: %ZIPNAME%
+echo.
+echo Next steps:
+echo   1. Go to GitHub ^> Releases ^> Draft a new release
+echo   2. Tag: v%VERSION%
+echo   3. Attach "%ZIPNAME%" as a release asset
+echo   4. Publish the release
 echo.
 pause
