@@ -1,9 +1,8 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
-- the delete shipment modal should only show bookings from the current date, not all. This currently causes the list to be huge.
 - create a settings window where we can choose filepaths
-- add sorting logic to shipment deletion modal
-- upgrade the deletion modal to a delete/reprint modal. This means we'll need to store all labels created temporarily. Maybe we have them auto-delete after 1 week. They should be stored on the server (set up via settings window)
+- deletion modal sorting order needs refinement - sorting by date should put latest orders at the top (e.g: 14/03/2026 - 10:00am first, 14/03/2026 - 9:55am second, etc)
 - refresh single order after note is added via fulfillment screen
 - make config .json move to the correct folder automatically when updating
-- check that printer settings are either part of config file, or can be applied across all devices
-- items sometimes double up when refreshing session
+- check that printer settings are either part of config file, or can be applied across all devices. Some labels are printing smaller when using the build instead of the development files
+- items sometimes double up in results tab when loading a fresh session. They are fixed upon refreshing the page
+- choosing to reprint the label from the cancellation modal simply opens the pdf. We need the label to re-print from the label printer instead.

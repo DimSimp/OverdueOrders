@@ -1,0 +1,18 @@
+14:20:54  INFO      freight_booking  Courier selected: Aramex (aramex)  price=$5.22
+14:20:54  INFO      freight_booking  Starting booking thread for courier 'aramex', order 'N477761'
+14:20:54  INFO      courier.aramex  Booking Aramex consignment for order N477761 (receiver: Stuart Mitchell, Ngunnawal ACT)
+14:20:55  INFO      courier.aramex  Consignment created: conId=150582965  tracking=MS0018047500
+14:20:56  INFO      courier.aramex  Label PDF downloaded: 111242 bytes
+14:20:56  INFO      freight_booking  Booking confirmed — courier=Aramex  tracking=MS0018047500  reference=150582965
+14:20:56  INFO      src.shipping.booking_ledger  Ledger: added Aramex booking MS0018047500
+14:20:56  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\aramex.pdf (111242 bytes)
+14:20:56  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-14\N477761.pdf (111242 bytes)
+14:20:56  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+14:20:58  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+14:20:58  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+14:20:58  WARNING   brother_ql.conversion  Need to resize the image...
+14:20:58  WARNING   brother_ql.conversion  Need to resize the image...
+14:20:58  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 151674 bytes.
+14:21:03  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+14:21:03  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+14:21:03  INFO      freight_booking  Label printed successfully
