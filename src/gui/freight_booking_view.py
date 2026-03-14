@@ -849,6 +849,14 @@ class FreightBookingView(ctk.CTkFrame):
             except Exception as exc:
                 log.warning("Label save failed: %s", exc)
 
+        # Save per-order label to the bookings Labels folder for reprinting
+        if result.label_pdf and bookings_dir and self._order_id:
+            try:
+                from src.shipping.label_capture import save_order_label
+                save_order_label(bookings_dir, self._order_id, result.label_pdf)
+            except Exception as exc:
+                log.warning("Order label save failed: %s", exc)
+
         # Print label in background thread (non-fatal if it fails).
         # Navigation happens immediately below (freight view is destroyed), so we
         # show any error via the root window which outlives this widget.
@@ -860,15 +868,30 @@ class FreightBookingView(ctk.CTkFrame):
             def _print():
                 from src.shipping.label_printer import print_label
                 from tkinter import messagebox
+                from datetime import date as _date
+                from pathlib import Path as _Path
                 err = print_label(label_bytes, courier_code=_print_courier_code, no_split=_no_split)
                 if err:
                     log.error("Label print failed: %s", err)
-                    root.after(0, lambda: messagebox.showwarning(
-                        "Label Print Failed",
-                        f"The booking was confirmed but the label could not be printed:\n\n{err}\n\n"
-                        "You can re-print manually from the Aramex portal.",
-                        parent=root,
-                    ))
+                    if bookings_dir and self._order_id:
+                        label_path = _Path(bookings_dir) / "Labels" / _date.today().isoformat() / f"{self._order_id}.pdf"
+                    else:
+                        from src.shipping.label_capture import LABELS_DIR
+                        label_path = LABELS_DIR / f"{_print_courier_code}.pdf"
+
+                    def _show_print_error(path=label_path):
+                        import os
+                        open_it = messagebox.askyesno(
+                            "Label Print Failed",
+                            f"The booking was confirmed but the label could not be printed:\n\n{err}\n\n"
+                            f"The label PDF was saved to:\n{path}\n\n"
+                            "Open the PDF now?",
+                            parent=root,
+                        )
+                        if open_it and path.exists():
+                            os.startfile(str(path))
+
+                    root.after(0, _show_print_error)
                 else:
                     log.info("Label printed successfully")
 

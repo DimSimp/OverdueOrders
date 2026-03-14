@@ -1,0 +1,27 @@
+13:00:45  INFO      courier.dai_post  Cancelling DAI Post shipment: 00393580940134373349
+13:00:46  INFO      courier.dai_post  DAI Post cancel response: {'cancelshipmentresponse': {'tracknbr': '00393580940134373349', 'record': '00393580940134373349', 'status': 'Success'}}
+13:00:46  INFO      src.shipping.booking_ledger  Ledger: marked 00393580940134373349 as cancelled in 2026-03-14.json
+13:02:31  INFO      freight_booking  Courier selected: Allied Express (allied)  price=$34.91
+13:02:31  INFO      freight_booking  Starting booking thread for courier 'allied', order 'N477685'
+13:02:31  INFO      courier.allied  Booking Allied Express shipment for order N477685
+13:02:35  INFO      courier.allied  Allied dispatch OK: connote=AOE477685Y  reference=N477685
+13:02:36  INFO      courier.allied  Allied label downloaded: 115924 bytes
+13:02:36  INFO      freight_booking  Booking confirmed — courier=Allied Express  tracking=AOE477685Y  reference=N477685
+13:02:36  INFO      src.shipping.booking_ledger  Ledger: added Allied Express booking AOE477685Y
+13:02:36  INFO      label_capture  Label saved: data\shipping\allied.pdf (115924 bytes)
+13:02:36  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+13:02:37  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+13:02:37  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+13:02:37  WARNING   brother_ql.conversion  Need to resize the image...
+13:02:37  WARNING   brother_ql.conversion  Need to resize the image...
+13:02:37  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 346602 bytes.
+13:02:46  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+13:02:46  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+13:02:46  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+13:02:46  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+13:02:46  WARNING   brother_ql.conversion  Need to resize the image...
+13:02:47  WARNING   brother_ql.conversion  Need to resize the image...
+13:02:47  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 346602 bytes.
+13:02:56  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+13:02:56  INFO      label_printer  Page 2 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+13:02:56  INFO      freight_booking  Label printed successfully

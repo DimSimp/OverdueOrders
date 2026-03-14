@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
-CONFIG_PATH = Path("config.json")
-EXAMPLE_PATH = Path("config.example.json")
+# When running as a packaged exe, config lives next to the exe.
+# When running from source, it lives at the project root (parent of src/).
+if getattr(sys, "frozen", False):
+    _BASE = Path(sys.executable).parent
+else:
+    _BASE = Path(__file__).parent.parent
+
+CONFIG_PATH  = _BASE / "config.json"
+EXAMPLE_PATH = _BASE / "config.example.json"
 
 
 @dataclass

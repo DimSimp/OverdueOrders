@@ -1317,7 +1317,7 @@ class ResultsTab(ctk.CTkFrame):
     # ── Shipment cancellation ────────────────────────────────────────────
 
     def _open_cancel_shipment_dialog(self):
-        """Open a dialog listing all recent bookings — click one to cancel it."""
+        """Open a dialog for today's and yesterday's bookings — cancel or reprint label."""
         shipping = self._app.config.shipping
         if shipping is None:
             messagebox.showerror("Not configured", "Shipping is not configured.", parent=self)
@@ -1328,8 +1328,10 @@ class ResultsTab(ctk.CTkFrame):
             messagebox.showerror("Not configured", "Bookings directory is not configured.", parent=self)
             return
 
+        from pathlib import Path as _Path
         from src.shipping.booking_ledger import get_all_bookings, mark_cancelled
-        all_bookings = get_all_bookings(bookings_dir)
+        # Only show today and yesterday — anything older is outside the cancellation window
+        all_bookings = get_all_bookings(bookings_dir, days=1)
 
         # Build courier instances (needed for the cancel API call)
         from src.shipping.couriers.allied import AlliedCourier
@@ -1350,14 +1352,18 @@ class ResultsTab(ctk.CTkFrame):
             if cfg.get("enabled", False):
                 couriers_by_code[code] = cls(cfg)
 
+        # ── Sort state (mutable lists so inner functions can update) ──
+        _sort_col = ["date"]
+        _sort_asc  = [False]   # False = descending; newest first by default
+
         # ── Window ──
         win = tk.Toplevel(self)
-        win.title("Cancel Shipment")
+        win.title("Manage Shipments")
         win.resizable(True, False)
         win.grab_set()
 
         tk.Label(
-            win, text="Select a booking to cancel:",
+            win, text="Select a booking to cancel or reprint its label:",
             font=("Segoe UI", 11, "bold"),
         ).pack(padx=16, pady=(12, 6), anchor="w")
 
@@ -1365,44 +1371,57 @@ class ResultsTab(ctk.CTkFrame):
         tree_frame = tk.Frame(win)
         tree_frame.pack(fill="x", padx=16, pady=(0, 8))
 
-        columns = ("date", "time", "courier", "order", "recipient", "tracking")
+        columns    = ("date", "time", "courier", "order", "recipient", "tracking")
+        col_labels  = {"date": "Date", "time": "Time", "courier": "Courier",
+                       "order": "Order", "recipient": "Recipient", "tracking": "Tracking #"}
+        col_widths  = {"date": 90, "time": 55, "courier": 120, "order": 90,
+                       "recipient": 140, "tracking": 160}
+        col_stretch = {"date": False, "time": False, "courier": False,
+                       "order": False, "recipient": True, "tracking": True}
+
         tree = ttk.Treeview(
             tree_frame, columns=columns, show="headings",
             height=min(max(len(all_bookings), 1), 12),
             selectmode="browse",
         )
-        tree.heading("date",      text="Date")
-        tree.heading("time",      text="Time")
-        tree.heading("courier",   text="Courier")
-        tree.heading("order",     text="Order")
-        tree.heading("recipient", text="Recipient")
-        tree.heading("tracking",  text="Tracking #")
-        tree.column("date",      width=90,  stretch=False)
-        tree.column("time",      width=55,  stretch=False)
-        tree.column("courier",   width=120, stretch=False)
-        tree.column("order",     width=90,  stretch=False)
-        tree.column("recipient", width=140)
-        tree.column("tracking",  width=160)
+        for col in columns:
+            tree.heading(col, text=col_labels[col], command=lambda c=col: _sort_by(c))
+            tree.column(col, width=col_widths[col], stretch=col_stretch[col])
 
-        # iid → booking record (so we can look up extras + date on cancel)
         _iid_to_booking: dict[str, dict] = {}
 
-        if all_bookings:
-            for b in all_bookings:
-                booked_time = b.get("booked_at", "")
-                if "T" in booked_time:
-                    booked_time = booked_time.split("T")[1][:5]
-                iid = tree.insert("", "end", values=(
-                    b.get("date", ""),
-                    booked_time,
-                    b.get("courier_name", ""),
-                    b.get("order_id", ""),
-                    b.get("recipient", ""),
-                    b.get("tracking_number", ""),
-                ))
+        def _col_val(b: dict, col: str) -> str:
+            if col == "time":
+                t = b.get("booked_at", "")
+                return t.split("T")[1][:5] if "T" in t else ""
+            return b.get({"date": "date", "courier": "courier_name", "order": "order_id",
+                          "recipient": "recipient", "tracking": "tracking_number"}.get(col, col), "")
+
+        def _populate():
+            tree.delete(*tree.get_children())
+            _iid_to_booking.clear()
+            if not all_bookings:
+                tree.insert("", "end", values=("", "", "No bookings found", "", "", ""))
+                return
+            col, asc = _sort_col[0], _sort_asc[0]
+            for b in sorted(all_bookings, key=lambda b: _col_val(b, col), reverse=not asc):
+                iid = tree.insert("", "end", values=tuple(_col_val(b, c) for c in columns))
                 _iid_to_booking[iid] = b
-        else:
-            tree.insert("", "end", values=("", "", "No bookings found", "", "", ""))
+
+        def _sort_by(col: str):
+            if _sort_col[0] == col:
+                _sort_asc[0] = not _sort_asc[0]
+            else:
+                _sort_col[0] = col
+                _sort_asc[0] = True
+            for c in columns:
+                arrow = (" ▲" if _sort_asc[0] else " ▼") if c == _sort_col[0] else ""
+                tree.heading(c, text=col_labels[c] + arrow)
+            _populate()
+
+        # Initial populate: date descending (newest first)
+        tree.heading("date", text="Date ▼")
+        _populate()
 
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
@@ -1415,11 +1434,18 @@ class ResultsTab(ctk.CTkFrame):
         btn_frame.pack(pady=(4, 4))
 
         cancel_btn = tk.Button(
-            btn_frame, text="Cancel Selected Shipment", font=("Segoe UI", 10),
+            btn_frame, text="Cancel Shipment", font=("Segoe UI", 10),
             bg="#b22222", fg="white", activebackground="#8b0000",
-            width=26, state="disabled", command=lambda: _confirm_cancel(),
+            width=20, state="disabled", command=lambda: _confirm_cancel(),
         )
         cancel_btn.pack(side="left", padx=(0, 8))
+
+        reprint_btn = tk.Button(
+            btn_frame, text="Reprint Label", font=("Segoe UI", 10),
+            bg="#1a6b1a", fg="white", activebackground="#0f4a0f",
+            width=16, state="disabled", command=lambda: _reprint_label(),
+        )
+        reprint_btn.pack(side="left", padx=(0, 8))
 
         tk.Button(
             btn_frame, text="Close", font=("Segoe UI", 10), width=10,
@@ -1427,17 +1453,36 @@ class ResultsTab(ctk.CTkFrame):
         ).pack(side="left")
 
         # ── Status label ──
-        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=500, fg="gray40")
+        status_lbl = tk.Label(win, text="", font=("Segoe UI", 10), wraplength=560, fg="gray40")
         status_lbl.pack(padx=16, pady=(4, 12))
 
-        # Enable cancel button when a row is selected
         def _on_select(_event=None):
             sel = tree.selection()
-            has_bookings = bool(all_bookings)
-            cancel_btn.configure(state="normal" if sel and has_bookings else "disabled")
+            state = "normal" if sel and all_bookings else "disabled"
+            cancel_btn.configure(state=state)
+            reprint_btn.configure(state=state)
 
         tree.bind("<<TreeviewSelect>>", _on_select)
-        tree.bind("<Double-1>", lambda _e: _confirm_cancel())
+        tree.bind("<Double-1>", lambda _e: _reprint_label())
+
+        # ── Reprint logic ──
+        def _reprint_label():
+            import os
+            sel = tree.selection()
+            if not sel:
+                return
+            booking = _iid_to_booking.get(sel[0])
+            if not booking:
+                return
+            order_id     = booking.get("order_id", "")
+            booking_date = booking.get("date", "")
+            label_path   = _Path(bookings_dir) / "Labels" / booking_date / f"{order_id}.pdf"
+            if not label_path.exists():
+                status_lbl.configure(
+                    text=f"Label PDF not found:\n{label_path}", fg="red")
+                return
+            os.startfile(str(label_path))
+            status_lbl.configure(text=f"Opened label for order {order_id}.", fg="green")
 
         # ── Cancel logic ──
         def _confirm_cancel():
@@ -1451,7 +1496,7 @@ class ResultsTab(ctk.CTkFrame):
 
             courier_code = booking.get("courier_code", "")
             courier_name = booking.get("courier_name", "")
-            tracking = booking.get("tracking_number", "")
+            tracking     = booking.get("tracking_number", "")
             booking_date = booking.get("date", "")
 
             courier = couriers_by_code.get(courier_code)
@@ -1475,10 +1520,10 @@ class ResultsTab(ctk.CTkFrame):
                 return
 
             cancel_btn.configure(state="disabled")
+            reprint_btn.configure(state="disabled")
             status_lbl.configure(text="Cancelling…", fg="gray40")
             win.update_idletasks()
 
-            # Build courier-specific kwargs from extras
             cancel_kwargs = {}
             extras = booking.get("extras", {})
             if extras.get("booking_reference"):
@@ -1503,6 +1548,7 @@ class ResultsTab(ctk.CTkFrame):
                 else:
                     status_lbl.configure(text=f"Cancellation failed:\n{msg}", fg="red")
                     cancel_btn.configure(state="normal")
+                    reprint_btn.configure(state="normal")
 
             threading.Thread(target=_run, daemon=True).start()
 

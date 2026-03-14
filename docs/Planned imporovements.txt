@@ -1,1 +1,6 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
+- the delete shipment modal should only show bookings from the current date, not all. This currently causes the list to be huge.
+- create a settings window where we can choose filepaths
+- add sorting logic to shipment deletion modal
+- upgrade the deletion modal to a delete/reprint modal. This means we'll need to store all labels created temporarily. Maybe we have them auto-delete after 1 week. They should be stored on the server (set up via settings window)
+- refresh single order after note is added via fulfillment screen
