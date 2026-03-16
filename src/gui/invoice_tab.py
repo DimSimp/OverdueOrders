@@ -418,10 +418,17 @@ class InvoiceTab(ctk.CTkFrame):
             results = self._app.results_tab
             results._neto_orders = snapshot.neto_orders
             results._ebay_orders = snapshot.ebay_orders
-            results._matched = snapshot.matched_orders
             results._unmatched_inv = snapshot.unmatched_inv
             results._excluded_order_ids = set(snapshot.excluded_order_ids)
             results._force_matched_order_ids = set(snapshot.force_matched_order_ids)
+            # snapshot.matched_orders is the effective list (auto-matched + force-matched).
+            # _refresh_tables rebuilds force-matched via _build_force_matched(), so we must
+            # strip force-matched orders from _matched to avoid them appearing twice.
+            force_ids = results._force_matched_order_ids
+            results._matched = [
+                m for m in snapshot.matched_orders
+                if (m.platform, m.order_id) not in force_ids
+            ]
             results._refresh_tables()
 
             # Jump to results tab

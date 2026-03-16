@@ -29,6 +29,16 @@ set VERSION=%VERSION:"=%
 echo Version: %VERSION%
 
 echo.
+echo === Copying label settings into build output ===
+if exist "data\shipping\label_settings.json" (
+    if not exist "dist\Scarlett AIO\data\shipping" mkdir "dist\Scarlett AIO\data\shipping"
+    copy /y "data\shipping\label_settings.json" "dist\Scarlett AIO\data\shipping\label_settings.json" >nul
+    echo Copied label_settings.json to dist\Scarlett AIO\data\shipping\
+) else (
+    echo [INFO] No label_settings.json found -- build will use hardcoded defaults.
+)
+
+echo.
 echo === Waiting for file locks to release ===
 timeout /t 5 /nobreak >nul
 

@@ -502,7 +502,12 @@ class OrderDetailView(ctk.CTkFrame):
             anchor="w", padx=10, pady=(8, 4)
         )
 
-        self._build_neto_notes(frame)
+        # Keep a reference to the outer frame so _rebuild_notes_content can recreate
+        # the inner content in-place without the outer frame losing its pack position.
+        self._notes_content_parent = frame
+        self._notes_content_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        self._notes_content_frame.pack(fill="x")
+        self._build_neto_notes(self._notes_content_frame)
 
     def _build_neto_notes(self, parent):
         o = self._neto_order
@@ -601,14 +606,24 @@ class OrderDetailView(ctk.CTkFrame):
                 dry_run=self._dry_run,
             )
             line_item.notes = text
-            if btn:
-                btn.configure(state="disabled", text="Saved")
-                self.after(2000, lambda b=btn: b.configure(state="normal", text="Save"))
             parent = self.winfo_toplevel()
             if self._dry_run:
+                if btn:
+                    btn.configure(state="disabled", text="Saved")
+                    self.after(2000, lambda b=btn: b.configure(state="normal", text="Save"))
                 messagebox.showinfo("Dry Run", f"[DRY RUN] PrivateNotes would be set:\n{text}", parent=parent)
             else:
-                messagebox.showinfo("Success", "PrivateNotes updated.", parent=parent)
+                if btn:
+                    btn.configure(state="disabled", text="Refreshing…")
+
+                def _fetch():
+                    try:
+                        fresh = self._ebay_client.get_orders_by_ids([self._order_id])
+                        self.after(0, lambda: self._on_ebay_note_refreshed(fresh, btn))
+                    except Exception as exc:
+                        self.after(0, lambda err=str(exc), b=btn: self._on_ebay_note_refresh_failed(err, b))
+
+                threading.Thread(target=_fetch, daemon=True).start()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save note:\n{e}", parent=self.winfo_toplevel())
 
@@ -625,14 +640,72 @@ class OrderDetailView(ctk.CTkFrame):
                 description=dated_text,
                 dry_run=self._dry_run,
             )
-            self._add_note_btn.configure(state="disabled", text="Note Added")
             parent = self.winfo_toplevel()
             if self._dry_run:
+                self._add_note_btn.configure(state="disabled", text="Note Added")
                 messagebox.showinfo("Dry Run", f"[DRY RUN] Sticky note would be added:\n{dated_text}", parent=parent)
             else:
-                messagebox.showinfo("Success", "Sticky note added.", parent=parent)
+                # Re-fetch this order so the sticky notes list refreshes in-place.
+                self._add_note_btn.configure(state="disabled", text="Refreshing…")
+
+                def _fetch():
+                    try:
+                        fresh = self._neto_client.get_orders_by_ids([self._order_id])
+                        self.after(0, lambda: self._on_note_refreshed(fresh))
+                    except Exception as exc:
+                        self.after(0, lambda err=str(exc): self._on_note_refresh_failed(err))
+
+                threading.Thread(target=_fetch, daemon=True).start()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to add note: {e}", parent=self.winfo_toplevel())
+
+    def _on_note_refreshed(self, fresh_orders: list):
+        """Called on the main thread after the post-save re-fetch completes."""
+        if fresh_orders:
+            self._neto_order = fresh_orders[0]
+        self._rebuild_notes_content()
+
+    def _on_note_refresh_failed(self, error_msg: str):
+        """Called when the post-save re-fetch fails; note was saved but display is stale."""
+        self._add_note_btn.configure(state="disabled", text="Note Added")
+        self._status_label.configure(
+            text="Note saved, but couldn't refresh display.", text_color="orange"
+        )
+
+    def _on_ebay_note_refreshed(self, fresh_orders: list, btn):
+        """Called on the main thread after eBay re-fetch completes post note-save."""
+        if fresh_orders:
+            self._ebay_order = fresh_orders[0]
+            fresh_items = {
+                (fli.legacy_item_id, fli.legacy_transaction_id): fli
+                for fli in self._ebay_order.line_items
+            }
+            for li, entry_widget, _btn in self._ebay_note_widgets:
+                fli = fresh_items.get((li.legacy_item_id, li.legacy_transaction_id))
+                if fli:
+                    li.notes = fli.notes
+                    li.legacy_transaction_id = fli.legacy_transaction_id
+                    entry_widget.delete(0, "end")
+                    entry_widget.insert(0, fli.notes or "")
+        if btn:
+            btn.configure(state="normal", text="Save")
+
+    def _on_ebay_note_refresh_failed(self, error_msg: str, btn):
+        """Called when eBay re-fetch fails; note was saved but entries may be stale."""
+        if btn:
+            btn.configure(state="disabled", text="Saved")
+            self.after(2000, lambda b=btn: b.configure(state="normal", text="Save"))
+
+    def _rebuild_notes_content(self):
+        """Destroy and recreate the notes content area inside the outer notes frame.
+
+        The outer frame keeps its pack position so the section doesn't jump to
+        the bottom of the scrollable view.
+        """
+        self._notes_content_frame.destroy()
+        self._notes_content_frame = ctk.CTkFrame(self._notes_content_parent, fg_color="transparent")
+        self._notes_content_frame.pack(fill="x")
+        self._build_neto_notes(self._notes_content_frame)
 
     # ── Tracking ──────────────────────────────────────────────────────────
 

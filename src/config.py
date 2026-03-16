@@ -6,15 +6,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
-# When running as a packaged exe, config lives next to the exe.
-# When running from source, it lives at the project root (parent of src/).
-if getattr(sys, "frozen", False):
-    _BASE = Path(sys.executable).parent
-else:
-    _BASE = Path(__file__).parent.parent
+# Network-share path used for deployed builds so config survives exe updates.
+# When frozen, this is tried first; the local exe directory is the fallback.
+# When running from source the network path is never consulted.
+_NETWORK_CONFIG_PATH = Path(r"\\SERVER\Project Folder\Order-Fulfillment-App\Config\config.json")
 
-CONFIG_PATH  = _BASE / "config.json"
-EXAMPLE_PATH = _BASE / "config.example.json"
+if getattr(sys, "frozen", False):
+    _LOCAL_BASE   = Path(sys.executable).parent
+    _LOCAL_CONFIG = _LOCAL_BASE / "config.json"
+    # Prefer the shared network config; fall back to the local copy.
+    try:
+        _network_available = _NETWORK_CONFIG_PATH.exists()
+    except OSError:
+        _network_available = False
+    CONFIG_PATH = _NETWORK_CONFIG_PATH if _network_available else _LOCAL_CONFIG
+else:
+    _LOCAL_BASE = Path(__file__).parent.parent
+    CONFIG_PATH = _LOCAL_BASE / "config.json"
+
+EXAMPLE_PATH = _LOCAL_BASE / "config.example.json"
 
 
 @dataclass

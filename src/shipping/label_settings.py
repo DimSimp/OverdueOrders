@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
-SETTINGS_FILE = Path("data/shipping") / "label_settings.json"
+# Resolve an absolute path so the settings file is always found next to the exe
+# (when frozen) or at the project root (when running from source).
+if getattr(sys, "frozen", False):
+    _BASE = Path(sys.executable).parent
+else:
+    _BASE = Path(__file__).parent.parent.parent
+
+SETTINGS_FILE = _BASE / "data" / "shipping" / "label_settings.json"
 
 DEFAULTS: dict = {
     "scale": 0.92,

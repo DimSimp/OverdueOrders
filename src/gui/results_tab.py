@@ -1404,7 +1404,13 @@ class ResultsTab(ctk.CTkFrame):
                 tree.insert("", "end", values=("", "", "No bookings found", "", "", ""))
                 return
             col, asc = _sort_col[0], _sort_asc[0]
-            for b in sorted(all_bookings, key=lambda b: _col_val(b, col), reverse=not asc):
+            # When sorting by date or time use the full booked_at ISO timestamp so
+            # that both columns sort as a single combined datetime key.
+            if col in ("date", "time"):
+                sort_key = lambda b: b.get("booked_at", "")
+            else:
+                sort_key = lambda b: _col_val(b, col)
+            for b in sorted(all_bookings, key=sort_key, reverse=not asc):
                 iid = tree.insert("", "end", values=tuple(_col_val(b, c) for c in columns))
                 _iid_to_booking[iid] = b
 
@@ -1467,7 +1473,6 @@ class ResultsTab(ctk.CTkFrame):
 
         # ── Reprint logic ──
         def _reprint_label():
-            import os
             sel = tree.selection()
             if not sel:
                 return
@@ -1476,13 +1481,30 @@ class ResultsTab(ctk.CTkFrame):
                 return
             order_id     = booking.get("order_id", "")
             booking_date = booking.get("date", "")
+            courier_code = booking.get("courier_code", "")
             label_path   = _Path(bookings_dir) / "Labels" / booking_date / f"{order_id}.pdf"
             if not label_path.exists():
                 status_lbl.configure(
                     text=f"Label PDF not found:\n{label_path}", fg="red")
                 return
-            os.startfile(str(label_path))
-            status_lbl.configure(text=f"Opened label for order {order_id}.", fg="green")
+            pdf_bytes = label_path.read_bytes()
+            reprint_btn.configure(state="disabled")
+            status_lbl.configure(text="Printing…", fg="gray40")
+            win.update_idletasks()
+
+            def _run():
+                from src.shipping.label_printer import print_label
+                err = print_label(pdf_bytes, courier_code=courier_code)
+                win.after(0, lambda: _on_print_done(err, order_id))
+
+            def _on_print_done(err: str, oid: str):
+                reprint_btn.configure(state="normal")
+                if err:
+                    status_lbl.configure(text=f"Print failed: {err}", fg="red")
+                else:
+                    status_lbl.configure(text=f"Label for order {oid} sent to printer.", fg="green")
+
+            threading.Thread(target=_run, daemon=True).start()
 
         # ── Cancel logic ──
         def _confirm_cancel():
