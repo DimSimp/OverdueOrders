@@ -149,7 +149,8 @@
     "username": "kyaldabomb",
     "password": "D5es4stu!",
     "morning_filename": "Morning_Inventory_Report.xlsx",
-    "afternoon_filename": "Afternoon_Inventory_Report.xlsx"
+    "afternoon_filename": "Afternoon_Inventory_Report.xlsx",
+    "local_inventory_dir": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Inventory_Reports"
   },
   "app": {
     "order_lookback_days": 90,

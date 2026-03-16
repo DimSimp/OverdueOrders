@@ -82,11 +82,12 @@ class OpenAIConfig:
 
 @dataclass
 class FTPConfig:
-    host: str
-    username: str
-    password: str
+    host: str = ""
+    username: str = ""
+    password: str = ""
     morning_filename: str = "Morning_Inventory_Report.xlsx"
     afternoon_filename: str = "Afternoon_Inventory_Report.xlsx"
+    local_inventory_dir: str = ""  # path to folder containing the two report files on a local/network drive
 
 
 @dataclass
@@ -203,13 +204,14 @@ class ConfigManager:
         )
 
         ftp_raw = self._raw.get("ftp", {})
-        if ftp_raw.get("host"):
+        if ftp_raw.get("host") or ftp_raw.get("local_inventory_dir"):
             self.ftp = FTPConfig(
-                host=ftp_raw["host"],
+                host=ftp_raw.get("host", ""),
                 username=ftp_raw.get("username", ""),
                 password=ftp_raw.get("password", ""),
                 morning_filename=ftp_raw.get("morning_filename", "Morning_Inventory_Report.xlsx"),
                 afternoon_filename=ftp_raw.get("afternoon_filename", "Afternoon_Inventory_Report.xlsx"),
+                local_inventory_dir=ftp_raw.get("local_inventory_dir", ""),
             )
 
         ship_raw = self._raw.get("shipping", {})

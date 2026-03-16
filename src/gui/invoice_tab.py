@@ -187,7 +187,7 @@ class InvoiceTab(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self._ftp_frame,
-            text="Downloads morning & afternoon inventory from FTP, finds received items.",
+            text="Compare morning & afternoon inventory reports to find received items.",
             font=ctk.CTkFont(size=12),
             text_color="gray60",
         ).pack(side="left", padx=(0, 12))
@@ -195,16 +195,26 @@ class InvoiceTab(ctk.CTkFrame):
         self._ftp_btn = ctk.CTkButton(
             self._ftp_frame,
             text="Load from FTP",
-            width=140,
+            width=130,
             command=self._load_from_ftp,
         )
         self._ftp_btn.pack(side="left")
+
+        self._server_btn = ctk.CTkButton(
+            self._ftp_frame,
+            text="Load from Server",
+            width=140,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._load_from_server,
+        )
+        self._server_btn.pack(side="left", padx=(8, 0))
 
         self._load_session_btn = ctk.CTkButton(
             self._ftp_frame,
             text="Load Session",
             width=110,
-            fg_color=("dodgerblue3", "dodgerblue4"),
+            fg_color="gray50",
+            hover_color="gray40",
             command=self._load_session,
         )
         self._load_session_btn.pack(side="left", padx=(8, 0))
@@ -572,13 +582,51 @@ class InvoiceTab(ctk.CTkFrame):
         )
         self._next_btn.configure(state="normal" if count > 0 else "disabled")
         self._ftp_btn.configure(state="normal")
+        self._server_btn.configure(state="normal")
 
     def _on_ftp_error(self, message: str):
         self._progress.stop()
         self._progress.pack_forget()
-        self._set_error(f"FTP error: {message}")
+        self._set_error(f"Error: {message}")
         self._ftp_status_label.configure(text="Load failed.", text_color="orange")
         self._ftp_btn.configure(state="normal")
+        self._server_btn.configure(state="normal")
+
+    def _load_from_server(self):
+        ftp_cfg = self._app.config.ftp
+        if ftp_cfg is None or not ftp_cfg.local_inventory_dir:
+            self._set_error(
+                'Local inventory directory not configured. '
+                'Add "local_inventory_dir" to the "ftp" section of config.json.'
+            )
+            return
+
+        morning_path = os.path.join(ftp_cfg.local_inventory_dir, ftp_cfg.morning_filename)
+        afternoon_path = os.path.join(ftp_cfg.local_inventory_dir, ftp_cfg.afternoon_filename)
+
+        if not os.path.exists(morning_path):
+            self._set_error(f"Morning report not found:\n{morning_path}")
+            return
+        if not os.path.exists(afternoon_path):
+            self._set_error(f"Afternoon report not found:\n{afternoon_path}")
+            return
+
+        self._server_btn.configure(state="disabled")
+        self._ftp_status_label.configure(text="Reading server files…", text_color="gray60")
+        self._set_error("")
+        self._progress.pack(fill="x", padx=12, pady=(0, 4), after=self._files_row)
+        self._progress.start()
+
+        def _worker():
+            from src.ftp_inventory import compare_local_files
+            try:
+                received = compare_local_files(morning_path, afternoon_path)
+                self.after(0, lambda: self._on_ftp_success(received))
+            except Exception as exc:
+                err_msg = str(exc)
+                self.after(0, lambda m=err_msg: self._on_ftp_error(m))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     # ── Public API (used by results_tab) ──────────────────────────────────
 

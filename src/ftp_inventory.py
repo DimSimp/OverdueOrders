@@ -38,6 +38,15 @@ def download_and_compare(host: str, username: str, password: str,
         return _compare_reports(morning_path, afternoon_path)
 
 
+def compare_local_files(morning_path: str, afternoon_path: str) -> list[ReceivedItem]:
+    """Compare two local inventory Excel files directly (no FTP needed).
+
+    Useful when the inventory reports are accessible on a local or network drive.
+    Uses the same delta logic as the FTP method.
+    """
+    return _compare_reports(morning_path, afternoon_path)
+
+
 def _compare_reports(morning_path: str, afternoon_path: str) -> list[ReceivedItem]:
     df1 = pd.read_excel(morning_path, header=None)
     df2 = pd.read_excel(afternoon_path, header=None)
