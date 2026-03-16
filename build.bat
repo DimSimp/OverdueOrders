@@ -54,6 +54,16 @@ if errorlevel 1 (
 )
 
 echo.
+echo === Deploying to server ===
+set DEPLOY_PATH=\\SERVER\Project Folder\Order-Fulfillment-App\dist\Scarlett AIO
+robocopy "dist\Scarlett AIO" "%DEPLOY_PATH%" /MIR /XF config.json /R:2 /W:3 >nul
+if errorlevel 8 (
+    echo [WARNING] Server deploy failed -- server may be offline. Distribute manually.
+) else (
+    echo Deployed to: %DEPLOY_PATH%
+)
+
+echo.
 echo === Build complete ===
 echo   Exe folder : dist\Scarlett AIO\
 echo   Release zip: %ZIPNAME%

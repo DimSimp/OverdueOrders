@@ -829,6 +829,9 @@ class OrderDetailView(ctk.CTkFrame):
                     self._neto_order
                     and self._neto_order.sales_channel.lower() == "kogan"
                 ):
+                    clipboard_text = tracking if tracking else "Untracked"
+                    self.clipboard_clear()
+                    self.clipboard_append(clipboard_text)
                     webbrowser.open("https://dispatch.aws.kgn.io/Manage")
                 self._on_fulfilled()
 
