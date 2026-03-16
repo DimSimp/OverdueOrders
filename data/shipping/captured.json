@@ -2,5 +2,6 @@
   "aramex": true,
   "dai_post": true,
   "auspost": true,
+  "auspost_express": true,
   "allied": true
 }

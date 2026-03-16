@@ -958,6 +958,36 @@ class ResultsTab(ctk.CTkFrame):
 
     # ── Override management ───────────────────────────────────────────────
 
+    def _overrides_dir(self) -> str:
+        """Return the shared session directory used for the overrides file."""
+        cfg = self._app.config.app
+        return _resolve_save_dir(
+            preferred=cfg.session_dir,
+            fallback=cfg.snapshot_dir or cfg.output_dir,
+        )
+
+    def _save_shared_overrides(self):
+        """Persist current override IDs to the shared overrides file."""
+        try:
+            from src.session import save_overrides
+            save_overrides(
+                save_dir=self._overrides_dir(),
+                force_matched_ids=self._force_matched_order_ids,
+                excluded_ids=self._excluded_order_ids,
+            )
+        except Exception:
+            pass
+
+    def _merge_shared_overrides(self):
+        """Read the shared overrides file and union it into local state."""
+        try:
+            from src.session import load_overrides
+            force_matched, excluded = load_overrides(self._overrides_dir())
+            self._force_matched_order_ids |= force_matched
+            self._excluded_order_ids |= excluded
+        except Exception:
+            pass
+
     def _exclude_order(self, order_id: str, platform: str = ""):
         """Move an order from matched → unmatched."""
         # Find platform if not provided (from matched list)
@@ -970,6 +1000,7 @@ class ResultsTab(ctk.CTkFrame):
         key = (platform, order_id)
         self._excluded_order_ids.add(key)
         self._force_matched_order_ids.discard(key)
+        self._save_shared_overrides()
         self._refresh_tables()
 
     def _include_order(self, order_id: str, platform: str = ""):
@@ -980,6 +1011,7 @@ class ResultsTab(ctk.CTkFrame):
                 key = (m.platform, m.order_id)
                 if key in self._excluded_order_ids:
                     self._excluded_order_ids.discard(key)
+                    self._save_shared_overrides()
                     self._refresh_tables()
                     return
 
@@ -988,12 +1020,14 @@ class ResultsTab(ctk.CTkFrame):
             channel = order.sales_channel or "Neto"
             if order.order_id == order_id:
                 self._force_matched_order_ids.add((channel, order.order_id))
+                self._save_shared_overrides()
                 self._refresh_tables()
                 return
 
         for order in self._ebay_orders:
             if order.order_id == order_id:
                 self._force_matched_order_ids.add(("eBay", order.order_id))
+                self._save_shared_overrides()
                 self._refresh_tables()
                 return
 
@@ -1183,6 +1217,9 @@ class ResultsTab(ctk.CTkFrame):
         ]
         self._app.neto_orders = self._neto_orders
         self._app.ebay_orders = self._ebay_orders
+
+        # Merge any overrides written by other users since the last refresh
+        self._merge_shared_overrides()
 
         invoice_items = self._app.invoice_tab.get_invoice_items()
         matched, unmatched_inv = match_orders_to_invoice(

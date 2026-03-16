@@ -1,0 +1,31 @@
+{
+  "aramex": {
+    "scale": 1.5,
+    "split_ratio": 0.55,
+    "label_length_mm": 80.0
+  },
+  "dai_post": {
+    "scale": 1.56,
+    "split_ratio": 0.53,
+    "label_length_mm": 80.0,
+    "no_split": false,
+    "rotate_cw": false,
+    "skip_initial_rotate": false
+  },
+  "auspost": {
+    "scale": 1.55,
+    "split_ratio": 0.58,
+    "label_length_mm": 75.0,
+    "no_split": false,
+    "rotate_cw": false,
+    "skip_initial_rotate": false
+  },
+  "allied": {
+    "scale": 1.02,
+    "split_ratio": 0.53,
+    "label_length_mm": 185.0,
+    "no_split": false,
+    "rotate_cw": false,
+    "skip_initial_rotate": true
+  }
+}

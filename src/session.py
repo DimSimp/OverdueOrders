@@ -16,6 +16,58 @@ from src.pdf_parser import InvoiceItem
 SNAPSHOT_VERSION = 1
 
 
+def _overrides_filepath(save_dir: str) -> str:
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return os.path.join(save_dir, f"{date_str} overrides.json")
+
+
+def save_overrides(
+    save_dir: str,
+    force_matched_ids: set[tuple[str, str]],
+    excluded_ids: set[tuple[str, str]],
+) -> None:
+    """Write only the manual override IDs to a small shared JSON file.
+
+    Multiple users saving to the same directory will keep overrides in sync:
+    any user moving an order becomes visible to all users on their next refresh.
+    """
+    if not save_dir:
+        return
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        filepath = _overrides_filepath(save_dir)
+        data = {
+            "force_matched_order_ids": [list(x) for x in force_matched_ids],
+            "excluded_order_ids": [list(x) for x in excluded_ids],
+        }
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def load_overrides(
+    save_dir: str,
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Read override IDs from the shared file. Returns (force_matched, excluded).
+
+    Returns empty sets if the file doesn't exist or can't be read.
+    """
+    if not save_dir:
+        return set(), set()
+    try:
+        filepath = _overrides_filepath(save_dir)
+        if not os.path.exists(filepath):
+            return set(), set()
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        force_matched = {tuple(x) for x in data.get("force_matched_order_ids", [])}
+        excluded = {tuple(x) for x in data.get("excluded_order_ids", [])}
+        return force_matched, excluded  # type: ignore[return-value]
+    except Exception:
+        return set(), set()
+
+
 @dataclass
 class SessionSnapshot:
     invoice_items: list[InvoiceItem]

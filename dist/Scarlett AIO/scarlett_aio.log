@@ -1,18 +1,259 @@
-14:20:54  INFO      freight_booking  Courier selected: Aramex (aramex)  price=$5.22
-14:20:54  INFO      freight_booking  Starting booking thread for courier 'aramex', order 'N477761'
-14:20:54  INFO      courier.aramex  Booking Aramex consignment for order N477761 (receiver: Stuart Mitchell, Ngunnawal ACT)
-14:20:55  INFO      courier.aramex  Consignment created: conId=150582965  tracking=MS0018047500
-14:20:56  INFO      courier.aramex  Label PDF downloaded: 111242 bytes
-14:20:56  INFO      freight_booking  Booking confirmed — courier=Aramex  tracking=MS0018047500  reference=150582965
-14:20:56  INFO      src.shipping.booking_ledger  Ledger: added Aramex booking MS0018047500
-14:20:56  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\aramex.pdf (111242 bytes)
-14:20:56  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-14\N477761.pdf (111242 bytes)
-14:20:56  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
-14:20:58  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
-14:20:58  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
-14:20:58  WARNING   brother_ql.conversion  Need to resize the image...
-14:20:58  WARNING   brother_ql.conversion  Need to resize the image...
-14:20:58  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 151674 bytes.
-14:21:03  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
-14:21:03  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
-14:21:03  INFO      freight_booking  Label printed successfully
+11:54:33  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$5.07
+11:54:33  INFO      freight_booking  Starting booking thread for courier 'dai_post', order 'N477360'
+11:54:37  INFO      courier.dai_post  Booking DAI Post for order N477360 (jobnumber=10512, weight=0.25kg)
+11:54:38  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134519273  label=21366 bytes
+11:54:42  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134519273 job=10512
+11:54:42  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134519273  reference=10512
+11:54:42  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134519273
+11:54:42  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (21366 bytes)
+11:54:42  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\N477360.pdf (21366 bytes)
+11:54:42  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+11:54:43  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+11:54:43  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+11:54:43  WARNING   brother_ql.conversion  Need to resize the image...
+11:54:43  WARNING   brother_ql.conversion  Need to resize the image...
+11:54:43  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+11:54:49  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+11:54:49  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+11:54:49  INFO      freight_booking  Label printed successfully
+12:01:34  INFO      freight_booking  Courier selected: Aramex (aramex)  price=$7.42
+12:01:34  INFO      freight_booking  Starting booking thread for courier 'aramex', order 'N477481'
+12:01:34  INFO      courier.aramex  Booking Aramex consignment for order N477481 (receiver: Paw P'Lae Moo Thachaw, HOPPERS CROSSING VIC)
+12:01:37  INFO      courier.aramex  Consignment created: conId=150761901  tracking=MP0082821596
+12:01:37  INFO      courier.aramex  Label PDF downloaded: 111932 bytes
+12:01:37  INFO      freight_booking  Booking confirmed — courier=Aramex  tracking=MP0082821596  reference=150761901
+12:01:37  INFO      src.shipping.booking_ledger  Ledger: added Aramex booking MP0082821596
+12:01:37  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\aramex.pdf (111932 bytes)
+12:01:37  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\N477481.pdf (111932 bytes)
+12:01:37  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:01:38  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:01:38  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:01:38  WARNING   brother_ql.conversion  Need to resize the image...
+12:01:38  WARNING   brother_ql.conversion  Need to resize the image...
+12:01:38  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167112 bytes.
+12:01:44  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:01:44  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:01:44  INFO      freight_booking  Label printed successfully
+12:23:55  INFO      freight_booking  Courier selected: Allied Express (allied)  price=$140.69
+12:23:55  INFO      freight_booking  Starting booking thread for courier 'allied', order 'N477553'
+12:23:55  INFO      courier.allied  Booking Allied Express shipment for order N477553
+12:24:03  INFO      courier.allied  Allied dispatch OK: connote=AOE477553P  reference=N477553
+12:24:03  INFO      courier.allied  Allied label downloaded: 130984 bytes
+12:24:03  INFO      freight_booking  Booking confirmed — courier=Allied Express  tracking=AOE477553P  reference=N477553
+12:24:03  INFO      src.shipping.booking_ledger  Ledger: added Allied Express booking AOE477553P
+12:24:03  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\allied.pdf (130984 bytes)
+12:24:03  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\N477553.pdf (130984 bytes)
+12:24:03  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:24:04  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:24:04  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:24:04  WARNING   brother_ql.conversion  Need to resize the image...
+12:24:04  WARNING   brother_ql.conversion  Need to resize the image...
+12:24:04  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 386406 bytes.
+12:24:14  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:24:14  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:24:14  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:24:14  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:24:14  WARNING   brother_ql.conversion  Need to resize the image...
+12:24:14  WARNING   brother_ql.conversion  Need to resize the image...
+12:24:14  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 386406 bytes.
+12:24:24  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:24:24  INFO      label_printer  Page 2 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:24:24  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:24:24  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:24:24  WARNING   brother_ql.conversion  Need to resize the image...
+12:24:24  WARNING   brother_ql.conversion  Need to resize the image...
+12:24:24  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 386406 bytes.
+12:24:34  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:24:34  INFO      label_printer  Page 3 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:24:34  INFO      freight_booking  Label printed successfully
+12:30:33  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$5.07
+12:30:33  INFO      freight_booking  Starting booking thread for courier 'dai_post', order 'N477557'
+12:30:36  INFO      courier.dai_post  Booking DAI Post for order N477557 (jobnumber=10512, weight=0.25kg)
+12:30:37  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134520767  label=21675 bytes
+12:30:42  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134520767 job=10512
+12:30:42  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134520767  reference=10512
+12:30:42  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134520767
+12:30:42  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (21675 bytes)
+12:30:42  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\N477557.pdf (21675 bytes)
+12:30:42  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:30:42  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:30:42  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:30:43  WARNING   brother_ql.conversion  Need to resize the image...
+12:30:43  WARNING   brother_ql.conversion  Need to resize the image...
+12:30:43  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+12:30:48  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:30:48  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:30:48  INFO      freight_booking  Label printed successfully
+12:37:51  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$5.76
+12:37:51  INFO      freight_booking  Starting booking thread for courier 'dai_post', order 'N477445'
+12:37:56  INFO      courier.dai_post  Booking DAI Post for order N477445 (jobnumber=10512, weight=0.50kg)
+12:37:57  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134521283  label=21381 bytes
+12:38:00  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134521283 job=10512
+12:38:00  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134521283  reference=10512
+12:38:00  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134521283
+12:38:00  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (21381 bytes)
+12:38:00  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\N477445.pdf (21381 bytes)
+12:38:00  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:38:01  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:38:01  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:38:01  WARNING   brother_ql.conversion  Need to resize the image...
+12:38:01  WARNING   brother_ql.conversion  Need to resize the image...
+12:38:01  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+12:38:07  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:38:07  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:38:07  INFO      freight_booking  Label printed successfully
+12:39:21  WARNING   courier.aramex  Address validation returned HTTP 400: {"errors":[{"code":"GEO_ADDR_VAL","path":null,"message":"address validation failed, unable to deliver to street address (value supplied: 'PO Box 35')","suggestedValues":null,"logLevel":6}],"type":2} — using raw address
+12:39:45  INFO      freight_booking  Courier selected: Australia Post (auspost)  price=$10.81
+12:39:45  INFO      freight_booking  Starting booking thread for courier 'auspost', order '03-14358-19639'
+12:39:45  INFO      courier.auspost  Booking AusPost shipment for order 03-14358-19639 (product=3D55)
+12:39:46  INFO      courier.auspost  AusPost shipment created: tracking=33C335044965  shipment_id=aPBr0EZKmC4AAAGcAZkCUfRM
+12:39:47  INFO      courier.auspost  AusPost label downloaded: 28546 bytes  url=https://ap-prod-ddc-stack-content.s3.ap-southeast-2.amazonaws.com/pccbatch-prod/fe86d5a6-e402-493d-90ab-78e3e0f60db3.pdf?AWSAccessKeyId=AKIAQSKC37NJNPLWN6E3&Expires=1773711587&Signature=8t8Ylw4qDo%2FfixhSMBVr8ZjjAd0%3D
+12:39:47  INFO      freight_booking  Booking confirmed — courier=Australia Post  tracking=33C335044965  reference=aPBr0EZKmC4AAAGcAZkCUfRM
+12:39:47  INFO      src.shipping.booking_ledger  Ledger: added Australia Post booking 33C335044965
+12:39:47  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\auspost.pdf (28546 bytes)
+12:39:47  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\03-14358-19639.pdf (28546 bytes)
+12:39:47  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:39:48  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:39:48  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:39:48  WARNING   brother_ql.conversion  Need to resize the image...
+12:39:48  WARNING   brother_ql.conversion  Need to resize the image...
+12:39:48  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 156882 bytes.
+12:39:53  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:39:53  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:39:53  INFO      freight_booking  Label printed successfully
+12:40:18  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:40:18  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:40:18  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:40:18  WARNING   brother_ql.conversion  Need to resize the image...
+12:40:19  WARNING   brother_ql.conversion  Need to resize the image...
+12:40:19  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 156882 bytes.
+12:40:24  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:40:24  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:42:09  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$5.25
+12:42:09  INFO      freight_booking  Starting booking thread for courier 'dai_post', order '04-14358-55082'
+12:42:12  INFO      courier.dai_post  Booking DAI Post for order 04-14358-55082 (jobnumber=10512, weight=0.25kg)
+12:42:13  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134521658  label=21391 bytes
+12:42:17  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134521658 job=10512
+12:42:17  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134521658  reference=10512
+12:42:17  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134521658
+12:42:17  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (21391 bytes)
+12:42:17  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\04-14358-55082.pdf (21391 bytes)
+12:42:17  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:42:18  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:42:18  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:42:18  WARNING   brother_ql.conversion  Need to resize the image...
+12:42:18  WARNING   brother_ql.conversion  Need to resize the image...
+12:42:18  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+12:42:24  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:42:24  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:42:24  INFO      freight_booking  Label printed successfully
+12:44:17  INFO      freight_booking  Courier selected: Aramex (aramex)  price=$5.22
+12:44:17  INFO      freight_booking  Starting booking thread for courier 'aramex', order '07-14352-19264'
+12:44:17  INFO      courier.aramex  Booking Aramex consignment for order 07-14352-19264 (receiver: Craig Griffiths, Sorell TAS)
+12:44:19  INFO      courier.aramex  Consignment created: conId=150774982  tracking=MS0018075296
+12:44:20  INFO      courier.aramex  Label PDF downloaded: 111256 bytes
+12:44:20  INFO      freight_booking  Booking confirmed — courier=Aramex  tracking=MS0018075296  reference=150774982
+12:44:20  INFO      src.shipping.booking_ledger  Ledger: added Aramex booking MS0018075296
+12:44:20  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\aramex.pdf (111256 bytes)
+12:44:20  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\07-14352-19264.pdf (111256 bytes)
+12:44:20  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:44:20  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:44:20  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:44:20  WARNING   brother_ql.conversion  Need to resize the image...
+12:44:21  WARNING   brother_ql.conversion  Need to resize the image...
+12:44:21  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167112 bytes.
+12:44:26  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:44:26  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:44:26  INFO      freight_booking  Label printed successfully
+12:45:18  INFO      freight_booking  Courier selected: Australia Post (auspost)  price=$15.53
+12:45:18  INFO      freight_booking  Starting booking thread for courier 'auspost', order '13-14345-65271'
+12:45:18  INFO      courier.auspost  Booking AusPost shipment for order 13-14345-65271 (product=3D55)
+12:45:18  INFO      courier.auspost  AusPost shipment created: tracking=33C335044966  shipment_id=aPBI0EcLl0gAAAGccqsCUPRR
+12:45:20  INFO      courier.auspost  AusPost label downloaded: 28480 bytes  url=https://ap-prod-ddc-stack-content.s3.ap-southeast-2.amazonaws.com/pccbatch-prod/1a6492cd-af5d-438e-b3eb-65844f000f88.pdf?AWSAccessKeyId=AKIAQSKC37NJNPLWN6E3&Expires=1773711919&Signature=JKkKDf%2BG7L0Ummn0o5n81k3a47w%3D
+12:45:20  INFO      freight_booking  Booking confirmed — courier=Australia Post  tracking=33C335044966  reference=aPBI0EcLl0gAAAGccqsCUPRR
+12:45:20  INFO      src.shipping.booking_ledger  Ledger: added Australia Post booking 33C335044966
+12:45:20  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\auspost.pdf (28480 bytes)
+12:45:20  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\13-14345-65271.pdf (28480 bytes)
+12:45:20  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:45:20  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:45:20  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:45:21  WARNING   brother_ql.conversion  Need to resize the image...
+12:45:21  WARNING   brother_ql.conversion  Need to resize the image...
+12:45:21  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 156882 bytes.
+12:45:26  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:45:26  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:45:26  INFO      freight_booking  Label printed successfully
+12:49:03  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$6.96
+12:49:03  INFO      freight_booking  Starting booking thread for courier 'dai_post', order '17-14339-42449'
+12:49:08  WARNING   courier.dai_post  DAI Post: cannot connect to legacy DB: timeout expired
+
+12:49:08  INFO      courier.dai_post  Booking DAI Post for order 17-14339-42449 (jobnumber=1773625748, weight=0.25kg)
+12:49:09  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134522198  label=21703 bytes
+12:49:14  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134522198 job=1773625748
+12:49:14  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134522198  reference=1773625748
+12:49:14  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134522198
+12:49:14  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (21703 bytes)
+12:49:14  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\17-14339-42449.pdf (21703 bytes)
+12:49:14  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:49:15  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:49:15  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:49:15  WARNING   brother_ql.conversion  Need to resize the image...
+12:49:15  WARNING   brother_ql.conversion  Need to resize the image...
+12:49:15  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+12:49:21  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:49:21  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:49:21  INFO      freight_booking  Label printed successfully
+12:50:53  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$8.99
+12:50:53  INFO      freight_booking  Starting booking thread for courier 'dai_post', order '21-14330-12829'
+12:50:56  INFO      courier.dai_post  Booking DAI Post for order 21-14330-12829 (jobnumber=1773625748, weight=0.25kg)
+12:50:57  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134522242  label=21396 bytes
+12:51:01  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134522242 job=1773625748
+12:51:01  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134522242  reference=1773625748
+12:51:01  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134522242
+12:51:01  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (21396 bytes)
+12:51:01  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\21-14330-12829.pdf (21396 bytes)
+12:51:01  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:51:02  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:51:02  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:51:02  WARNING   brother_ql.conversion  Need to resize the image...
+12:51:02  WARNING   brother_ql.conversion  Need to resize the image...
+12:51:02  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+12:51:08  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:51:08  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:51:08  INFO      freight_booking  Label printed successfully
+12:55:36  INFO      freight_booking  Courier selected: Aramex (aramex)  price=$44.56
+12:55:36  INFO      freight_booking  Starting booking thread for courier 'aramex', order '24-14346-75369'
+12:55:36  INFO      courier.aramex  Booking Aramex consignment for order 24-14346-75369 (receiver: Susan Hartfiel, Bardon QLD)
+12:55:39  INFO      courier.aramex  Consignment created: conId=150778195  tracking=MP0082830579
+12:55:40  INFO      courier.aramex  Label PDF downloaded: 110780 bytes
+12:55:40  INFO      freight_booking  Booking confirmed — courier=Aramex  tracking=MP0082830579  reference=150778195
+12:55:40  INFO      src.shipping.booking_ledger  Ledger: added Aramex booking MP0082830579
+12:55:40  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\aramex.pdf (110780 bytes)
+12:55:40  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\24-14346-75369.pdf (110780 bytes)
+12:55:40  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+12:55:41  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:55:41  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+12:55:41  WARNING   brother_ql.conversion  Need to resize the image...
+12:55:41  WARNING   brother_ql.conversion  Need to resize the image...
+12:55:41  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167112 bytes.
+12:55:47  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+12:55:47  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+12:55:47  INFO      freight_booking  Label printed successfully
+13:00:14  INFO      freight_booking  Courier selected: DAI Post (dai_post)  price=$10.10
+13:00:14  INFO      freight_booking  Starting booking thread for courier 'dai_post', order '22-14338-62124'
+13:00:18  INFO      courier.dai_post  Booking DAI Post for order 22-14338-62124 (jobnumber=1773625748, weight=0.80kg)
+13:00:21  INFO      courier.dai_post  DAI Post booked: tracking=00393580940134523003  label=156019 bytes
+13:00:26  INFO      courier.dai_post  DAI Post: inserted manifest record — tracking=00393580940134523003 job=1773625748
+13:00:26  INFO      freight_booking  Booking confirmed — courier=DAI Post  tracking=00393580940134523003  reference=1773625748
+13:00:26  INFO      src.shipping.booking_ledger  Ledger: added DAI Post booking 00393580940134523003
+13:00:26  INFO      label_capture  Label saved: C:\VB\OverdueOrders\dist\Scarlett AIO\data\shipping\dai_post.pdf (156019 bytes)
+13:00:26  INFO      label_capture  Order label saved: \\SERVER\Project Folder\Order-Fulfillment-App\Bookings\Labels\2026-03-16\22-14338-62124.pdf (156019 bytes)
+13:00:26  INFO      label_printer  Using printer: usb://0X04F9:0X2042 (raw: usb://0x04f9:0x2042_Љ)
+13:00:27  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+13:00:27  WARNING   brother_ql.raster  Trying to switch the operating mode on a printer that doesn't support the command.
+13:00:27  WARNING   brother_ql.conversion  Need to resize the image...
+13:00:27  WARNING   brother_ql.conversion  Need to resize the image...
+13:00:27  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 167298 bytes.
+13:00:33  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
+13:00:33  INFO      label_printer  Page 1 printed successfully to usb://0X04F9:0X2042 (2 strip(s))
+13:00:33  INFO      freight_booking  Label printed successfully

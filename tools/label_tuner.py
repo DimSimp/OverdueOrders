@@ -42,14 +42,19 @@ DEFAULTS = {
 
 
 def _load_settings(courier_code: str) -> dict:
+    try:
+        from src.shipping.label_settings import COURIER_DEFAULTS
+    except Exception:
+        COURIER_DEFAULTS = {}
+    base = {**DEFAULTS, **COURIER_DEFAULTS.get(courier_code, {})}
     if SETTINGS_FILE.exists():
         try:
             data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
             if courier_code in data:
-                return {**DEFAULTS, **data[courier_code]}
+                return {**base, **data[courier_code]}
         except Exception:
             pass
-    return dict(DEFAULTS)
+    return base
 
 
 def _save_settings(

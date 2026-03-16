@@ -1,8 +1,3 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - create a settings window where we can choose filepaths
-- deletion modal sorting order needs refinement - sorting by date should put latest orders at the top (e.g: 14/03/2026 - 10:00am first, 14/03/2026 - 9:55am second, etc)
-- refresh single order after note is added via fulfillment screen
-- make config .json move to the correct folder automatically when updating
-- check that printer settings are either part of config file, or can be applied across all devices. Some labels are printing smaller when using the build instead of the development files
-- items sometimes double up in results tab when loading a fresh session. They are fixed upon refreshing the page
-- choosing to reprint the label from the cancellation modal simply opens the pdf. We need the label to re-print from the label printer instead.
+- fix Bonds couriers label booking
