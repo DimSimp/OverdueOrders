@@ -21,9 +21,7 @@ class App(ctk.CTk):
         self.config = config
         self._startup_session = startup_session
 
-        self.title("Scarlett Music — Overdue Orders Matcher")
-        self.geometry("1150x720")
-        self.minsize(900, 600)
+        self.title("Scarlett Music — Overdue Orders")
         if os.path.exists(_APP_ICON):
             self.iconbitmap(_APP_ICON)
 
@@ -43,8 +41,58 @@ class App(ctk.CTk):
             token_save_callback=config.save_ebay_tokens,
         )
 
+        if startup_session:
+            # Direct .scar open — skip home screen, go straight to afternoon ops
+            self._setup_afternoon_window()
+            self._build_ui()
+            self._start_update_check()
+            self.after(200, lambda: self.invoice_tab.load_session_from_path(startup_session))
+        else:
+            # Show home screen first
+            self._setup_home_window()
+            self._build_home_screen()
+
+    # ── Window size helpers ────────────────────────────────────────────────
+
+    def _setup_home_window(self):
+        self.geometry("500x400")
+        self.resizable(False, False)
+
+    def _setup_afternoon_window(self):
+        self.title("Scarlett Music — Overdue Orders Matcher")
+        self.geometry("1150x720")
+        self.minsize(900, 600)
+        self.resizable(True, True)
+
+    # ── Home screen ───────────────────────────────────────────────────────
+
+    def _build_home_screen(self):
+        from src.gui.home_window import HomeFrame
+        self._home_frame = HomeFrame(
+            self,
+            on_afternoon=self._enter_afternoon_mode,
+            on_daily=self._enter_daily_mode,
+        )
+        self._home_frame.pack(fill="both", expand=True)
+
+    def _enter_afternoon_mode(self):
+        if hasattr(self, "_home_frame"):
+            self._home_frame.destroy()
+            del self._home_frame
+        self._setup_afternoon_window()
         self._build_ui()
         self._start_update_check()
+
+    def _enter_daily_mode(self):
+        from src.gui.daily_ops.daily_ops_window import DailyOpsWindow
+        DailyOpsWindow(
+            master=self,
+            config=self.config,
+            neto_client=self.neto_client,
+            ebay_client=self.ebay_client,
+        )
+
+    # ── Afternoon Operations UI ───────────────────────────────────────────
 
     def _build_ui(self):
         # Header bar
@@ -108,10 +156,6 @@ class App(ctk.CTk):
         self.results_tab.pack(fill="both", expand=True)
 
         self.tabview.set("1. Invoice")
-
-        if self._startup_session:
-            # Defer until after the window renders so the UI is fully ready
-            self.after(200, lambda: self.invoice_tab.load_session_from_path(self._startup_session))
 
     def _activate_results(self):
         self.tabview.set("3. Results")

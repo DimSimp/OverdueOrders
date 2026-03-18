@@ -1,3 +1,5 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - create a settings window where we can choose filepaths
 - fix Bonds couriers label booking
+- need to add item description, sku, and QTY to booking screen (per item line)(perhaps make them copyable also)
+- remove DAI Post as shipping option if address is PO box or Parcel Locker

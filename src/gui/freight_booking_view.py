@@ -34,6 +34,7 @@ def _build_couriers(courier_configs: dict):
     from src.shipping.couriers.auspost import AusPostCourier
     from src.shipping.couriers.bonds import BondsCourier
     from src.shipping.couriers.dai_post import DaiPostCourier
+    # from src.shipping.couriers.tge import TGECourier  # temporarily disabled — quote freezes app
 
     registry = {
         "auspost": AusPostCourier,
@@ -41,6 +42,7 @@ def _build_couriers(courier_configs: dict):
         "bonds": BondsCourier,
         "allied": AlliedCourier,
         "dai_post": DaiPostCourier,
+        # "tge": TGECourier,  # temporarily disabled
     }
     couriers = []
     for code, cls in registry.items():
@@ -55,22 +57,18 @@ def _build_couriers(courier_configs: dict):
 class PackageRow(ctk.CTkFrame):
     """A single row representing one package with dimensions + preset selector."""
 
-    def __init__(self, master, sku: str = "", on_remove=None, **kwargs):
+    def __init__(self, master, sku: str = "", on_remove=None, on_search_sku=None, **kwargs):
         super().__init__(master, fg_color=("gray92", "gray18"), corner_radius=6, **kwargs)
         self._sku = sku
         self._on_remove = on_remove
+        self._on_search_sku = on_search_sku  # callable(sku_str, row) → None
         self._auto_label: ctk.CTkLabel | None = None
         self._build()
 
     def _build(self):
-        # Row 1: SKU label + preset dropdown + remove button
+        # Row 1: preset dropdown + remove button
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=8, pady=(6, 2))
-
-        if self._sku:
-            ctk.CTkLabel(top, text=f"SKU: {self._sku}", font=ctk.CTkFont(size=11, weight="bold")).pack(
-                side="left", padx=(0, 12)
-            )
 
         ctk.CTkLabel(top, text="Preset:", font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 4))
         preset_names = list(PACKAGE_PRESETS.keys())
@@ -91,7 +89,26 @@ class PackageRow(ctk.CTkFrame):
                 hover_color="red", command=self._on_remove,
             ).pack(side="right")
 
-        # Row 2: Dimension entries
+        # Row 2: SKU search
+        search_row = ctk.CTkFrame(self, fg_color="transparent")
+        search_row.pack(fill="x", padx=8, pady=(0, 2))
+        ctk.CTkLabel(search_row, text="SKU:", font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 2))
+        self._sku_entry = ctk.CTkEntry(search_row, width=130, font=ctk.CTkFont(size=11),
+                                       placeholder_text="Enter SKU…")
+        if self._sku:
+            self._sku_entry.insert(0, self._sku)
+        self._sku_entry.pack(side="left", padx=(0, 4))
+        self._search_btn = ctk.CTkButton(
+            search_row, text="Search", width=60, height=24,
+            font=ctk.CTkFont(size=10),
+            command=self._on_search_click,
+            state="normal" if self._on_search_sku else "disabled",
+        )
+        self._search_btn.pack(side="left", padx=(0, 6))
+        self._search_status = ctk.CTkLabel(search_row, text="", font=ctk.CTkFont(size=10), text_color="gray50")
+        self._search_status.pack(side="left")
+
+        # Row 3: Dimension entries
         dims = ctk.CTkFrame(self, fg_color="transparent")
         dims.pack(fill="x", padx=8, pady=(2, 6))
 
@@ -104,9 +121,42 @@ class PackageRow(ctk.CTkFrame):
         self._cubic_label = ctk.CTkLabel(dims, text="", font=ctk.CTkFont(size=10), text_color="gray50")
         self._cubic_label.pack(side="left", padx=(12, 0))
 
+        ctk.CTkButton(
+            dims, text="Clear", width=50, height=24,
+            font=ctk.CTkFont(size=10),
+            fg_color="transparent", hover_color=("gray80", "gray25"),
+            border_width=1, text_color=("gray40", "gray70"),
+            command=self._clear_dimensions,
+        ).pack(side="left", padx=(8, 0))
+
         # Bind updates
         for entry in (self._weight, self._length, self._width, self._height):
             entry.bind("<KeyRelease>", lambda _: self._update_cubic())
+
+    def _on_search_click(self):
+        sku = self._sku_entry.get().strip()
+        if not sku or not self._on_search_sku:
+            return
+        self._search_btn.configure(state="disabled", text="…")
+        self._search_status.configure(text="Searching…", text_color="gray50")
+        self._on_search_sku(sku, self)
+
+    def apply_search_result(self, sku: str, dims: dict | None):
+        """Called by the parent view with the result of a SKU dimension lookup."""
+        self._search_btn.configure(state="normal", text="Search")
+        if dims:
+            self.set_from_dimensions(dims, source=f"SKU {sku}")
+            self._search_status.configure(text=f"✓ {sku}", text_color="green")
+        else:
+            self._search_status.configure(text=f"No dims for {sku}", text_color="orange")
+
+    def _clear_dimensions(self):
+        for entry in (self._weight, self._length, self._width, self._height):
+            entry.delete(0, "end")
+        self._cubic_label.configure(text="")
+        self._preset_var.set("Custom")
+        if self._auto_label:
+            self._auto_label.configure(text="")
 
     def _dim_field(self, parent, label: str) -> ctk.CTkEntry:
         ctk.CTkLabel(parent, text=label, font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 2))
@@ -240,6 +290,7 @@ class FreightBookingView(ctk.CTkFrame):
         neto_order=None,
         ebay_order=None,
         neto_client: NetoClient | None = None,
+        ebay_client=None,
         shipping_config,
         dry_run: bool = True,
         on_back,
@@ -251,6 +302,7 @@ class FreightBookingView(ctk.CTkFrame):
         self._neto_order = neto_order
         self._ebay_order = ebay_order
         self._neto_client = neto_client
+        self._ebay_client = ebay_client
         self._shipping_config = shipping_config
         self._dry_run = dry_run
         self._on_back = on_back
@@ -267,7 +319,8 @@ class FreightBookingView(ctk.CTkFrame):
         self._dims_auto_filled: bool = False  # True if Neto already had dimensions
 
         # Determine receiver address from order data
-        self._single_sku: str | None = None  # Set if single line, qty 1
+        self._single_sku: str | None = None    # Set if single line item, qty 1
+        self._ebay_item_id: str | None = None  # Legacy ItemID for ReviseItem (eBay orders only)
         if neto_order:
             self._receiver = address_from_neto_order(neto_order)
             self._shipping_type = neto_order.shipping_type or "Standard"
@@ -282,6 +335,7 @@ class FreightBookingView(ctk.CTkFrame):
             self._line_skus = [li.sku for li in ebay_order.line_items]
             if len(ebay_order.line_items) == 1 and ebay_order.line_items[0].quantity == 1:
                 self._single_sku = ebay_order.line_items[0].sku
+                self._ebay_item_id = ebay_order.line_items[0].legacy_item_id or None
         else:
             self._receiver = Address("", "", "", "", "", "", "", "AU")
             self._shipping_type = "Standard"
@@ -320,7 +374,6 @@ class FreightBookingView(ctk.CTkFrame):
 
         self._build_address_section(body)
         self._build_packages_section(body)
-        self._build_sku_search(body)
         self._build_courier_section(body)
         self._build_action_section(body)
         self._build_results_section(body)
@@ -415,22 +468,21 @@ class FreightBookingView(ctk.CTkFrame):
         self._packages_container = ctk.CTkFrame(section, fg_color="transparent")
         self._packages_container.pack(fill="x", padx=10, pady=(0, 8))
 
-        # Create one row per line item SKU
-        if self._line_skus:
-            for sku in self._line_skus:
-                self._add_package_row(sku=sku)
-        else:
-            self._add_package_row()
+        # Always start with a single empty package row
+        self._add_package_row()
 
-        # "Save dimensions to Neto" checkbox — only for single-line, qty-1 orders
+        # "Update dimensions" checkbox — only for single-line, qty-1 orders
         self._save_dims_var = ctk.BooleanVar(value=False)
         self._save_dims_check = None
-        if self._single_sku and self._neto_client and self._platform.lower() == "neto":
+        if self._single_sku and self._neto_client:
             check_frame = ctk.CTkFrame(section, fg_color="transparent")
             check_frame.pack(fill="x", padx=10, pady=(0, 8))
+            _dims_label = f"Update dimensions for SKU: {self._single_sku}"
+            if self._ebay_item_id and self._ebay_client:
+                _dims_label += "  (Neto + eBay)"
             self._save_dims_check = ctk.CTkCheckBox(
                 check_frame,
-                text=f"Save dimensions to Neto for SKU: {self._single_sku}",
+                text=_dims_label,
                 variable=self._save_dims_var,
                 font=ctk.CTkFont(size=11),
             )
@@ -440,6 +492,7 @@ class FreightBookingView(ctk.CTkFrame):
         row = PackageRow(
             self._packages_container, sku=sku,
             on_remove=lambda: self._remove_package_row(row),
+            on_search_sku=self._search_sku_for_row if self._neto_client else None,
         )
         row.pack(fill="x", pady=3)
         self._package_rows.append(row)
@@ -450,48 +503,14 @@ class FreightBookingView(ctk.CTkFrame):
         row.destroy()
         self._package_rows.remove(row)
 
-    # ── SKU Search ───────────────────────────────────────────────────────
+    # ── Per-row SKU search ───────────────────────────────────────────────
 
-    def _build_sku_search(self, parent):
-        section = ctk.CTkFrame(parent, fg_color="transparent")
-        section.pack(fill="x", padx=10, pady=4)
-
-        ctk.CTkLabel(section, text="Search SKU for dimensions:", font=ctk.CTkFont(size=11)).pack(
-            side="left", padx=(0, 6)
-        )
-        self._sku_search_entry = ctk.CTkEntry(section, width=150, font=ctk.CTkFont(size=11),
-                                               placeholder_text="Enter SKU...")
-        self._sku_search_entry.pack(side="left", padx=(0, 6))
-        self._sku_search_btn = ctk.CTkButton(
-            section, text="Search", width=70, height=26,
-            font=ctk.CTkFont(size=11), command=self._on_sku_search,
-        )
-        self._sku_search_btn.pack(side="left", padx=(0, 6))
-        self._sku_search_status = ctk.CTkLabel(section, text="", font=ctk.CTkFont(size=10), text_color="gray50")
-        self._sku_search_status.pack(side="left")
-
-    def _on_sku_search(self):
-        sku = self._sku_search_entry.get().strip()
-        if not sku or not self._neto_client:
-            return
-        self._sku_search_btn.configure(state="disabled", text="...")
-        self._sku_search_status.configure(text="Searching...")
-
+    def _search_sku_for_row(self, sku: str, row: PackageRow):
+        """Fetch dimensions for a SKU and apply them to the requesting PackageRow."""
         def _fetch():
             dims = self._neto_client.get_item_dimensions(sku)
-            self.after(0, lambda: self._on_sku_search_result(sku, dims))
-
+            self.after(0, lambda: row.apply_search_result(sku, dims))
         threading.Thread(target=_fetch, daemon=True).start()
-
-    def _on_sku_search_result(self, sku: str, dims: dict | None):
-        self._sku_search_btn.configure(state="normal", text="Search")
-        if dims:
-            # Apply to the first package row (or selected row)
-            if self._package_rows:
-                self._package_rows[0].set_from_dimensions(dims, source=f"SKU {sku}")
-            self._sku_search_status.configure(text=f"Found: {sku}", text_color="green")
-        else:
-            self._sku_search_status.configure(text=f"No dimensions for {sku}", text_color="orange")
 
     # ── Section 3: Courier Selection ─────────────────────────────────────
 
@@ -513,6 +532,7 @@ class FreightBookingView(ctk.CTkFrame):
             "bonds": "Bonds Couriers",
             "allied": "Allied Express",
             "dai_post": "DAI Post",
+            # "tge": "Team Global Express",  # temporarily disabled
         }
 
         self._courier_switches: dict[str, ctk.CTkSwitch] = {}
@@ -586,7 +606,7 @@ class FreightBookingView(ctk.CTkFrame):
 
     def _fetch_dimensions_for_row(self, sku: str, row: PackageRow):
         def _fetch():
-            dims = self._neto_client.get_item_dimensions(sku)
+            dims = self._neto_client.get_item_dimensions(sku, require_satchel=True)
             if dims:
                 def _apply():
                     row.set_from_dimensions(dims, source="auto-filled from Neto")
@@ -715,7 +735,7 @@ class FreightBookingView(ctk.CTkFrame):
             )
 
     def _upload_dimensions_if_checked(self):
-        """Upload package dimensions to Neto if the checkbox is checked."""
+        """Upload package dimensions to Neto (always) and eBay (if direct eBay order)."""
         if not self._save_dims_var.get() or not self._single_sku or not self._neto_client:
             return
         if not self._package_rows:
@@ -725,10 +745,12 @@ class FreightBookingView(ctk.CTkFrame):
             return
 
         sku = self._single_sku
+        ebay_item_id = self._ebay_item_id if self._ebay_client else None
         log.info("Uploading dimensions for SKU %s: %.2fkg  %.1fx%.1fx%.1fcm",
                  sku, pkg.weight_kg, pkg.length_cm, pkg.width_cm, pkg.height_cm)
 
         def _upload():
+            # Always update Neto catalogue
             try:
                 self._neto_client.update_item_dimensions(
                     sku=sku,
@@ -738,9 +760,24 @@ class FreightBookingView(ctk.CTkFrame):
                     height_cm=pkg.height_cm,
                     dry_run=self._dry_run,
                 )
-                log.info("Dimensions uploaded for SKU %s", sku)
+                log.info("Neto dimensions updated for SKU %s", sku)
             except Exception as exc:
-                log.error("Failed to upload dimensions for SKU %s: %s", sku, exc)
+                log.error("Failed to update Neto dimensions for SKU %s: %s", sku, exc)
+
+            # Also update eBay listing if this is a direct eBay order
+            if ebay_item_id:
+                try:
+                    self._ebay_client.revise_item_shipping_dimensions(
+                        item_id=ebay_item_id,
+                        weight_kg=pkg.weight_kg,
+                        length_cm=pkg.length_cm,
+                        width_cm=pkg.width_cm,
+                        height_cm=pkg.height_cm,
+                        dry_run=self._dry_run,
+                    )
+                    log.info("eBay dimensions updated for ItemID %s", ebay_item_id)
+                except Exception as exc:
+                    log.error("Failed to update eBay dimensions for ItemID %s: %s", ebay_item_id, exc)
 
         threading.Thread(target=_upload, daemon=True).start()
 

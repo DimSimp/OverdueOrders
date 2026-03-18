@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import logging
 
 import requests
+
+log = logging.getLogger(__name__)
 
 from src.config import NetoConfig
 
@@ -36,6 +39,8 @@ OUTPUT_SELECTOR = [
     "OrderLine.Name",
     "OrderLine.ThumbURL",
     "OrderLine.UnitPrice",
+    "OrderLine.Misc06",
+    "OrderLine.ShippingCategory",
 ]
 
 
@@ -46,6 +51,8 @@ class NetoLineItem:
     quantity: int
     unit_price: float
     image_url: str = ""
+    postage_type: str = ""      # "Minilope", "Devilope", "Satchel", or "" if not set
+    shipping_category: str = "" # e.g. "Books" — used to filter out certain products
 
 
 @dataclass
@@ -257,6 +264,38 @@ class NetoClient:
         body = {"Order": [order_update]}
         return self._post_action("UpdateOrder", body)
 
+    def get_item_attributes(self, skus: list[str]) -> dict[str, dict]:
+        """
+        Return {sku: {"shipping_category": str, "postage_type": str}} for the given SKUs.
+        - shipping_category: numeric ID ("4" = Books)
+        - postage_type: Misc06 value ("Satchel", "Minilope", "Devilope", or "")
+        Returns empty dict on error.
+        """
+        if not skus:
+            return {}
+        body = {
+            "Filter": {
+                "SKU": skus,
+                "OutputSelector": ["SKU", "ShippingCategory", "Misc06"],
+            }
+        }
+        try:
+            data = self._post_action("GetItem", body)
+        except NetoAPIError:
+            return {}
+        items = data.get("Item", [])
+        if isinstance(items, dict):
+            items = [items]
+        result = {}
+        for item in items:
+            sku = str(item.get("SKU", "")).strip()
+            if sku:
+                result[sku] = {
+                    "shipping_category": str(item.get("ShippingCategory", "")).strip(),
+                    "postage_type": str(item.get("Misc06", "")).strip(),
+                }
+        return result
+
     def get_product_images(self, skus: list[str]) -> dict[str, str]:
         """
         Fetch primary image URLs for a list of product SKUs via GetItem.
@@ -293,12 +332,15 @@ class NetoClient:
                 result[sku] = url
         return result
 
-    def get_item_dimensions(self, sku: str) -> dict | None:
+    def get_item_dimensions(self, sku: str, require_satchel: bool = False) -> dict | None:
         """
         Fetch shipping dimensions for a product SKU via GetItem.
         Returns {"weight_kg", "length_cm", "width_cm", "height_cm"} or None.
         Neto stores dimensions in metres; we convert to cm (×100).
-        Only returns dimensions if Misc06 is 'Satchel' or 'e-parcel' and height is non-zero.
+
+        require_satchel=True (default False): only return dimensions if Misc06 is
+        'Satchel' or 'e-parcel' and height is non-zero (used for auto-fill detection).
+        require_satchel=False: return any non-zero dimensions regardless of Misc06.
         """
         body = {
             "Filter": {
@@ -311,28 +353,43 @@ class NetoClient:
         }
         try:
             data = self._post_action("GetItem", body, timeout=10)
-        except NetoAPIError:
+        except NetoAPIError as exc:
+            log.debug("get_item_dimensions SKU=%s API error: %s", sku, exc)
             return None
         items = data.get("Item", [])
         if isinstance(items, dict):
             items = [items]
         if not items:
+            log.debug("get_item_dimensions SKU=%s: no item returned", sku)
             return None
         item = items[0]
+        log.debug("get_item_dimensions SKU=%s raw: %s", sku, item)
         misc06 = str(item.get("Misc06") or "").strip()
         if misc06 == "e-parcel":
             misc06 = "Satchel"
         shipping_height = str(item.get("ShippingHeight") or "0").strip()
-        if misc06 != "Satchel" or shipping_height == "0.000" or shipping_height == "0":
-            return None
+        if require_satchel:
+            if misc06 != "Satchel" or shipping_height in ("0.000", "0"):
+                log.debug(
+                    "get_item_dimensions SKU=%s: skipped (Misc06=%r, height=%s)",
+                    sku, misc06, shipping_height,
+                )
+                return None
+        else:
+            if shipping_height in ("0.000", "0", ""):
+                log.debug("get_item_dimensions SKU=%s: no height set, returning None", sku)
+                return None
         try:
-            return {
+            dims = {
                 "weight_kg": round(float(item.get("ShippingWeight", 0)), 2),
                 "length_cm": round(float(item.get("ShippingLength", 0)) * 100, 2),
                 "width_cm": round(float(item.get("ShippingWidth", 0)) * 100, 2),
                 "height_cm": round(float(item.get("ShippingHeight", 0)) * 100, 2),
             }
-        except (ValueError, TypeError):
+            log.debug("get_item_dimensions SKU=%s: returning %s", sku, dims)
+            return dims
+        except (ValueError, TypeError) as exc:
+            log.debug("get_item_dimensions SKU=%s: parse error %s", sku, exc)
             return None
 
     def update_item_dimensions(
@@ -385,6 +442,59 @@ class NetoClient:
             }]
         }
         return self._post_action("UpdateOrder", body)
+
+    def update_item_postage_type(
+        self,
+        sku: str,
+        postage_type: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """
+        Set PostageType ([@misc6@]) on a product SKU via UpdateItem.
+        After updating, fetches the item back and logs all Misc fields so we
+        can confirm the correct field name.
+        """
+        if dry_run:
+            log.debug("[DRY RUN] UpdateItem PostageType SKU=%s → %s", sku, postage_type)
+            return {"Ack": "Success", "DryRun": True}
+
+        log.debug("UpdateItem Misc06 SKU=%s → %s", sku, postage_type)
+        body = {"Item": [{"SKU": sku, "Misc06": postage_type}]}
+        result = self._post_action("UpdateItem", body)
+        log.debug("UpdateItem Misc06 response: %s", result)
+        return result
+
+    def update_item_shipping_category(
+        self,
+        sku: str,
+        category_id: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Set ShippingCategory on a product SKU via UpdateItem (e.g. "4" = Books)."""
+        if dry_run:
+            log.debug("[DRY RUN] UpdateItem ShippingCategory SKU=%s → %s", sku, category_id)
+            return {"Ack": "Success", "DryRun": True}
+        log.debug("UpdateItem ShippingCategory SKU=%s → %s", sku, category_id)
+        body = {"Item": [{"SKU": sku, "ShippingCategory": category_id}]}
+        result = self._post_action("UpdateItem", body)
+        log.debug("UpdateItem ShippingCategory response: %s", result)
+        return result
+
+    def update_order_postage_type(
+        self,
+        order_id: str,
+        postage_type: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Set PostageType on an order — kept for backward compat but likely unused."""
+        if dry_run:
+            log.debug("[DRY RUN] UpdateOrder PostageType %s → %s", order_id, postage_type)
+            return {"Ack": "Success", "DryRun": True}
+        log.debug("UpdateOrder PostageType (Misc6) %s → %s", order_id, postage_type)
+        body = {"Order": [{"OrderID": order_id, "Misc6": postage_type}]}
+        result = self._post_action("UpdateOrder", body)
+        log.debug("UpdateOrder PostageType response: %s", result)
+        return result
 
     def _parse_order(self, raw: dict) -> NetoOrder | None:
         order_id = raw.get("OrderID", "")
@@ -445,12 +555,16 @@ class NetoClient:
                 or ""
             )
             image_url = str(line.get("ThumbURL") or line.get("DefaultImageURL") or "").strip()
+            postage_type = str(line.get("Misc06") or "").strip()
+            shipping_category = str(line.get("ShippingCategory") or "").strip()
             line_items.append(NetoLineItem(
                 sku=str(sku).strip(),
                 product_name=str(product_name).strip(),
                 quantity=qty,
                 unit_price=price,
                 image_url=image_url,
+                postage_type=postage_type,
+                shipping_category=shipping_category,
             ))
 
         # Pricing & shipping

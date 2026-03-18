@@ -26,12 +26,20 @@ class MatchedOrder:
 
 
 
-def filter_on_po(orders: list, phrase: str = "on po") -> list:
+def filter_on_po(orders: list, phrases=None) -> list:
     """
-    Return only orders whose notes contain the phrase (case-insensitive).
+    Return only orders whose notes contain at least one phrase (case-insensitive).
     Works with both NetoOrder and EbayOrder.
+
+    phrases: str, list[str], or None (defaults to ["on po"])
     """
-    phrase_lower = phrase.lower()
+    if phrases is None:
+        phrases = ["on po"]
+    elif isinstance(phrases, str):
+        phrases = [phrases]
+    phrases_lower = [p.lower() for p in phrases if p]
+    if not phrases_lower:
+        return list(orders)
     result = []
     for order in orders:
         notes = ""
@@ -39,9 +47,21 @@ def filter_on_po(orders: list, phrase: str = "on po") -> list:
             notes = order.notes or ""
         elif isinstance(order, EbayOrder):
             notes = order.buyer_notes or ""
-        if phrase_lower in notes.lower():
+        notes_lower = notes.lower()
+        if any(p in notes_lower for p in phrases_lower):
             result.append(order)
     return result
+
+
+def exclude_phrases(orders: list, phrases: list) -> list:
+    """
+    Return orders whose notes do NOT contain any of the given phrases.
+    Used in Daily Operations to exclude 'on PO' orders.
+    """
+    if not phrases:
+        return list(orders)
+    matched_ids = {id(o) for o in filter_on_po(orders, phrases)}
+    return [o for o in orders if id(o) not in matched_ids]
 
 
 def match_orders_to_invoice(

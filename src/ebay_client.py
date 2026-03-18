@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import math
 import time
 import webbrowser
 import xml.etree.ElementTree as ET
@@ -219,6 +220,7 @@ class EbayClient:
         date_filter = f"creationdate:[{from_str}..{to_str}]"
         status_filter = "orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}"
         combined_filter = f"{date_filter},{status_filter}"
+        log.debug("eBay fetch: date_from=%s  date_to=%s  filter=%s", date_from, date_to, combined_filter)
 
         all_raw: list[dict] = []
         offset = 0
@@ -245,9 +247,11 @@ class EbayClient:
 
             if total is None:
                 total = data.get("total", 0)
+                log.debug("eBay fetch: API reports total=%d matching orders", total)
 
             batch = data.get("orders", [])
             all_raw.extend(batch)
+            log.debug("eBay fetch: page offset=%d  got %d orders  running total=%d", offset, len(batch), len(all_raw))
 
             if progress_callback:
                 progress_callback(len(all_raw), total or len(all_raw))
@@ -258,7 +262,25 @@ class EbayClient:
 
         # Filter to PAID orders (eBay fulfillment filter doesn't support payment status)
         paid = [o for o in all_raw if o.get("orderPaymentStatus") == "PAID"]
+        unpaid = [o for o in all_raw if o.get("orderPaymentStatus") != "PAID"]
+        if unpaid:
+            log.debug(
+                "eBay fetch: %d orders excluded (not PAID) — statuses: %s",
+                len(unpaid),
+                [o.get("orderPaymentStatus") for o in unpaid],
+            )
+        log.debug("eBay fetch: %d raw orders → %d after PAID filter", len(all_raw), len(paid))
+
         orders = [self._parse_order(o) for o in paid]
+        for o in orders:
+            skus = [li.sku for li in o.line_items]
+            log.debug(
+                "  order %-24s | %-30s | created %-20s | status=%-12s | payment=%-6s | skus=%s | checkout_notes=%r",
+                o.order_id, o.buyer_name,
+                str(o.creation_date)[:19] if o.creation_date else "—",
+                o.order_status, o.payment_status,
+                skus, o.buyer_notes,
+            )
 
         # Enrich buyer_notes with PrivateNotes from the Trading API (if credentials configured)
         if self._config.dev_id:
@@ -268,6 +290,11 @@ class EbayClient:
                 "eBay Trading API credentials not configured (dev_id missing) — "
                 "PrivateNotes will not be fetched. Add dev_id to config.json to enable."
             )
+
+        log.debug("eBay fetch complete: returning %d orders", len(orders))
+        for o in orders:
+            if o.buyer_notes:
+                log.debug("  order %s  final_notes=%r", o.order_id, o.buyer_notes)
 
         return orders
 
@@ -517,9 +544,12 @@ class EbayClient:
             page += 1
 
         log.debug(
-            "Trading API enrichment complete: %d notes, %d transaction IDs found",
+            "Trading API enrichment complete: %d PrivateNotes found, %d transaction IDs found",
             len(notes_by_item_id), len(txn_id_by_item_id),
         )
+        if notes_by_item_id:
+            for item_id, note in notes_by_item_id.items():
+                log.debug("  PrivateNote item_id=%s  note=%r", item_id, note)
         if txn_id_by_item_id and not notes_by_item_id:
             self.notes_warning = (
                 "PrivateNotes not returned — eBay Trading token may be expired. "
@@ -589,6 +619,63 @@ class EbayClient:
         )
         self._call_trading_api(xml_template, "SetUserNotes")
         log.debug("SetUserNotes succeeded for item %s txn %s", item_id, transaction_id)
+
+    def revise_item_shipping_dimensions(
+        self,
+        item_id: str,
+        weight_kg: float,
+        length_cm: float,
+        width_cm: float,
+        height_cm: float,
+        dry_run: bool = True,
+    ) -> None:
+        """
+        Update the shipping package dimensions on an active eBay listing via ReviseItem.
+        Uses metric units (kg and cm) as required for eBay AU (site 15).
+
+        weight_kg    — total package weight in kilograms
+        length_cm    — longest dimension in centimetres
+        width_cm     — second dimension in centimetres
+        height_cm    — shortest dimension in centimetres
+        """
+        weight_major = int(weight_kg)                      # whole kg
+        weight_minor = round((weight_kg - weight_major) * 1000)  # grams (0–999)
+
+        if dry_run:
+            print(
+                f"[DRY RUN] eBay ReviseItem dimensions for ItemID {item_id}: "
+                f"{weight_kg}kg  {length_cm}×{width_cm}×{height_cm}cm"
+            )
+            return
+
+        if not self._config.dev_id:
+            raise EbayAPIError(
+                "Trading API credentials not configured (dev_id missing). "
+                "Add dev_id to config.json to enable eBay dimension updates."
+            )
+
+        xml_template = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<ReviseItemRequest xmlns="{_TRADING_NS}">'
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
+            "<Item>"
+            f"<ItemID>{_xml_escape(item_id)}</ItemID>"
+            "<ShippingPackageDetails>"
+            f'<PackageDepth measurementSystem="Metric" unit="cm">{math.ceil(height_cm)}</PackageDepth>'
+            f'<PackageLength measurementSystem="Metric" unit="cm">{math.ceil(length_cm)}</PackageLength>'
+            f'<PackageWidth measurementSystem="Metric" unit="cm">{math.ceil(width_cm)}</PackageWidth>'
+            f'<WeightMajor measurementSystem="Metric" unit="kg">{weight_major}</WeightMajor>'
+            f'<WeightMinor measurementSystem="Metric" unit="gm">{weight_minor}</WeightMinor>'
+            "</ShippingPackageDetails>"
+            "</Item>"
+            "</ReviseItemRequest>"
+        )
+        self._call_trading_api(xml_template, "ReviseItem")
+        log.info(
+            "eBay ReviseItem dimensions updated for ItemID %s: "
+            "%skg  %sx%sx%scm",
+            item_id, weight_kg, length_cm, width_cm, height_cm,
+        )
 
     def get_item_images(self, legacy_item_ids: list[str]) -> dict[str, str]:
         """

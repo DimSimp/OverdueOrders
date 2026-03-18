@@ -767,6 +767,22 @@ class OrderDetailView(ctk.CTkFrame):
         )
         self._send_btn.pack(side="left", padx=(0, 12))
 
+        # Neto local pickup orders can also be marked as "Pending Pickup"
+        is_local_pickup = (
+            self._neto_order is not None
+            and getattr(self._neto_order, "shipping_type", "") == "Local Pickup"
+        )
+        if is_local_pickup:
+            self._pickup_btn = ctk.CTkButton(
+                bar, text="Pending Pickup", width=150, height=36,
+                font=ctk.CTkFont(size=14, weight="bold"),
+                fg_color=("#2980b9", "#1a5f8a"), hover_color=("#2471a3", "#154f73"),
+                command=self._mark_as_pending_pickup,
+            )
+            self._pickup_btn.pack(side="left", padx=(0, 12))
+        else:
+            self._pickup_btn = None
+
         if self._on_move_to_unmatched:
             ctk.CTkButton(
                 bar, text="Move to Unmatched", width=150, height=36,
@@ -837,6 +853,26 @@ class OrderDetailView(ctk.CTkFrame):
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to mark order as sent:\n{e}", parent=parent)
+
+    def _mark_as_pending_pickup(self):
+        parent = self.winfo_toplevel()
+        try:
+            self._neto_client.update_order_status(
+                self._order_id,
+                new_status="Pending Pickup",
+                dry_run=self._dry_run,
+            )
+            self._completed = True
+            if self._pickup_btn:
+                self._pickup_btn.configure(state="disabled", text="PENDING PICKUP", fg_color="gray50")
+            self._send_btn.configure(state="disabled")
+            if self._dry_run:
+                self._status_label.configure(text="[DRY RUN] Marked as Pending Pickup", text_color="orange")
+            else:
+                self._status_label.configure(text="Marked as Pending Pickup!", text_color="#2980b9")
+                self._on_fulfilled()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to mark as Pending Pickup:\n{e}", parent=parent)
 
     def _do_move_to_unmatched(self):
         if self._on_move_to_unmatched:

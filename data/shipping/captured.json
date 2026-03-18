@@ -3,5 +3,6 @@
   "dai_post": true,
   "auspost": true,
   "auspost_express": true,
-  "allied": true
+  "allied": true,
+  "tge": true
 }

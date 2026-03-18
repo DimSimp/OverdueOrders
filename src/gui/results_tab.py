@@ -1125,6 +1125,7 @@ class ResultsTab(ctk.CTkFrame):
             neto_order=neto_order,
             ebay_order=ebay_order,
             neto_client=self._app.neto_client,
+            ebay_client=self._app.ebay_client,
             shipping_config=self._app.config.shipping,
             dry_run=self._app.config.app.dry_run,
             on_back=self._close_freight_view,
@@ -1376,12 +1377,14 @@ class ResultsTab(ctk.CTkFrame):
         from src.shipping.couriers.auspost import AusPostCourier
         from src.shipping.couriers.bonds import BondsCourier
         from src.shipping.couriers.dai_post import DaiPostCourier
+        # from src.shipping.couriers.tge import TGECourier  # temporarily disabled — quote freezes app
         courier_registry = {
             "auspost": AusPostCourier,
             "aramex": AramexCourier,
             "bonds": BondsCourier,
             "allied": AlliedCourier,
             "dai_post": DaiPostCourier,
+            # "tge": TGECourier,  # temporarily disabled
         }
         couriers_by_code = {}
         for code, cls in courier_registry.items():

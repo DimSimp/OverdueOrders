@@ -101,6 +101,8 @@ class AppConfig:
     session_dir: str = ""  # preferred save location for session files
     inventory_csv: str = "inventory.CSV"
     sku_corrections_file: str = "sku_corrections.csv"
+    note_filter_phrases: list = field(default_factory=lambda: ["on po"])
+    daily_ops_toggles: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -185,6 +187,10 @@ class ConfigManager:
         ]
 
         a = self._raw.get("app", {})
+        # note_filter_phrases: new list field; falls back to legacy single phrase for compat
+        _phrases = a.get("note_filter_phrases")
+        if _phrases is None:
+            _phrases = [a.get("on_po_filter_phrase", "on po")]
         self.app = AppConfig(
             order_lookback_days=a.get("order_lookback_days", 30),
             on_po_filter_phrase=a.get("on_po_filter_phrase", "on po"),
@@ -195,6 +201,8 @@ class ConfigManager:
             session_dir=a.get("session_dir", ""),
             inventory_csv=a.get("inventory_csv", "inventory.CSV"),
             sku_corrections_file=a.get("sku_corrections_file", "sku_corrections.csv"),
+            note_filter_phrases=_phrases,
+            daily_ops_toggles=a.get("daily_ops_toggles", {}),
         )
 
         o = self._raw.get("openai", {})
