@@ -266,9 +266,10 @@ class NetoClient:
 
     def get_item_attributes(self, skus: list[str]) -> dict[str, dict]:
         """
-        Return {sku: {"shipping_category": str, "postage_type": str}} for the given SKUs.
+        Return {sku: {"shipping_category": str, "postage_type": str, "pick_zone": str}} for the given SKUs.
         - shipping_category: numeric ID ("4" = Books)
         - postage_type: Misc06 value ("Satchel", "Minilope", "Devilope", or "")
+        - pick_zone: e.g. "String Room", "Back Area", "Out Front", "Picks", or ""
         Returns empty dict on error.
         """
         if not skus:
@@ -276,7 +277,7 @@ class NetoClient:
         body = {
             "Filter": {
                 "SKU": skus,
-                "OutputSelector": ["SKU", "ShippingCategory", "Misc06"],
+                "OutputSelector": ["SKU", "ShippingCategory", "Misc06", "PickZone"],
             }
         }
         try:
@@ -293,8 +294,35 @@ class NetoClient:
                 result[sku] = {
                     "shipping_category": str(item.get("ShippingCategory", "")).strip(),
                     "postage_type": str(item.get("Misc06", "")).strip(),
+                    "pick_zone": str(item.get("PickZone", "")).strip(),
                 }
         return result
+
+    def get_item_name(self, sku: str) -> str | None:
+        """
+        Fetch the Name for a single product SKU via GetItem.
+        Returns the product name string, or None if the SKU is not found.
+        """
+        if not sku:
+            return None
+        body = {
+            "Filter": {
+                "SKU": [sku],
+                "OutputSelector": ["SKU", "Name"],
+            }
+        }
+        try:
+            data = self._post_action("GetItem", body, timeout=10)
+        except NetoAPIError:
+            return None
+        items = data.get("Item", [])
+        if isinstance(items, dict):
+            items = [items]
+        for item in items:
+            if str(item.get("SKU", "")).strip().upper() == sku.strip().upper():
+                name = str(item.get("Name", "")).strip()
+                return name if name else None
+        return None
 
     def get_product_images(self, skus: list[str]) -> dict[str, str]:
         """
@@ -478,6 +506,22 @@ class NetoClient:
         body = {"Item": [{"SKU": sku, "ShippingCategory": category_id}]}
         result = self._post_action("UpdateItem", body)
         log.debug("UpdateItem ShippingCategory response: %s", result)
+        return result
+
+    def update_item_pick_zone(
+        self,
+        sku: str,
+        zone: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Set PickZone on a product SKU via UpdateItem."""
+        if dry_run:
+            log.debug("[DRY RUN] UpdateItem PickZone SKU=%s → %s", sku, zone)
+            return {"Ack": "Success", "DryRun": True}
+        log.debug("UpdateItem PickZone SKU=%s → %s", sku, zone)
+        body = {"Item": [{"SKU": sku, "PickZone": zone}]}
+        result = self._post_action("UpdateItem", body)
+        log.debug("UpdateItem PickZone response: %s", result)
         return result
 
     def update_order_postage_type(

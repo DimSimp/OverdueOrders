@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import re
@@ -13,6 +14,8 @@ from src.data_processor import MatchedOrder, match_orders_to_invoice
 from src.exporter import export_to_xlsx
 from src.gui.order_detail_view import OrderDetailView
 from src.pdf_parser import InvoiceItem
+
+_AFTERNOON_PICKLIST_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Picking Lists\Afternoon"
 
 
 def _resolve_save_dir(preferred: str, fallback: str) -> str:
@@ -156,7 +159,7 @@ class OrderTreeview(ctk.CTkFrame):
             if col_id == "#0":
                 continue
             self._col_headings[col_id] = heading
-            stretch = col_id in ("notes", "description")
+            stretch = col_id in ("notes", "description", "order_notes")
             self._tree.heading(col_id, text=heading, anchor="w",
                                command=lambda c=col_id: self._on_header_click(c))
             self._tree.column(col_id, width=width, minwidth=30, stretch=stretch)
@@ -247,6 +250,8 @@ class OrderTreeview(ctk.CTkFrame):
                 g for g in self._all_groups
                 if self._group_passes_filters(g, query)
             ]
+            _item_cols = {"sku", "description", "qty"}
+            col_ids = [k for k in self._col_spec if k != "#0"]
             for i, g in enumerate(visible):
                 bg = self._bg_a if i % 2 == 0 else self._bg_b
                 tag_bg = f"bg_{i}"
@@ -254,22 +259,29 @@ class OrderTreeview(ctk.CTkFrame):
                 shipping = g.get("shipping", "")
                 ship_display = _shipping_display(shipping)
                 row_tags = [tag_bg, "order_hdr"]
+                parent_vals = tuple(
+                    ship_display if c == "shipping"
+                    else "" if c in _item_cols
+                    else g.get(c, "")
+                    for c in col_ids
+                )
                 piid = self._tree.insert(
                     "", "end",
                     text=g["order_id"],
-                    values=(
-                        g["platform"], g["customer"], g["date"],
-                        ship_display, "", "", "", g.get("notes", ""),
-                    ),
+                    values=parent_vals,
                     tags=row_tags,
                     open=True,
                 )
                 self._group_meta[piid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
                 for item in g["line_items"]:
                     tags = [tag_bg] + (["matched_sku"] if item["is_matched"] else [])
+                    child_vals = tuple(
+                        item.get(c, "") if c in _item_cols else ""
+                        for c in col_ids
+                    )
                     ciid = self._tree.insert(
                         piid, "end", text="",
-                        values=("", "", "", "", item["sku"], item["description"], item["qty"], ""),
+                        values=child_vals,
                         tags=tags,
                     )
                     self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
@@ -312,7 +324,8 @@ class OrderTreeview(ctk.CTkFrame):
             query in str(v).lower()
             for v in (g.get("order_id", ""), g.get("platform", ""),
                       g.get("customer", ""), g.get("date", ""),
-                      g.get("shipping", ""), g.get("notes", ""))
+                      g.get("shipping", ""), g.get("notes", ""),
+                      g.get("order_notes", ""))
         ):
             return True
         for item in g.get("line_items", []):
@@ -386,8 +399,8 @@ class OrderTreeview(ctk.CTkFrame):
             elif col == "description":
                 items = g.get("line_items", [])
                 return items[0].get("description", "").lower() if items else ""
-            elif col == "notes":
-                return g.get("notes", "").lower()
+            elif col in ("notes", "order_notes"):
+                return g.get(col, "").lower()
             return ""
 
         self._all_groups.sort(key=_sort_key, reverse=self._sort_reverse)
@@ -753,6 +766,8 @@ class ResultsTab(ctk.CTkFrame):
                 self._neto_orders,
                 self._ebay_orders,
                 on_po_phrase=self._app.config.app.on_po_filter_phrase,
+                sku_alias_manager=getattr(self._app, "sku_alias_manager", None),
+                suppliers=self._app.config.suppliers,
             )
 
             self._excluded_order_ids.clear()
@@ -1084,6 +1099,8 @@ class ResultsTab(ctk.CTkFrame):
             on_fulfilled=self._on_fulfilled,
             on_move_to_unmatched=lambda: self._exclude_order(order_id, platform),
             on_book_freight=book_freight_cb,
+            sku_alias_manager=getattr(self._app, "sku_alias_manager", None),
+            suppliers=self._app.config.suppliers,
         )
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()
@@ -1228,6 +1245,8 @@ class ResultsTab(ctk.CTkFrame):
             self._neto_orders,
             self._ebay_orders,
             on_po_phrase=self._app.config.app.on_po_filter_phrase,
+            sku_alias_manager=getattr(self._app, "sku_alias_manager", None),
+            suppliers=self._app.config.suppliers,
         )
         self._matched = matched
         self._unmatched_inv = unmatched_inv
@@ -1621,18 +1640,22 @@ class ResultsTab(ctk.CTkFrame):
             messagebox.showinfo("No Data", "There are no matched orders to export.")
             return
         try:
-            cfg = self._app.config.app
-            output_dir = _resolve_save_dir(
-                preferred=cfg.lists_dir,
-                fallback=cfg.output_dir,
-            )
+            try:
+                os.makedirs(_AFTERNOON_PICKLIST_DIR, exist_ok=True)
+                output_dir = _AFTERNOON_PICKLIST_DIR
+            except Exception:
+                cfg = self._app.config.app
+                output_dir = _resolve_save_dir(
+                    preferred=cfg.lists_dir,
+                    fallback=cfg.output_dir,
+                )
             path = export_to_xlsx(
                 self._app.matched_orders,
                 output_dir=output_dir,
             )
-            self._export_label.configure(text=f"Saved: {path}", text_color="green")
+            self._export_label.configure(text=f"Saved: {os.path.basename(path)}", text_color="green")
             self._error_label.configure(text="")
-            subprocess.Popen(["explorer", "/select,", path])
+            os.startfile(os.path.normpath(path))
         except Exception as e:
             self._error_label.configure(text=f"Export failed: {e}")
             self._export_label.configure(text="")

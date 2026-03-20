@@ -33,9 +33,14 @@ class DailyOpsWindow(ctk.CTkToplevel):
         self.neto_client = neto_client
         self.ebay_client = ebay_client
 
+        from src.sku_alias_manager import SkuAliasManager
+        self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)
+
         # ── Shared state set by fetch step ──────────────────────────────
         self.neto_orders: list = []
         self.ebay_orders: list = []
+        # Populated at end of Step 2: {sku: {postage_type, shipping_category}} for all SKUs
+        self.sku_attr_map: dict = {}
         # Set after envelope classification (Phase 2b)
         self.envelope_classifications: dict = {}   # order_id → "minilope"/"devilope"/"satchel"
         # Set after pick zone assignment (Phase 2c)
@@ -127,13 +132,63 @@ class DailyOpsWindow(ctk.CTkToplevel):
             self._step_frames["menu"] = _DailyOpsMenuView(
                 self._content,
                 on_picking_list=self._show_options,
+                on_load_session=self._load_daily_session,
                 on_search_order=lambda: self._show_placeholder(
                     "Search for Order", "", "(Coming soon)"),
                 on_show_orders=lambda: self._show_placeholder(
                     "Show All Orders", "", "(Coming soon)"),
+                on_sku_aliases=self._open_sku_aliases,
             )
         self.set_header("Daily Operations")
         self._show_step(self._step_frames["menu"], "")
+
+    def _load_daily_session(self):
+        """Load the fixed daily session file and jump straight to Step 6."""
+        import os
+        from tkinter import messagebox
+        from src.session_daily import (
+            DAILY_SESSION_DIR, DAILY_SESSION_FILE,
+            load_daily_session, restore_daily_session,
+        )
+        path = os.path.join(DAILY_SESSION_DIR, DAILY_SESSION_FILE)
+        if not os.path.exists(path):
+            messagebox.showinfo(
+                "No Session Found",
+                f"No daily session file was found at:\n{path}\n\n"
+                "Use 'Generate Picking List' to start a new session.",
+                parent=self,
+            )
+            return
+        try:
+            data = load_daily_session(path)
+            neto_orders, ebay_orders, envelope_classifications, pick_zones, removed_ids = (
+                restore_daily_session(data)
+            )
+        except Exception as exc:
+            messagebox.showerror("Load Error", f"Failed to load session:\n{exc}", parent=self)
+            return
+
+        # Restore shared window state
+        self.neto_orders = neto_orders
+        self.ebay_orders = ebay_orders
+        self.envelope_classifications = envelope_classifications
+        self.pick_zones = pick_zones
+
+        # Force-rebuild the results frame so it picks up fresh window state
+        if "results" in self._step_frames:
+            self._step_frames.pop("results").destroy()
+
+        self._show_results(initial_removed_ids=removed_ids)
+
+    def _open_sku_aliases(self):
+        from src.gui.sku_alias_modal import SkuAliasModal
+        SkuAliasModal(
+            self,
+            sku_alias_manager=self.sku_alias_manager,
+            mode="search",
+            neto_client=self.neto_client,
+            suppliers=self.config.suppliers,
+        )
 
     # ── Step 1: Options ──────────────────────────────────────────────────
 
@@ -205,9 +260,39 @@ class DailyOpsWindow(ctk.CTkToplevel):
         self._step_frames["envelope_pdf"].generate_pdfs()
 
     def _on_envelope_pdf_complete(self):
-        # Phase 2c placeholder
-        self._show_placeholder("Pick Zone Classification", "Step 5 of 6",
-                               "(Coming in Phase 2c)")
+        self._show_pick_zone()
+
+    # ── Step 5: Pick Zone Classification ─────────────────────────────────
+
+    def _show_pick_zone(self):
+        if "pick_zone" not in self._step_frames:
+            from src.gui.daily_ops.pick_zone_view import PickZoneView
+            self._step_frames["pick_zone"] = PickZoneView(
+                self._content,
+                window=self,
+                on_complete=self._on_pick_zone_complete,
+                on_back=self._show_envelope_pdf,
+            )
+        self.set_header("Daily Operations  —  Pick Zone Assignment")
+        self._show_step(self._step_frames["pick_zone"], "Step 5 of 6")
+        self._step_frames["pick_zone"].start_classify()
+
+    def _on_pick_zone_complete(self):
+        self._show_results()
+
+    # ── Step 6: Results & Dispatch ────────────────────────────────────────
+
+    def _show_results(self, initial_removed_ids=None):
+        if "results" not in self._step_frames:
+            from src.gui.daily_ops.results_view import DailyOpsResultsView
+            self._step_frames["results"] = DailyOpsResultsView(
+                self._content,
+                window=self,
+                on_back=self._show_pick_zone,
+            )
+        self.set_header("Daily Operations  —  Results & Dispatch")
+        self._show_step(self._step_frames["results"], "Step 6 of 6")
+        self._step_frames["results"].show(initial_removed_ids=initial_removed_ids)
 
     # ── Placeholder for future steps ────────────────────────────────────
 
@@ -225,9 +310,9 @@ class DailyOpsWindow(ctk.CTkToplevel):
 
 
 class _DailyOpsMenuView(ctk.CTkFrame):
-    """Top-level menu for Daily Operations — shows the three available actions."""
+    """Top-level menu for Daily Operations — shows the available actions."""
 
-    def __init__(self, master, on_picking_list, on_search_order, on_show_orders, **kwargs):
+    def __init__(self, master, on_picking_list, on_load_session, on_search_order, on_show_orders, on_sku_aliases, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
 
         center = ctk.CTkFrame(self, fg_color="transparent")
@@ -240,20 +325,36 @@ class _DailyOpsMenuView(ctk.CTkFrame):
             text_color=("gray40", "gray70"),
         ).pack(pady=(0, 24))
 
-        # Generate Picking List
+        # ── Top row: Generate + Load (side by side, same total width as buttons below) ──
+        top_row = ctk.CTkFrame(center, fg_color="transparent")
+        top_row.pack(fill="x", pady=(0, 4))
+
         ctk.CTkButton(
-            center,
+            top_row,
             text="Generate Picking List",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
             command=on_picking_list,
-        ).pack(fill="x", pady=(0, 4))
+        ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+        ctk.CTkButton(
+            top_row,
+            text="Load Daily Session",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            height=64,
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray25"),
+            command=on_load_session,
+        ).pack(side="left", expand=True, fill="x", padx=(4, 0))
+
         ctk.CTkLabel(
             center,
-            text="Fetch today's orders, classify envelopes, assign pick zones, export CSV",
+            text="Generate: fetch today's orders, classify envelopes, assign pick zones, export picking list\n"
+                 "Load: resume a previously saved daily session and go straight to Results",
             font=ctk.CTkFont(size=11),
             text_color=("gray50", "gray60"),
-        ).pack(pady=(0, 20))
+            justify="left",
+        ).pack(anchor="w", pady=(0, 20))
 
         # Search for Order
         ctk.CTkButton(
@@ -285,6 +386,23 @@ class _DailyOpsMenuView(ctk.CTkFrame):
         ctk.CTkLabel(
             center,
             text="Browse and manage all current orders with freight booking",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        ).pack(pady=(0, 20))
+
+        # Manage SKU Aliases
+        ctk.CTkButton(
+            center,
+            text="Manage SKU Aliases",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            height=64,
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray25"),
+            command=on_sku_aliases,
+        ).pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(
+            center,
+            text="Map Neto / eBay SKUs to their correct supplier invoice SKUs",
             font=ctk.CTkFont(size=11),
             text_color=("gray50", "gray60"),
         ).pack()

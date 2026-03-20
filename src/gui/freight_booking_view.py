@@ -34,7 +34,7 @@ def _build_couriers(courier_configs: dict):
     from src.shipping.couriers.auspost import AusPostCourier
     from src.shipping.couriers.bonds import BondsCourier
     from src.shipping.couriers.dai_post import DaiPostCourier
-    # from src.shipping.couriers.tge import TGECourier  # temporarily disabled — quote freezes app
+    from src.shipping.couriers.tge import TGECourier
 
     registry = {
         "auspost": AusPostCourier,
@@ -42,7 +42,7 @@ def _build_couriers(courier_configs: dict):
         "bonds": BondsCourier,
         "allied": AlliedCourier,
         "dai_post": DaiPostCourier,
-        # "tge": TGECourier,  # temporarily disabled
+        "tge": TGECourier,
     }
     couriers = []
     for code, cls in registry.items():
@@ -321,6 +321,7 @@ class FreightBookingView(ctk.CTkFrame):
         # Determine receiver address from order data
         self._single_sku: str | None = None    # Set if single line item, qty 1
         self._ebay_item_id: str | None = None  # Legacy ItemID for ReviseItem (eBay orders only)
+        self._line_item_infos: list[dict] = []
         if neto_order:
             self._receiver = address_from_neto_order(neto_order)
             self._shipping_type = neto_order.shipping_type or "Standard"
@@ -328,6 +329,13 @@ class FreightBookingView(ctk.CTkFrame):
             self._line_skus = [li.sku for li in neto_order.line_items]
             if len(neto_order.line_items) == 1 and neto_order.line_items[0].quantity == 1:
                 self._single_sku = neto_order.line_items[0].sku
+            for li in neto_order.line_items:
+                self._line_item_infos.append({
+                    "sku": li.sku,
+                    "name": getattr(li, "product_name", "") or "",
+                    "qty": getattr(li, "quantity", 1),
+                    "price": getattr(li, "unit_price", 0.0),
+                })
         elif ebay_order:
             self._receiver = address_from_ebay_order(ebay_order)
             self._shipping_type = ebay_order.shipping_type or "Standard"
@@ -336,6 +344,13 @@ class FreightBookingView(ctk.CTkFrame):
             if len(ebay_order.line_items) == 1 and ebay_order.line_items[0].quantity == 1:
                 self._single_sku = ebay_order.line_items[0].sku
                 self._ebay_item_id = ebay_order.line_items[0].legacy_item_id or None
+            for li in ebay_order.line_items:
+                self._line_item_infos.append({
+                    "sku": li.sku,
+                    "name": getattr(li, "title", "") or "",
+                    "qty": getattr(li, "quantity", 1),
+                    "price": getattr(li, "unit_price", 0.0),
+                })
         else:
             self._receiver = Address("", "", "", "", "", "", "", "AU")
             self._shipping_type = "Standard"
@@ -373,6 +388,7 @@ class FreightBookingView(ctk.CTkFrame):
         body.grid(row=1, column=0, sticky="nsew")
 
         self._build_address_section(body)
+        self._build_order_items_section(body)
         self._build_packages_section(body)
         self._build_courier_section(body)
         self._build_action_section(body)
@@ -451,7 +467,74 @@ class FreightBookingView(ctk.CTkFrame):
             email=self._receiver.email,
         )
 
-    # ── Section 2: Packages ──────────────────────────────────────────────
+    # ── Section 2: Order Items (read-only) ───────────────────────────────
+
+    def _build_order_items_section(self, parent):
+        if not self._line_item_infos:
+            return
+        section = ctk.CTkFrame(parent, border_width=1, border_color=("gray70", "gray35"))
+        section.pack(fill="x", padx=10, pady=(0, 6))
+
+        ctk.CTkLabel(
+            section, text="Order Items", font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+
+        table = ctk.CTkFrame(section, fg_color="transparent")
+        table.pack(fill="x", padx=10, pady=(0, 8))
+        table.grid_columnconfigure(2, weight=1)  # Description column expands (col 0 = copy btn)
+
+        # Header row  (col 0 is the copy button column — no header)
+        col_defs = [
+            ("SKU",        "w", 110),
+            ("Description","w", 0),
+            ("Qty",        "center", 45),
+            ("Unit Price", "e", 80),
+            ("Total",      "e", 80),
+        ]
+        for col, (text, anchor, width) in enumerate(col_defs, start=1):
+            kw = {"width": width} if width else {}
+            ctk.CTkLabel(
+                table, text=text, font=ctk.CTkFont(size=10, weight="bold"),
+                anchor=anchor, **kw,
+            ).grid(row=0, column=col, sticky="ew", padx=(0, 10), pady=(0, 2))
+
+        # Separator line
+        sep = ctk.CTkFrame(table, height=1, fg_color=("gray70", "gray45"))
+        sep.grid(row=1, column=0, columnspan=len(col_defs) + 1, sticky="ew", pady=(0, 3))
+
+        # Data rows
+        for r, info in enumerate(self._line_item_infos, start=2):
+            qty = info["qty"]
+            price = info["price"]
+            sku = info["sku"]
+
+            # Copy SKU button (leftmost column)
+            ctk.CTkButton(
+                table, text="📋", width=28, height=24,
+                font=ctk.CTkFont(size=13),
+                fg_color="transparent", hover_color=("gray80", "gray30"),
+                command=lambda s=sku: self._copy_to_clipboard(s),
+            ).grid(row=r, column=0, padx=(0, 6), pady=1)
+
+            row_values = [
+                sku,
+                info["name"],
+                f"×{qty}",
+                f"${price:.2f}",
+                f"${qty * price:.2f}",
+            ]
+            anchors = ["w", "w", "center", "e", "e"]
+            for col, (text, anchor) in enumerate(zip(row_values, anchors), start=1):
+                ctk.CTkLabel(
+                    table, text=text, font=ctk.CTkFont(size=11),
+                    anchor=anchor,
+                ).grid(row=r, column=col, sticky="ew", padx=(0, 10), pady=1)
+
+    def _copy_to_clipboard(self, text: str):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+
+    # ── Section 3: Packages ──────────────────────────────────────────────
 
     def _build_packages_section(self, parent):
         section = ctk.CTkFrame(parent, border_width=1, border_color=("gray70", "gray35"))
@@ -532,7 +615,7 @@ class FreightBookingView(ctk.CTkFrame):
             "bonds": "Bonds Couriers",
             "allied": "Allied Express",
             "dai_post": "DAI Post",
-            # "tge": "Team Global Express",  # temporarily disabled
+            "tge": "Team Global Express",
         }
 
         self._courier_switches: dict[str, ctk.CTkSwitch] = {}
@@ -551,21 +634,51 @@ class FreightBookingView(ctk.CTkFrame):
             self._courier_switches[code] = switch
             self._courier_enabled_config[code] = enabled
 
-        # Apply express restrictions if the order defaults to express
+        self._po_box_label = ctk.CTkLabel(
+            section, text="", font=ctk.CTkFont(size=11),
+        )
+        self._po_box_label.pack(anchor="w", padx=10, pady=(0, 6))
+
+        # Apply express / PO box restrictions for the order's default state
         self._on_shipping_type_changed()
 
+    def _is_po_box_address(self) -> bool:
+        """Return True if the delivery address is a PO Box or Parcel Locker."""
+        if hasattr(self, "_addr_entries"):
+            s1 = self._addr_entries["Street 1"].get()
+            s2 = self._addr_entries["Street 2"].get()
+        else:
+            s1 = self._receiver.street1
+            s2 = self._receiver.street2
+        combined = f"{s1} {s2}".upper()
+        return "PO BOX" in combined or "PARCEL LOCKER" in combined
+
     def _on_shipping_type_changed(self):
-        """Enable/disable courier switches based on the selected shipping type."""
+        """Enable/disable courier switches based on shipping type and address type."""
         is_express = self._shipping_type_var.get() == "Express"
+        is_po_box = self._is_po_box_address()
+
         for code, switch in self._courier_switches.items():
             configured = self._courier_enabled_config.get(code, False)
             if not configured:
-                continue  # Already disabled, leave it
-            if is_express and code not in EXPRESS_CAPABLE_COURIERS:
+                continue  # Already disabled in config, leave it
+            if is_po_box and code != "auspost":
+                switch.deselect()
+                switch.configure(state="disabled")
+            elif is_express and code not in EXPRESS_CAPABLE_COURIERS:
                 switch.deselect()
                 switch.configure(state="disabled")
             else:
                 switch.configure(state="normal")
+
+        if hasattr(self, "_po_box_label"):
+            if is_po_box:
+                self._po_box_label.configure(
+                    text="PO Box / Parcel Locker — Australia Post only",
+                    text_color="orange",
+                )
+            else:
+                self._po_box_label.configure(text="")
 
     # ── Section 4: Action ────────────────────────────────────────────────
 
@@ -935,5 +1048,10 @@ class FreightBookingView(ctk.CTkFrame):
             threading.Thread(target=_print, daemon=True).start()
         else:
             log.warning("No label PDF in booking result — nothing to print")
+
+        if result.tracking_number:
+            self.clipboard_clear()
+            self.clipboard_append(result.tracking_number)
+            log.debug("Tracking number copied to clipboard: %s", result.tracking_number)
 
         self._on_courier_selected(result.courier_name, result.tracking_number)

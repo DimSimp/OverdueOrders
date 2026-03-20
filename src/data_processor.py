@@ -64,17 +64,46 @@ def exclude_phrases(orders: list, phrases: list) -> list:
     return [o for o in orders if id(o) not in matched_ids]
 
 
+def _apply_supplier_transform(raw_sku: str, supplier_name: str, suppliers: list) -> str:
+    """
+    Apply a supplier's character substitutions and suffix to a raw invoice SKU,
+    producing the final form used as a Neto SKU (and therefore present in invoice_lookup).
+    Returns the raw SKU unchanged if supplier_name is empty or not found.
+    """
+    if not supplier_name or not suppliers:
+        return raw_sku
+    for s in suppliers:
+        if s.name == supplier_name:
+            result = raw_sku
+            for old, new_char in s.character_substitutions.items():
+                result = result.replace(old, new_char)
+            if s.suffix:
+                if s.suffix_position == "prepend":
+                    result = s.suffix + result
+                else:
+                    result = result + s.suffix
+            return result
+    return raw_sku
+
+
 def match_orders_to_invoice(
     invoice_items: list[InvoiceItem],
     neto_orders: list[NetoOrder],
     ebay_orders: list[EbayOrder],
     on_po_phrase: str = "on po",
+    sku_alias_manager=None,
+    suppliers=None,
 ) -> tuple[list[MatchedOrder], list[InvoiceItem]]:
     """
     Filter orders for the 'on PO' phrase then match order line SKUs against invoice SKUs.
 
     When an order has at least one matching SKU, ALL of its line items are included
     in the results. Lines that match the invoice have is_invoice_match=True; others False.
+
+    sku_alias_manager: optional SkuAliasManager — if provided, unmapped SKUs are looked up
+    via the alias file before giving up (supports kit mappings and single-item aliases).
+    suppliers: list[SupplierConfig] — required for alias suffix application. Each alias mapping
+    stores the raw invoice SKU and the supplier name; the suffix is applied here dynamically.
 
     Returns:
         matched       — list of MatchedOrder (one entry per order line of every matched order)
@@ -86,6 +115,24 @@ def match_orders_to_invoice(
         key = item.sku_with_suffix.upper().strip()
         if key:
             invoice_lookup[key] = item
+
+    # Build alias lookup: Neto order SKU (upper) → InvoiceItem (via alias file)
+    # Raw invoice SKUs from the alias are transformed using the mapping's supplier config
+    # (character substitutions + suffix) before being looked up in invoice_lookup.
+    alias_lookup: dict[str, InvoiceItem] = {}
+    if sku_alias_manager:
+        for neto_sku, mapping in sku_alias_manager.get_all().items():
+            supplier_name = mapping.get("supplier", "")
+            for raw_inv_sku in mapping["invoice_skus"]:
+                final_sku = _apply_supplier_transform(raw_inv_sku, supplier_name, suppliers or [])
+                inv = invoice_lookup.get(final_sku.upper().strip())
+                if inv:
+                    alias_lookup[neto_sku.upper().strip()] = inv
+                    break  # use the first alias that matches the current invoice
+
+    def _resolve(key: str):
+        """Return InvoiceItem for a line SKU key, checking alias if no direct match."""
+        return invoice_lookup.get(key) or alias_lookup.get(key)
 
     # TODO: "on PO" filter temporarily disabled — using all awaiting-shipment orders instead.
     # Re-enable these two lines (and remove the two below) once notes are consistent.
@@ -100,22 +147,17 @@ def match_orders_to_invoice(
     for order in on_po_neto:
         order_date = order.date_paid or order.date_placed
 
-        # Only process orders that have at least one invoice SKU match
-        matching_keys = {
-            line.sku.upper().strip()
-            for line in order.line_items
-            if line.sku.upper().strip() in invoice_lookup
-        }
-        if not matching_keys:
+        # Only process orders that have at least one invoice SKU match (direct or alias)
+        if not any(_resolve(line.sku.upper().strip()) for line in order.line_items):
             continue
-
-        matched_invoice_keys.update(matching_keys)
 
         # Include ALL line items; mark only the invoice-matching ones with is_invoice_match
         # Notes are order-level for Neto — only shown on the first item
         for idx, line in enumerate(order.line_items):
             key = line.sku.upper().strip()
-            inv = invoice_lookup.get(key)
+            inv = _resolve(key)
+            if inv:
+                matched_invoice_keys.add(inv.sku_with_suffix.upper().strip())
             matched.append(MatchedOrder(
                 platform=order.sales_channel or "Neto",
                 order_id=order.order_id,
@@ -133,20 +175,15 @@ def match_orders_to_invoice(
             ))
 
     for order in on_po_ebay:
-        matching_keys = {
-            line.sku.upper().strip()
-            for line in order.line_items
-            if line.sku.upper().strip() in invoice_lookup
-        }
-        if not matching_keys:
+        if not any(_resolve(line.sku.upper().strip()) for line in order.line_items):
             continue
-
-        matched_invoice_keys.update(matching_keys)
 
         # Show order-level notes (checkout + PrivateNotes) on the first line item only
         for idx, line in enumerate(order.line_items):
             key = line.sku.upper().strip()
-            inv = invoice_lookup.get(key)
+            inv = _resolve(key)
+            if inv:
+                matched_invoice_keys.add(inv.sku_with_suffix.upper().strip())
             matched.append(MatchedOrder(
                 platform="eBay",
                 order_id=order.order_id,

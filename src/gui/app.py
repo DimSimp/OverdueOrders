@@ -41,6 +41,9 @@ class App(ctk.CTk):
             token_save_callback=config.save_ebay_tokens,
         )
 
+        from src.sku_alias_manager import SkuAliasManager
+        self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)
+
         if startup_session:
             # Direct .scar open — skip home screen, go straight to afternoon ops
             self._setup_afternoon_window()
@@ -76,11 +79,12 @@ class App(ctk.CTk):
         self._home_frame.pack(fill="both", expand=True)
 
     def _enter_afternoon_mode(self):
-        if hasattr(self, "_home_frame"):
-            self._home_frame.destroy()
-            del self._home_frame
-        self._setup_afternoon_window()
-        self._build_ui()
+        win = ctk.CTkToplevel(self)
+        win.title("Scarlett Music — Overdue Orders Matcher")
+        win.geometry("1150x720")
+        win.minsize(900, 600)
+        win.resizable(True, True)
+        self._build_ui(container=win)
         self._start_update_check()
 
     def _enter_daily_mode(self):
@@ -94,11 +98,21 @@ class App(ctk.CTk):
 
     # ── Afternoon Operations UI ───────────────────────────────────────────
 
-    def _build_ui(self):
+    def _build_ui(self, container=None):
+        """Build the afternoon operations UI.
+
+        container: the window/frame to pack widgets into (defaults to self,
+        which is used for direct .scar-file launches; pass a CTkToplevel when
+        opening from the home screen so the home screen stays visible).
+        """
+        if container is None:
+            container = self
+
         # Header bar
-        header = ctk.CTkFrame(self, height=48, corner_radius=0, fg_color=("gray85", "gray20"))
+        header = ctk.CTkFrame(container, height=48, corner_radius=0, fg_color=("gray85", "gray20"))
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
+        self._ui_header = header  # stored so _show_update_banner can reference it
         ctk.CTkLabel(
             header,
             text="Scarlett Music  —  Overdue Orders Matcher",
@@ -113,7 +127,7 @@ class App(ctk.CTk):
 
         # Dry-run banner
         if self.config.app.dry_run:
-            dry_banner = ctk.CTkFrame(self, height=28, corner_radius=0, fg_color=("red3", "red4"))
+            dry_banner = ctk.CTkFrame(container, height=28, corner_radius=0, fg_color=("red3", "red4"))
             dry_banner.pack(fill="x", side="top")
             dry_banner.pack_propagate(False)
             ctk.CTkLabel(
@@ -124,7 +138,7 @@ class App(ctk.CTk):
             ).pack(pady=4)
 
         # Tab view
-        self.tabview = ctk.CTkTabview(self, corner_radius=8)
+        self.tabview = ctk.CTkTabview(container, corner_radius=8)
         self.tabview.pack(fill="both", expand=True, padx=12, pady=(8, 12))
 
         for tab_name in ("1. Invoice", "2. Orders", "3. Results"):
@@ -179,9 +193,9 @@ class App(ctk.CTk):
 
     def _show_update_banner(self, version: str, page_url: str, download_url: str):
         """Show a slim banner below the header when a new version is available."""
-        banner = ctk.CTkFrame(self, height=30, corner_radius=0, fg_color=("#2a6099", "#1a4a77"))
-        # Insert between header (index 0) and whatever follows
-        banner.pack(fill="x", side="top", after=self.winfo_children()[0])
+        header = getattr(self, "_ui_header", None) or self.winfo_children()[0]
+        banner = ctk.CTkFrame(header.master, height=30, corner_radius=0, fg_color=("#2a6099", "#1a4a77"))
+        banner.pack(fill="x", side="top", after=header)
         banner.pack_propagate(False)
 
         inner = ctk.CTkFrame(banner, fg_color="transparent")

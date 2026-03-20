@@ -1,5 +1,10 @@
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
-- create a settings window where we can choose filepaths
 - fix Bonds couriers label booking
-- need to add item description, sku, and QTY to booking screen (per item line)(perhaps make them copyable also)
-- remove DAI Post as shipping option if address is PO box or Parcel Locker
+
+DAILY OPERATIONS
+- make notes filters collapsible
+- make notes column in results window
+- make sure border is complete around cells in picking list
+- make SKU column slightly narrower
+- daily operations order fulfillment screen has a "move to unmatched" button, but should be "remove from list" or something similar
+- "Removed" list needs to refresh when a new session is created

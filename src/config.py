@@ -103,6 +103,7 @@ class AppConfig:
     sku_corrections_file: str = "sku_corrections.csv"
     note_filter_phrases: list = field(default_factory=lambda: ["on po"])
     daily_ops_toggles: dict = field(default_factory=dict)
+    sku_aliases_file: str = ""
 
 
 @dataclass
@@ -203,6 +204,10 @@ class ConfigManager:
             sku_corrections_file=a.get("sku_corrections_file", "sku_corrections.csv"),
             note_filter_phrases=_phrases,
             daily_ops_toggles=a.get("daily_ops_toggles", {}),
+            sku_aliases_file=a.get(
+                "sku_aliases_file",
+                r"\\SERVER\Project Folder\Order-Fulfillment-App\Inventory_Reports\sku_mappings.csv",
+            ),
         )
 
         o = self._raw.get("openai", {})

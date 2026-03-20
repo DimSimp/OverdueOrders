@@ -55,6 +55,8 @@ class OrderDetailView(ctk.CTkFrame):
         on_fulfilled,
         on_move_to_unmatched=None,
         on_book_freight=None,
+        sku_alias_manager=None,
+        suppliers=None,
     ):
         super().__init__(master, fg_color="transparent")
         self._order_id = order_id
@@ -69,6 +71,8 @@ class OrderDetailView(ctk.CTkFrame):
         self._on_fulfilled = on_fulfilled
         self._on_move_to_unmatched = on_move_to_unmatched
         self._on_book_freight = on_book_freight
+        self._sku_alias_manager = sku_alias_manager
+        self._suppliers = suppliers or []
         self._completed = False
         self._image_refs: list = []
         self._full_images: dict[str, bytes] = {}  # url → raw bytes for enlargement
@@ -236,9 +240,21 @@ class OrderDetailView(ctk.CTkFrame):
         frame = ctk.CTkFrame(parent, border_width=1, border_color=("gray65", "gray45"), corner_radius=6)
         frame.pack(fill="x", padx=8, pady=6)
 
-        ctk.CTkLabel(frame, text="Line Items", font=ctk.CTkFont(size=13, weight="bold")).pack(
-            anchor="w", padx=10, pady=(8, 4)
-        )
+        # Header row: title on left, gear button on right
+        li_header = ctk.CTkFrame(frame, fg_color="transparent")
+        li_header.pack(fill="x", padx=10, pady=(8, 4))
+        ctk.CTkLabel(li_header, text="Line Items", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+        if self._sku_alias_manager is not None:
+            ctk.CTkButton(
+                li_header,
+                text="⚙",
+                width=28,
+                height=28,
+                font=ctk.CTkFont(size=13),
+                fg_color=("gray70", "gray30"),
+                hover_color=("gray60", "gray25"),
+                command=self._open_alias_modal,
+            ).pack(side="right")
 
         hdr = ctk.CTkFrame(frame, fg_color="transparent")
         hdr.pack(fill="x", padx=10, pady=(0, 2))
@@ -259,6 +275,21 @@ class OrderDetailView(ctk.CTkFrame):
         # Kick off background image fetch now that all labels exist
         if self._neto_img_pending or self._ebay_img_pending:
             threading.Thread(target=self._fetch_product_images, daemon=True).start()
+
+    def _open_alias_modal(self):
+        from src.gui.sku_alias_modal import SkuAliasModal
+        items: list[tuple[str, str]] = []
+        if self._neto_order:
+            items = [(li.sku, li.product_name or "") for li in self._neto_order.line_items]
+        elif self._ebay_order:
+            items = [(li.sku, li.title or "") for li in self._ebay_order.line_items]
+        SkuAliasModal(
+            self,
+            sku_alias_manager=self._sku_alias_manager,
+            mode="line_items",
+            line_items=items,
+            suppliers=self._suppliers,
+        )
 
     def _build_neto_line_items(self, items_frame):
         for li in self._neto_order.line_items:
@@ -848,7 +879,15 @@ class OrderDetailView(ctk.CTkFrame):
                     clipboard_text = tracking if tracking else "Untracked"
                     self.clipboard_clear()
                     self.clipboard_append(clipboard_text)
-                    webbrowser.open("https://dispatch.aws.kgn.io/Manage")
+                    _chrome_paths = [
+                        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    ]
+                    _chrome = next((p for p in _chrome_paths if __import__("os").path.exists(p)), None)
+                    if _chrome:
+                        __import__("subprocess").Popen([_chrome, "https://dispatch.aws.kgn.io/Manage"])
+                    else:
+                        webbrowser.open("https://dispatch.aws.kgn.io/Manage")
                 self._on_fulfilled()
 
         except Exception as e:

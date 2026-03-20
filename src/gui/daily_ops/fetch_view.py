@@ -282,41 +282,53 @@ class FetchView(ctk.CTkFrame):
         ).start()
 
     def _books_filter_worker(self, neto: list, ebay: list):
-        """Background thread: look up ShippingCategory + Misc06 for all Neto SKUs.
+        """Background thread: look up ShippingCategory + Misc06 for all SKUs (Neto + eBay).
         - Populates postage_type on each NetoLineItem from Misc06 (product-level field)
-        - Filters out orders where any line item has ShippingCategory "4" (Books)
+        - Filters out orders (from both platforms) where any line item has ShippingCategory "4" (Books)
+        - Stores attr_map on window.sku_attr_map for use in Step 3 (envelope classification)
         """
         try:
             all_skus = list({
-                li.sku for o in neto for li in o.line_items if li.sku
+                li.sku
+                for orders in (neto, ebay)
+                for o in orders
+                for li in o.line_items
+                if li.sku
             })
             log.debug("Checking item attributes for %d SKUs: %s", len(all_skus), all_skus)
             attr_map = self._window.neto_client.get_item_attributes(all_skus)
             log.debug("Item attributes: %s", attr_map)
 
-            # Populate postage_type on each line item from product-level Misc06
+            # Store on window so Step 3 can use it for eBay order auto-classification
+            self._window.sku_attr_map = attr_map
+
+            # Populate postage_type on each Neto line item from product-level Misc06
             for order in neto:
                 for li in order.line_items:
                     attrs = attr_map.get(li.sku, {})
                     if attrs.get("postage_type"):
                         li.postage_type = attrs["postage_type"]
 
-            # Category ID "4" = Books — filter out orders containing any Books SKU
+            # Category ID "4" = Books — filter out orders (both platforms) containing any Books SKU
             books_skus = {
                 sku for sku, attrs in attr_map.items()
                 if attrs.get("shipping_category") == "4"
             }
             log.debug("Books SKUs (cat 4): %s", books_skus)
-            before = len(neto)
+            neto_before, ebay_before = len(neto), len(ebay)
             if books_skus:
                 neto = [
                     o for o in neto
                     if not any(li.sku in books_skus for li in o.line_items)
                 ]
-            excluded = before - len(neto)
+                ebay = [
+                    o for o in ebay
+                    if not any(li.sku in books_skus for li in o.line_items)
+                ]
+            excluded = (neto_before - len(neto)) + (ebay_before - len(ebay))
             log.debug(
-                "Books filter: %d order%s excluded, %d remain",
-                excluded, "s" if excluded != 1 else "", len(neto),
+                "Books filter: %d order%s excluded, %d Neto + %d eBay remain",
+                excluded, "s" if excluded != 1 else "", len(neto), len(ebay),
             )
         except Exception as exc:
             log.warning("Item attribute lookup failed, keeping all orders: %s", exc)

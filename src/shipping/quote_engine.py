@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from typing import Callable
 
 from src.shipping.base_courier import BaseCourier
@@ -65,8 +65,9 @@ class QuoteEngine:
                     error=str(exc),
                 )]
 
-        with ThreadPoolExecutor(max_workers=len(active)) as executor:
-            futures = {executor.submit(_fetch, c): c for c in active}
+        executor = ThreadPoolExecutor(max_workers=len(active))
+        futures = {executor.submit(_fetch, c): c for c in active}
+        try:
             for future in as_completed(futures, timeout=QUOTE_TIMEOUT):
                 try:
                     quotes = future.result(timeout=QUOTE_TIMEOUT)
@@ -81,6 +82,19 @@ class QuoteEngine:
                         estimated_days="",
                         error=f"Timeout/error: {exc}",
                     ))
+        except FuturesTimeoutError:
+            for future, courier in futures.items():
+                if not future.done():
+                    all_quotes.append(Quote(
+                        courier_name=courier.name,
+                        courier_code=courier.code,
+                        service_name="",
+                        price=0,
+                        estimated_days="",
+                        error=f"Timed out (no response within {QUOTE_TIMEOUT}s)",
+                    ))
+        finally:
+            executor.shutdown(wait=False)
 
         # Sort: successful quotes by price ascending, errors at the end
         successful = sorted([q for q in all_quotes if not q.error], key=lambda q: q.price)

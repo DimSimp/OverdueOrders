@@ -82,9 +82,7 @@ def export_to_xlsx(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    from datetime import date
-    filename = f"{date.today().isoformat()} matched orders.xlsx"
-    filepath = out_path / filename
+    filepath = out_path / "AFTERNOON PICKING LIST.xlsx"
     wb.save(filepath)
 
     return str(filepath.resolve())

@@ -92,12 +92,15 @@ class TGECourier(BaseCourier):
         """Load postcode surcharge from Excel file, if configured."""
         if not self._surcharges_file:
             return 0.0
-        if not Path(self._surcharges_file).exists():
-            log.debug("TGE surcharges file not found: %s", self._surcharges_file)
-            return 0.0
+        log.debug("_get_surcharge: checking path exists: %s", self._surcharges_file)
         try:
+            if not Path(self._surcharges_file).exists():
+                log.debug("_get_surcharge: file not found")
+                return 0.0
+            log.debug("_get_surcharge: loading workbook")
             import openpyxl
-            wb = openpyxl.load_workbook(self._surcharges_file, read_only=True, data_only=True)
+            wb = openpyxl.load_workbook(self._surcharges_file, data_only=True)
+            log.debug("_get_surcharge: workbook loaded, scanning for postcode %s", postcode)
             sheet = wb[wb.sheetnames[0]]
             for row in range(2, sheet.max_row + 1):
                 cell_val = sheet[f"A{row}"].value
@@ -188,9 +191,12 @@ class TGECourier(BaseCourier):
     # ── Quote ─────────────────────────────────────────────────────────────────
 
     def get_quote(self, request: ShipmentRequest) -> list:
+        log.debug("get_quote: start — postcode=%s", request.receiver.postcode)
         next_day = next_business_day()
         pickup_time = f"{next_day.strftime('%Y-%m-%d')}T09:00:00+10:00"
+        log.debug("get_quote: calling _calc_additional_costs")
         additional_costs = self._calc_additional_costs(request)
+        log.debug("get_quote: additional_costs=%.2f", additional_costs)
 
         toll_message = {
             "@version": "3.1",
@@ -241,7 +247,10 @@ class TGECourier(BaseCourier):
         for attempt in range(6):
             if attempt > 0:
                 toll_message["TollMessage"]["Header"]["MessageIdentifier"] = str(uuid.uuid4())
+            log.debug("get_quote: HTTP POST attempt %d", attempt + 1)
             try:
+                import time as _time
+                _t0 = _time.monotonic()
                 r = requests.post(
                     url=RATE_URL,
                     auth=self._auth(),
@@ -249,6 +258,7 @@ class TGECourier(BaseCourier):
                     headers=self._json_headers(),
                     timeout=30,
                 )
+                log.debug("get_quote: response in %.2fs  status=%s", _time.monotonic() - _t0, r.status_code)
                 response = r.json()
                 # Check for API-level timeout error
                 try:
@@ -257,8 +267,10 @@ class TGECourier(BaseCourier):
                         ["ErrorMessage"][0]["ErrorMessage"]
                     )
                     if "timeout" in err_msg.lower():
+                        log.debug("get_quote: API timeout on attempt %d — retrying", attempt + 1)
                         last_error = f"Timeout: {err_msg}"
                         continue
+                    log.debug("get_quote: API error: %s", err_msg)
                     last_error = err_msg
                     break
                 except (KeyError, IndexError, TypeError):
@@ -269,6 +281,7 @@ class TGECourier(BaseCourier):
                     ["TotalChargeAmount"]["Value"]
                 )
                 total = round(price + additional_costs, 2)
+                log.debug("get_quote: success — base=%.2f  additional=%.2f  total=%.2f", price, additional_costs, total)
                 return [Quote(
                     courier_name=self.name,
                     courier_code=self.code,
@@ -278,6 +291,7 @@ class TGECourier(BaseCourier):
                     raw_response=response,
                 )]
             except Exception as exc:
+                log.debug("get_quote: exception on attempt %d: %s: %s", attempt + 1, type(exc).__name__, exc)
                 last_error = str(exc)
                 break
 
