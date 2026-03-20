@@ -276,22 +276,26 @@ class SkuAliasModal(ctk.CTkToplevel):
         )
         card.prompt_label.pack(fill="x", pady=(0, 4))
 
-        # Determine initial invoice SKUs
+        # Determine initial invoice SKUs and quantities
         if card.existing_mapping:
             initial_skus = card.existing_mapping["invoice_skus"]
+            initial_qtys = card.existing_mapping.get("qty_per_alias") or [1] * len(initial_skus)
         else:
             initial_skus = []
+            initial_qtys = []
 
         card.sku_rows_frame = ctk.CTkFrame(card.inputs_frame, fg_color="transparent")
         card.sku_rows_frame.pack(fill="x")
 
         card.entry_vars = []
+        card.qty_vars = []
         card.entry_frames = []
         if initial_skus:
-            for s in initial_skus:
-                self._add_sku_row(card, initial_value=s)
+            for i, s in enumerate(initial_skus):
+                q = initial_qtys[i] if i < len(initial_qtys) else 1
+                self._add_sku_row(card, initial_value=s, initial_qty=q)
         else:
-            self._add_sku_row(card, initial_value="")
+            self._add_sku_row(card, initial_value="", initial_qty=1)
 
         # "＋ Add SKU" button (only visible in kit mode)
         card.add_btn = ctk.CTkButton(
@@ -326,12 +330,14 @@ class SkuAliasModal(ctk.CTkToplevel):
 
         return outer
 
-    def _add_sku_row(self, card: _CardState, initial_value: str = ""):
+    def _add_sku_row(self, card: _CardState, initial_value: str = "", initial_qty: int = 1):
         row = ctk.CTkFrame(card.sku_rows_frame, fg_color="transparent")
         row.pack(fill="x", pady=2)
 
         var = ctk.StringVar(value=initial_value)
+        qty_var = ctk.StringVar(value=str(initial_qty))
         card.entry_vars.append(var)
+        card.qty_vars.append(qty_var)
         card.entry_frames.append(row)
 
         entry = ctk.CTkEntry(
@@ -339,9 +345,24 @@ class SkuAliasModal(ctk.CTkToplevel):
             textvariable=var,
             placeholder_text="Supplier / invoice SKU",
             font=ctk.CTkFont(size=12),
-            width=260,
+            width=220,
         )
         entry.pack(side="left", padx=(0, 6))
+
+        ctk.CTkLabel(
+            row,
+            text="×",
+            font=ctk.CTkFont(size=13),
+            text_color=("gray50", "gray60"),
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkEntry(
+            row,
+            textvariable=qty_var,
+            font=ctk.CTkFont(size=12),
+            width=52,
+            justify="center",
+        ).pack(side="left", padx=(0, 6))
 
         # "−" remove button
         remove_btn = ctk.CTkButton(
@@ -354,17 +375,19 @@ class SkuAliasModal(ctk.CTkToplevel):
             hover_color=("firebrick3", "firebrick4"),
         )
         remove_btn.configure(
-            command=lambda r=row, v=var, c=card, b=remove_btn: self._remove_sku_row(c, r, v)
+            command=lambda r=row, v=var, q=qty_var, c=card: self._remove_sku_row(c, r, v, q)
         )
         remove_btn.pack(side="left")
 
-    def _remove_sku_row(self, card: _CardState, row_frame, var: ctk.StringVar):
+    def _remove_sku_row(self, card: _CardState, row_frame, var: ctk.StringVar, qty_var: ctk.StringVar):
         if len(card.entry_vars) <= 1:
             # Don't remove the last field — just clear it
             var.set("")
+            qty_var.set("1")
             return
         idx = card.entry_vars.index(var)
         card.entry_vars.pop(idx)
+        card.qty_vars.pop(idx)
         card.entry_frames.pop(idx)
         row_frame.destroy()
 
@@ -405,6 +428,8 @@ class SkuAliasModal(ctk.CTkToplevel):
         while len(card.entry_vars) > 1:
             self._remove_sku_row(card, card.entry_frames[-1], card.entry_vars[-1])
         card.entry_vars[0].set("")
+        if card.qty_vars:
+            card.qty_vars[0].set("1")
         card.kit_var.set(False)
         if card.supplier_var:
             card.supplier_var.set("— No supplier —")
@@ -421,14 +446,28 @@ class SkuAliasModal(ctk.CTkToplevel):
         saved = 0
 
         for sku_upper, card in self._cards.items():
-            invoice_skus = [v.get().strip() for v in card.entry_vars if v.get().strip()]
-            if not invoice_skus:
+            pairs = [
+                (v.get().strip(), q.get().strip())
+                for v, q in zip(card.entry_vars, card.qty_vars)
+                if v.get().strip()
+            ]
+            if not pairs:
                 # No input — skip (don't save an empty mapping)
                 continue
+            invoice_skus = [sku for sku, _ in pairs]
+            qty_per_alias = []
+            for _, q in pairs:
+                try:
+                    qty_per_alias.append(max(1, int(q)))
+                except (ValueError, TypeError):
+                    qty_per_alias.append(1)
             try:
                 sup_label = card.supplier_var.get() if card.supplier_var else "— No supplier —"
                 supplier_name = self._supplier_name_map.get(sup_label, "")
-                self._manager.save(sku_upper, invoice_skus, card.kit_var.get(), supplier_name)
+                self._manager.save(
+                    sku_upper, invoice_skus, card.kit_var.get(), supplier_name,
+                    qty_per_alias=qty_per_alias,
+                )
                 saved += 1
             except Exception as exc:
                 errors.append(f"{sku_upper}: {exc}")
@@ -459,4 +498,5 @@ class _CardState:
         self.sku_rows_frame: ctk.CTkFrame | None = None
         self.add_btn: ctk.CTkButton | None = None
         self.entry_vars: list[ctk.StringVar] = []
+        self.qty_vars: list[ctk.StringVar] = []
         self.entry_frames: list[ctk.CTkFrame] = []

@@ -6,7 +6,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_FIELDNAMES = ["neto_sku", "is_kit", "invoice_skus", "supplier"]
+_FIELDNAMES = ["neto_sku", "is_kit", "invoice_skus", "qty_per_alias", "supplier"]
 
 
 class SkuAliasManager:
@@ -47,9 +47,18 @@ class SkuAliasManager:
                         continue
                     raw_skus = row.get("invoice_skus", "")
                     inv_skus = [s.strip() for s in raw_skus.split("|") if s.strip()]
+                    raw_qtys = row.get("qty_per_alias", "")
+                    qty_parts = [q.strip() for q in raw_qtys.split("|") if q.strip()]
+                    qty_list = []
+                    for i in range(len(inv_skus)):
+                        try:
+                            qty_list.append(max(1, int(qty_parts[i])))
+                        except (IndexError, ValueError):
+                            qty_list.append(1)
                     result[key] = {
                         "is_kit": row.get("is_kit", "False").strip() == "True",
                         "invoice_skus": inv_skus,
+                        "qty_per_alias": qty_list,
                         "supplier": row.get("supplier", "").strip(),
                     }
             return result
@@ -67,10 +76,13 @@ class SkuAliasManager:
                 writer = csv.DictWriter(f, fieldnames=_FIELDNAMES)
                 writer.writeheader()
                 for neto_sku, mapping in sorted(data.items()):
+                    skus = mapping["invoice_skus"]
+                    qtys = mapping.get("qty_per_alias") or [1] * len(skus)
                     writer.writerow({
                         "neto_sku": neto_sku,
                         "is_kit": str(mapping["is_kit"]),
-                        "invoice_skus": "|".join(mapping["invoice_skus"]),
+                        "invoice_skus": "|".join(skus),
+                        "qty_per_alias": "|".join(str(q) for q in qtys),
                         "supplier": mapping.get("supplier", ""),
                     })
         except Exception as exc:
@@ -93,19 +105,33 @@ class SkuAliasManager:
         """Return True if a mapping exists for this Neto SKU."""
         return neto_sku.upper().strip() in self._load()
 
-    def save(self, neto_sku: str, invoice_skus: list[str], is_kit: bool, supplier: str = "") -> None:
+    def save(
+        self,
+        neto_sku: str,
+        invoice_skus: list[str],
+        is_kit: bool,
+        supplier: str = "",
+        qty_per_alias: list[int] | None = None,
+    ) -> None:
         """Add or update the mapping for neto_sku. Writes the full CSV."""
         key = neto_sku.upper().strip()
         if not key:
             return
+        clean_skus = [s.strip() for s in invoice_skus if s.strip()]
+        qtys = qty_per_alias or [1] * len(clean_skus)
+        # Ensure qtys aligns with clean_skus length
+        qtys = [max(1, q) for q in qtys[:len(clean_skus)]]
+        while len(qtys) < len(clean_skus):
+            qtys.append(1)
         data = self._load()
         data[key] = {
             "is_kit": is_kit,
-            "invoice_skus": [s.strip() for s in invoice_skus if s.strip()],
+            "invoice_skus": clean_skus,
+            "qty_per_alias": qtys,
             "supplier": supplier.strip(),
         }
         self._write(data)
-        log.debug("SkuAliasManager: saved %s → %s (kit=%s, supplier=%s)", key, invoice_skus, is_kit, supplier)
+        log.debug("SkuAliasManager: saved %s → %s qty=%s (kit=%s, supplier=%s)", key, clean_skus, qtys, is_kit, supplier)
 
     def remove(self, neto_sku: str) -> None:
         """Remove the mapping for neto_sku. No-op if not present."""
