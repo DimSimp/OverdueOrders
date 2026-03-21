@@ -284,7 +284,13 @@ class OptionsView(ctk.CTkFrame):
             self._error_label.configure(text=f"Invalid 'From' date: '{from_str}'. Use DD/MM/YYYY.")
             return None, None
         try:
-            date_to = datetime.strptime(to_str, "%d/%m/%Y")
+            _parsed_to = datetime.strptime(to_str, "%d/%m/%Y")
+            today = datetime.now().date()
+            if _parsed_to.date() >= today:
+                # Use current time so we don't request orders in the future from the API
+                date_to = datetime.now()
+            else:
+                date_to = _parsed_to.replace(hour=23, minute=59, second=59)
         except ValueError:
             self._error_label.configure(text=f"Invalid 'To' date: '{to_str}'. Use DD/MM/YYYY.")
             return None, None

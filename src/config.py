@@ -107,6 +107,21 @@ class AppConfig:
 
 
 @dataclass
+class MusiposConfig:
+    server: str               # e.g. "SERVER\\MUSIPOSSQLSRV08"
+    database: str             # "musipos"
+    user: str                 # "sa"
+    password: str
+    kit_mappings_path: str    # path to existing sku_mappings.csv
+    musipos_map_path: str     # path to new musipos_sku_map.csv
+    driver: str = "SQL Server Native Client 10.0"
+    enabled: bool = True
+    default_user_id: str = "MAN"
+    computer_id: str = "19"
+    warehouse_id: str = "00001"
+
+
+@dataclass
 class SenderConfig:
     name: str
     company: str
@@ -137,6 +152,7 @@ class ConfigManager:
         self.openai: OpenAIConfig = None
         self.ftp: Optional[FTPConfig] = None
         self.shipping: Optional[ShippingConfig] = None
+        self.musipos: Optional[MusiposConfig] = None
 
     def load(self) -> None:
         if not CONFIG_PATH.exists():
@@ -225,6 +241,22 @@ class ConfigManager:
                 morning_filename=ftp_raw.get("morning_filename", "Morning_Inventory_Report.xlsx"),
                 afternoon_filename=ftp_raw.get("afternoon_filename", "Afternoon_Inventory_Report.xlsx"),
                 local_inventory_dir=ftp_raw.get("local_inventory_dir", ""),
+            )
+
+        musipos_raw = self._raw.get("musipos", {})
+        if musipos_raw.get("server"):
+            self.musipos = MusiposConfig(
+                server=musipos_raw["server"],
+                database=musipos_raw.get("database", "musipos"),
+                user=musipos_raw.get("user", "sa"),
+                password=musipos_raw.get("password", ""),
+                kit_mappings_path=musipos_raw.get("kit_mappings_path", ""),
+                musipos_map_path=musipos_raw.get("musipos_map_path", ""),
+                driver=musipos_raw.get("driver", "SQL Server Native Client 10.0"),
+                enabled=musipos_raw.get("enabled", True),
+                default_user_id=musipos_raw.get("default_user_id", "MAN"),
+                computer_id=musipos_raw.get("computer_id", "19"),
+                warehouse_id=musipos_raw.get("warehouse_id", "00001"),
             )
 
         ship_raw = self._raw.get("shipping", {})

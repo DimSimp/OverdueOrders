@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,10 +14,13 @@ from src.pdf_parser import InvoiceItem
 
 SNAPSHOT_VERSION = 1
 
+AFTERNOON_SESSION_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Session\Afternoon"
+AFTERNOON_SESSION_FILE = "CURRENT AFTERNOON SESSION.scar"
+AFTERNOON_OVERRIDES_FILE = "AFTERNOON OVERRIDES.json"
+
 
 def _overrides_filepath(save_dir: str) -> str:
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    return os.path.join(save_dir, f"{date_str} overrides.json")
+    return os.path.join(AFTERNOON_SESSION_DIR, AFTERNOON_OVERRIDES_FILE)
 
 
 def save_overrides(
@@ -79,10 +81,6 @@ class SessionSnapshot:
     force_matched_order_ids: list[tuple[str, str]]
 
 
-def _session_filename() -> str:
-    return f"{datetime.now().strftime('%Y-%m-%d')} overdue orders session.scar"
-
-
 def save_snapshot(
     save_dir: str,
     invoice_items: list[InvoiceItem],
@@ -93,10 +91,10 @@ def save_snapshot(
     excluded_ids: set[tuple[str, str]],
     force_matched_ids: set[tuple[str, str]],
 ) -> str:
-    """Save a session snapshot to a .scar file (overwrites previous). Returns the file path."""
-    os.makedirs(save_dir, exist_ok=True)
+    """Save a session snapshot to the fixed afternoon session file. Returns the file path."""
+    os.makedirs(AFTERNOON_SESSION_DIR, exist_ok=True)
 
-    filepath = os.path.join(save_dir, _session_filename())
+    filepath = os.path.join(AFTERNOON_SESSION_DIR, AFTERNOON_SESSION_FILE)
 
     data = {
         "version": SNAPSHOT_VERSION,
@@ -112,11 +110,6 @@ def save_snapshot(
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-
-    # Also keep a fixed-name copy so a desktop shortcut always points to
-    # the latest session without needing to be updated each day
-    current_path = os.path.join(save_dir, "CURRENT SESSION.scar")
-    shutil.copy2(filepath, current_path)
 
     return filepath
 

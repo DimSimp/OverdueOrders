@@ -1101,6 +1101,7 @@ class ResultsTab(ctk.CTkFrame):
             on_book_freight=book_freight_cb,
             sku_alias_manager=getattr(self._app, "sku_alias_manager", None),
             suppliers=self._app.config.suppliers,
+            musipos_client=getattr(self._app, "musipos_client", None),
         )
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()

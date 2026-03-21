@@ -80,6 +80,12 @@ class DailyOpsResultsView(ctk.CTkFrame):
 
         self._loaded = False
 
+        # Collation state
+        self._ungrouped_order_ids: set[str] = set()
+        self._collated_groups: dict = {}   # synthetic_id → CollatedGroup
+        self._collated_frame = None
+        self._book_freight_for_all: bool = False
+
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
@@ -199,11 +205,13 @@ class DailyOpsResultsView(ctk.CTkFrame):
 
     # ── Entry point ────────────────────────────────────────────────────────────
 
-    def show(self, initial_removed_ids=None):
+    def show(self, initial_removed_ids=None, initial_ungrouped_ids=None):
         """Called by DailyOpsWindow each time this step is shown. Loads only once.
 
         initial_removed_ids: optional set of (platform, order_id) tuples restored
         from a saved session file (passed when loading rather than generating).
+        initial_ungrouped_ids: optional set of order_id strings for orders that
+        have been explicitly ungrouped and should not be collated.
         """
         if self._loaded:
             return
@@ -211,11 +219,17 @@ class DailyOpsResultsView(ctk.CTkFrame):
         # Snapshot orders from window (may have been restored from a session file)
         self._neto_orders = list(self._window.neto_orders)
         self._ebay_orders = list(self._window.ebay_orders)
-        # Pre-load removed IDs from session restore (before merging overrides)
-        if initial_removed_ids:
+        if initial_ungrouped_ids is not None:
+            self._ungrouped_order_ids = set(initial_ungrouped_ids)
+        if initial_removed_ids is not None:
+            # Loading an existing session — restore removed IDs then merge any
+            # cross-workstation overrides added since the session was last saved.
             self._removed_order_ids = set(initial_removed_ids)
-        # Merge shared overrides from other workstations
-        self._merge_overrides()
+            self._merge_overrides()
+        else:
+            # Fresh session — clear the overrides file so this and other
+            # workstations start with an empty Removed tab.
+            self._clear_overrides()
         # Auto-save session on first arrival
         self._save_session()
         # Populate tables
@@ -252,87 +266,170 @@ class DailyOpsResultsView(ctk.CTkFrame):
         return removed
 
     def _build_groups(self, orders: list) -> list[dict]:
-        """Convert a list of Neto/eBay order objects to OrderTreeview group dicts."""
+        """Convert a list of Neto/eBay order objects to OrderTreeview group dicts.
+
+        Runs collation on the supplied orders before building rows. Collated
+        groups get a synthetic order_id; single orders use the normal path.
+        """
+        from src.order_collator import collate_orders
+
+        neto_orders = [o for o in orders if hasattr(o, "date_placed")]
+        ebay_orders = [o for o in orders if not hasattr(o, "date_placed")]
+        coll_groups, neto_singles, ebay_singles = collate_orders(
+            neto_orders, ebay_orders, self._ungrouped_order_ids
+        )
+        # Register collated groups so _open_detail_view can look them up
+        self._collated_groups.update({g.synthetic_id: g for g in coll_groups})
+
+        result = []
+        for g in coll_groups:
+            result.append(self._group_dict_for_collated(g))
+        for o in neto_singles + ebay_singles:
+            result.append(self._group_dict_for_single(o))
+        return result
+
+    def _group_dict_for_collated(self, g) -> dict:
+        """Build a treeview row dict for a CollatedGroup."""
         env = self._window.envelope_classifications
         zones = self._window.pick_zones
-        groups = []
 
-        for order in orders:
-            is_neto = hasattr(order, "date_placed")
-            if is_neto:
-                platform = order.sales_channel or "Neto"
-                ship_name = (
-                    f"{order.ship_first_name} {order.ship_last_name}".strip()
-                    or order.customer_name
-                )
-                ship_state = getattr(order, "ship_state", "") or ""
-                shipping = order.shipping_type
-                total_val = getattr(order, "grand_total", 0.0) or 0.0
-                line_items = [
-                    {
-                        "sku": li.sku,
-                        "description": li.product_name,
-                        "qty": str(li.quantity),
-                        "is_matched": False,
-                    }
-                    for li in order.line_items
-                ]
-            else:
-                platform = "eBay"
-                ship_name = order.ship_name or order.buyer_name
-                ship_state = getattr(order, "ship_state", "") or ""
-                shipping = order.shipping_type
-                total_val = getattr(order, "order_total", 0.0) or 0.0
-                line_items = [
-                    {
-                        "sku": li.sku,
-                        "description": li.title,
-                        "qty": str(li.quantity),
-                        "is_matched": False,
-                    }
-                    for li in order.line_items
-                ]
+        first = g.orders[0]
+        is_neto = hasattr(first, "date_placed")
+        if is_neto:
+            ship_name = (
+                f"{first.ship_first_name} {first.ship_last_name}".strip()
+                or first.customer_name
+            )
+        else:
+            ship_name = first.ship_name or first.buyer_name
+        ship_state = getattr(first, "ship_state", "") or ""
 
-            oid = order.order_id
-            # Envelope type label
-            env_type = env.get(oid, "")
-            type_label = env_type.capitalize() if env_type else "—"
+        # Combined line items for child rows
+        all_line_items = []
+        for o in g.orders:
+            o_is_neto = hasattr(o, "date_placed")
+            for li in o.line_items:
+                all_line_items.append({
+                    "sku": li.sku,
+                    "description": li.product_name if o_is_neto else li.title,
+                    "qty": str(li.quantity),
+                    "is_matched": False,
+                })
 
-            # Zone label — consolidate across all line items
-            item_skus = [li.sku for li in order.line_items if li.sku]
-            order_zones = {zones.get(s, "") for s in item_skus}
-            order_zones.discard("")
-            if not order_zones:
-                zone_label = "—"
-            elif len(order_zones) == 1:
-                zone_label = next(iter(order_zones))
-            else:
-                zone_label = "Mixed"
+        # Zone label across all sub-orders
+        all_skus = [li["sku"] for li in all_line_items if li["sku"]]
+        grp_zones = {zones.get(s, "") for s in all_skus}
+        grp_zones.discard("")
+        if not grp_zones:
+            zone_label = "—"
+        elif len(grp_zones) == 1:
+            zone_label = next(iter(grp_zones))
+        else:
+            zone_label = "Mixed"
 
-            # Total string
-            total_str = f"${total_val:.2f}" if total_val else "—"
+        # Envelope types across sub-orders
+        env_types = {env.get(o.order_id, "") for o in g.orders}
+        env_types.discard("")
+        if not env_types:
+            type_label = "—"
+        elif len(env_types) == 1:
+            type_label = next(iter(env_types)).capitalize()
+        else:
+            type_label = "Mixed"
 
-            # Pack type/zone/total into the notes column for the parent row.
-            # Line items will naturally show their sku/description/qty in those columns.
-            notes = f"{type_label}  ·  {zone_label}  ·  {total_str}"
+        # Combined order notes
+        notes_parts = []
+        for o in g.orders:
+            n = (o.notes if hasattr(o, "date_placed") else getattr(o, "buyer_notes", "")) or ""
+            if n:
+                notes_parts.append(f"[{o.order_id}] {n}")
+        order_notes = "  |  ".join(notes_parts)
 
-            if is_neto:
-                order_notes = order.notes or ""
-            else:
-                order_notes = getattr(order, "buyer_notes", "") or ""
+        notes = f"Collated  ·  {type_label}  ·  {zone_label}"
 
-            groups.append({
-                "order_id": oid,
-                "platform": platform,
-                "customer": ship_name,
-                "date": ship_state,
-                "shipping": shipping,
-                "notes": notes,
-                "order_notes": order_notes,
-                "line_items": line_items,
-            })
+        return {
+            "order_id": g.synthetic_id,
+            "platform": g.platform,
+            "customer": ship_name,
+            "date": ship_state,
+            "shipping": f"{len(g.orders)} orders",
+            "notes": notes,
+            "order_notes": order_notes,
+            "line_items": all_line_items,
+        }
 
-        return groups
+    def _group_dict_for_single(self, order) -> dict:
+        """Build a treeview row dict for a single (non-collated) order."""
+        env = self._window.envelope_classifications
+        zones = self._window.pick_zones
+
+        is_neto = hasattr(order, "date_placed")
+        if is_neto:
+            platform = order.sales_channel or "Neto"
+            ship_name = (
+                f"{order.ship_first_name} {order.ship_last_name}".strip()
+                or order.customer_name
+            )
+            ship_state = getattr(order, "ship_state", "") or ""
+            shipping = order.shipping_type
+            total_val = getattr(order, "grand_total", 0.0) or 0.0
+            line_items = [
+                {
+                    "sku": li.sku,
+                    "description": li.product_name,
+                    "qty": str(li.quantity),
+                    "is_matched": False,
+                }
+                for li in order.line_items
+            ]
+        else:
+            platform = "eBay"
+            ship_name = order.ship_name or order.buyer_name
+            ship_state = getattr(order, "ship_state", "") or ""
+            shipping = order.shipping_type
+            total_val = getattr(order, "order_total", 0.0) or 0.0
+            line_items = [
+                {
+                    "sku": li.sku,
+                    "description": li.title,
+                    "qty": str(li.quantity),
+                    "is_matched": False,
+                }
+                for li in order.line_items
+            ]
+
+        oid = order.order_id
+        env_type = env.get(oid, "")
+        type_label = env_type.capitalize() if env_type else "—"
+
+        item_skus = [li.sku for li in order.line_items if li.sku]
+        order_zones = {zones.get(s, "") for s in item_skus}
+        order_zones.discard("")
+        if not order_zones:
+            zone_label = "—"
+        elif len(order_zones) == 1:
+            zone_label = next(iter(order_zones))
+        else:
+            zone_label = "Mixed"
+
+        total_str = f"${total_val:.2f}" if total_val else "—"
+        notes = f"{type_label}  ·  {zone_label}  ·  {total_str}"
+
+        if is_neto:
+            order_notes = order.notes or ""
+        else:
+            order_notes = getattr(order, "buyer_notes", "") or ""
+
+        return {
+            "order_id": oid,
+            "platform": platform,
+            "customer": ship_name,
+            "date": ship_state,
+            "shipping": shipping,
+            "notes": notes,
+            "order_notes": order_notes,
+            "line_items": line_items,
+        }
 
     def _find_order_data(self, order_id: str, platform: str):
         """Return (neto_order, ebay_order, matched_skus) for the given order."""
@@ -349,6 +446,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
     # ── Table population ───────────────────────────────────────────────────────
 
     def _refresh_tables(self):
+        self._collated_groups.clear()
         active = self._get_active_orders()
         removed = self._get_removed_orders()
         self._active_tree.load_groups(self._build_groups(active))
@@ -373,13 +471,23 @@ class DailyOpsResultsView(ctk.CTkFrame):
     # ── Move between tabs ──────────────────────────────────────────────────────
 
     def _move_to_removed(self, order_id: str, platform: str):
-        self._removed_order_ids.add((platform, order_id))
+        if order_id in self._collated_groups:
+            g = self._collated_groups[order_id]
+            for oid in g.order_ids:
+                self._removed_order_ids.add((g.platform, oid))
+        else:
+            self._removed_order_ids.add((platform, order_id))
         self._save_overrides()
         self._save_session()
         self._refresh_tables()
 
     def _move_to_active(self, order_id: str, platform: str):
-        self._removed_order_ids.discard((platform, order_id))
+        if order_id in self._collated_groups:
+            g = self._collated_groups[order_id]
+            for oid in g.order_ids:
+                self._removed_order_ids.discard((g.platform, oid))
+        else:
+            self._removed_order_ids.discard((platform, order_id))
         self._save_overrides()
         self._save_session()
         self._refresh_tables()
@@ -394,11 +502,16 @@ class DailyOpsResultsView(ctk.CTkFrame):
             envelope_classifications=self._window.envelope_classifications,
             pick_zones=self._window.pick_zones,
             removed_order_ids=self._removed_order_ids,
+            ungrouped_order_ids=self._ungrouped_order_ids,
         )
 
     def _save_overrides(self):
         from src.session_daily import save_daily_overrides
         save_daily_overrides(self._removed_order_ids)
+
+    def _clear_overrides(self):
+        from src.session_daily import save_daily_overrides
+        save_daily_overrides(set())
 
     def _merge_overrides(self):
         from src.session_daily import load_daily_overrides
@@ -467,6 +580,11 @@ class DailyOpsResultsView(ctk.CTkFrame):
     # ── Order Detail navigation ────────────────────────────────────────────────
 
     def _open_detail_view(self, order_id: str, platform: str):
+        # Route collated groups to the dedicated CollatedDetailView
+        if order_id in self._collated_groups:
+            self._open_collated_view(self._collated_groups[order_id])
+            return
+
         from src.gui.order_detail_view import OrderDetailView
 
         self._last_clicked_order_id = order_id
@@ -504,9 +622,11 @@ class DailyOpsResultsView(ctk.CTkFrame):
             on_back=self._close_detail_view,
             on_fulfilled=self._on_fulfilled,
             on_move_to_unmatched=move_label_cb,
+            move_to_unmatched_label="Remove from List",
             on_book_freight=book_freight_cb,
             sku_alias_manager=self._window.sku_alias_manager,
             suppliers=self._window.config.suppliers,
+            musipos_client=getattr(self._window, "musipos_client", None),
         )
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()
@@ -524,10 +644,51 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._close_detail_view()
         self._refresh_all_orders()
 
+    # ── Collated detail view ───────────────────────────────────────────────────
+
+    def _open_collated_view(self, group):
+        from src.gui.daily_ops.collated_detail_view import CollatedDetailView
+
+        if self._collated_frame is not None:
+            self._collated_frame.destroy()
+
+        self._collated_frame = CollatedDetailView(
+            self,
+            group=group,
+            window=self._window,
+            dry_run=self._window.config.app.dry_run,
+            on_back=self._close_collated_view,
+            on_ungroup=self._ungroup_orders,
+            on_book_freight=self._on_collated_book_freight,
+        )
+        self._collated_frame.grid(row=0, column=0, sticky="nsew")
+        self._collated_frame.tkraise()
+
+    def _close_collated_view(self):
+        if self._collated_frame is not None:
+            self._collated_frame.destroy()
+            self._collated_frame = None
+        self._list_frame.tkraise()
+
+    def _ungroup_orders(self, order_ids: list):
+        """Move the given order IDs to the ungrouped set so they display individually."""
+        self._ungrouped_order_ids.update(order_ids)
+        self._save_session()
+        self._refresh_tables()
+
+    def _on_collated_book_freight(self, order_id: str, platform: str, for_all: bool = False):
+        """Open FreightBookingView for a collated sub-order (or the first order when for_all)."""
+        self._book_freight_for_all = for_all
+        self._open_freight_view(order_id, platform)
+
     # ── Freight booking ────────────────────────────────────────────────────────
 
     def _open_freight_view(self, order_id: str, platform: str):
         from src.gui.freight_booking_view import FreightBookingView
+
+        # Track which sub-order triggered the booking (needed for per-card tracking fill)
+        self._last_clicked_order_id = order_id
+        self._last_clicked_platform = platform
 
         neto_order, ebay_order, _ = self._find_order_data(order_id, platform)
 
@@ -554,11 +715,30 @@ class DailyOpsResultsView(ctk.CTkFrame):
         if self._freight_frame is not None:
             self._freight_frame.destroy()
             self._freight_frame = None
-        if self._detail_frame is not None:
+        if self._collated_frame is not None:
+            self._collated_frame.tkraise()
+        elif self._detail_frame is not None:
             self._detail_frame.tkraise()
 
     def _on_courier_selected(self, courier_name: str, tracking_number: str = ""):
         self._close_freight_view()
+        if self._book_freight_for_all and self._collated_frame is not None:
+            # Apply tracking to all sub-order cards and bulk-dispatch
+            if tracking_number:
+                self._collated_frame.set_tracking_all(tracking_number, courier_name)
+                self._collated_frame._mark_all_as_sent()
+            self._book_freight_for_all = False
+            return
+        self._book_freight_for_all = False
+        if self._collated_frame is not None:
+            # Per-sub-order booking from inside the collated view
+            # The FreightBookingView was opened for a specific order_id; find its card.
+            # We pass tracking back to that card only.
+            if tracking_number and self._last_clicked_order_id:
+                self._collated_frame.set_tracking_for(
+                    self._last_clicked_order_id, tracking_number, courier_name
+                )
+            return
         if self._detail_frame is not None:
             self._detail_frame.set_tracking(tracking=tracking_number, carrier=courier_name)
             if tracking_number:

@@ -141,3 +141,15 @@ class SkuAliasManager:
             del data[key]
             self._write(data)
             log.debug("SkuAliasManager: removed %s", key)
+
+    def rename_key(self, old_sku: str, new_sku: str) -> bool:
+        """Move alias mapping from old_sku key to new_sku. Returns True if a mapping was found."""
+        old_key = old_sku.upper().strip()
+        new_key = new_sku.upper().strip()
+        data = self._load()
+        if old_key not in data:
+            return False
+        data[new_key] = data.pop(old_key)
+        self._write(data)
+        log.debug("SkuAliasManager: renamed key %s → %s", old_key, new_key)
+        return True

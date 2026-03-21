@@ -29,6 +29,7 @@ def save_daily_session(
     envelope_classifications: dict,
     pick_zones: dict,
     removed_order_ids: set,
+    ungrouped_order_ids: set | None = None,
 ) -> None:
     """Overwrite the fixed daily session file on the network share."""
     try:
@@ -41,6 +42,7 @@ def save_daily_session(
             "envelope_classifications": envelope_classifications,
             "pick_zones": pick_zones,
             "removed_order_ids": [list(x) for x in removed_order_ids],
+            "ungrouped_order_ids": list(ungrouped_order_ids or []),
         }
         path = os.path.join(DAILY_SESSION_DIR, DAILY_SESSION_FILE)
         with open(path, "w", encoding="utf-8") as f:
@@ -65,7 +67,8 @@ def restore_daily_session(data: dict) -> tuple:
     envelope_classifications = data.get("envelope_classifications", {})
     pick_zones = data.get("pick_zones", {})
     removed_order_ids = {tuple(x) for x in data.get("removed_order_ids", [])}
-    return neto_orders, ebay_orders, envelope_classifications, pick_zones, removed_order_ids
+    ungrouped_order_ids = set(data.get("ungrouped_order_ids", []))
+    return neto_orders, ebay_orders, envelope_classifications, pick_zones, removed_order_ids, ungrouped_order_ids
 
 
 def save_daily_overrides(removed_order_ids: set) -> None:

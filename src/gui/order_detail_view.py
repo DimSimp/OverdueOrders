@@ -54,9 +54,11 @@ class OrderDetailView(ctk.CTkFrame):
         on_back,
         on_fulfilled,
         on_move_to_unmatched=None,
+        move_to_unmatched_label: str = "Move to Unmatched",
         on_book_freight=None,
         sku_alias_manager=None,
         suppliers=None,
+        musipos_client=None,
     ):
         super().__init__(master, fg_color="transparent")
         self._order_id = order_id
@@ -70,9 +72,11 @@ class OrderDetailView(ctk.CTkFrame):
         self._on_back = on_back
         self._on_fulfilled = on_fulfilled
         self._on_move_to_unmatched = on_move_to_unmatched
+        self._move_to_unmatched_label = move_to_unmatched_label
         self._on_book_freight = on_book_freight
         self._sku_alias_manager = sku_alias_manager
         self._suppliers = suppliers or []
+        self._musipos_client = musipos_client
         self._completed = False
         self._image_refs: list = []
         self._full_images: dict[str, bytes] = {}  # url → raw bytes for enlargement
@@ -288,18 +292,61 @@ class OrderDetailView(ctk.CTkFrame):
             sku_alias_manager=self._sku_alias_manager,
             mode="line_items",
             line_items=items,
+            neto_client=self._neto_client,
             suppliers=self._suppliers,
+            on_sku_renamed=self._on_sku_renamed,
+            dry_run=self._dry_run,
         )
+
+    def _on_sku_renamed(self, old_sku: str, new_sku: str):
+        """Re-fetch the order after a SKU rename and update the status label."""
+        if hasattr(self, "_status_label"):
+            self._status_label.configure(
+                text=f"SKU renamed: '{old_sku}' → '{new_sku}'. Refreshing order…",
+                text_color=("gray50", "gray60"),
+            )
+
+        def _fetch():
+            try:
+                if self._neto_order and self._neto_client:
+                    fresh = self._neto_client.get_orders_by_ids([self._order_id])
+                    self.after(0, lambda: self._on_rename_refreshed(fresh, old_sku, new_sku))
+                elif self._ebay_order and self._ebay_client:
+                    fresh = self._ebay_client.get_orders_by_ids([self._order_id])
+                    self.after(0, lambda: self._on_rename_refreshed(fresh, old_sku, new_sku))
+            except Exception as exc:
+                self.after(0, lambda err=str(exc): self._on_rename_refresh_failed(err))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_rename_refreshed(self, fresh_orders: list, old_sku: str, new_sku: str):
+        if fresh_orders:
+            if self._neto_order:
+                self._neto_order = fresh_orders[0]
+            elif self._ebay_order:
+                self._ebay_order = fresh_orders[0]
+        if hasattr(self, "_status_label"):
+            self._status_label.configure(
+                text=f"Renamed '{old_sku}' → '{new_sku}'. Note: existing order lines capture the SKU at purchase time.",
+                text_color="green",
+            )
+
+    def _on_rename_refresh_failed(self, error_msg: str):
+        if hasattr(self, "_status_label"):
+            self._status_label.configure(
+                text=f"SKU renamed but order refresh failed: {error_msg}",
+                text_color="orange",
+            )
 
     def _build_neto_line_items(self, items_frame):
         for li in self._neto_order.line_items:
             self._build_line_item_row(items_frame, li.sku, li.product_name,
-                                       li.quantity, li.unit_price, li.sku)
+                                       li.quantity, li.unit_price, li.sku, line_item=li)
 
     def _build_ebay_line_items(self, items_frame):
         for li in self._ebay_order.line_items:
             self._build_line_item_row(items_frame, li.sku, li.title,
-                                       li.quantity, li.unit_price, li.legacy_item_id)
+                                       li.quantity, li.unit_price, li.legacy_item_id, line_item=li)
             # Compact inline note editor — single row: label, entry, char count, save btn
             note_row = ctk.CTkFrame(items_frame, fg_color=("gray90", "gray25"), corner_radius=4)
             note_row.pack(fill="x", padx=(54, 0), pady=(0, 6))
@@ -332,7 +379,7 @@ class OrderDetailView(ctk.CTkFrame):
 
             self._ebay_note_widgets.append((li, entry, btn))
 
-    def _build_line_item_row(self, items_frame, sku, desc, qty, price, api_id):
+    def _build_line_item_row(self, items_frame, sku, desc, qty, price, api_id, line_item=None):
         row = ctk.CTkFrame(items_frame, fg_color="transparent")
         row.pack(fill="x", pady=1)
 
@@ -358,6 +405,191 @@ class OrderDetailView(ctk.CTkFrame):
             text_color="green" if arrived else "gray50",
             font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(side="left")
+
+        # Action sub-row (indented to align with content, below image)
+        if line_item is not None:
+            action_row = ctk.CTkFrame(items_frame, fg_color="transparent")
+            action_row.pack(fill="x", padx=(54, 0), pady=(0, 4))
+
+            wait_btn = ctk.CTkButton(
+                action_row, text="Left in Waiting Area",
+                width=150, height=26, font=ctk.CTkFont(size=11),
+                fg_color=("gray70", "gray30"), hover_color=("gray60", "gray25"),
+            )
+            wait_btn.pack(side="left", padx=(0, 6))
+
+            row_status = ctk.CTkLabel(action_row, text="", font=ctk.CTkFont(size=11),
+                                      text_color=("gray40", "gray60"))
+            row_status.pack(side="left", padx=(0, 6))
+
+            wait_btn.configure(
+                command=lambda li=line_item, b=wait_btn, s=row_status:
+                    self._on_waiting_area_clicked(li, b, s)
+            )
+
+            if self._musipos_client is not None:
+                po_btn = ctk.CTkButton(
+                    action_row, text="On PO",
+                    width=70, height=26, font=ctk.CTkFont(size=11),
+                    fg_color=("gray70", "gray30"), hover_color=("gray60", "gray25"),
+                )
+                po_btn.configure(
+                    command=lambda li=line_item, b=po_btn, s=row_status:
+                        self._on_add_to_po_clicked(li, b, s)
+                )
+                po_btn.pack(side="left")
+
+    # ── Line-item action handlers ─────────────────────────────────────────
+
+    def _on_waiting_area_clicked(self, line_item, btn, status_lbl):
+        btn.configure(state="disabled")
+        note_text = f"{line_item.sku} left in waiting area"
+        status_lbl.configure(text="Adding note…", text_color=("gray40", "gray60"))
+
+        def _work():
+            try:
+                if self._neto_order and self._neto_client:
+                    from datetime import date
+                    dated = f"[{date.today().strftime('%d/%m/%Y')}] {note_text}"
+                    self._neto_client.add_sticky_note(
+                        self._order_id,
+                        title="Item Status",
+                        description=dated,
+                        dry_run=self._dry_run,
+                    )
+                elif self._ebay_order and self._ebay_client:
+                    new_text = note_text[:255]
+                    self._ebay_client.set_private_notes(
+                        item_id=line_item.legacy_item_id,
+                        transaction_id=line_item.legacy_transaction_id,
+                        note_text=new_text,
+                        dry_run=self._dry_run,
+                    )
+                    line_item.notes = new_text
+                self.after(0, lambda: self._on_wait_note_done(True, None, btn, status_lbl))
+            except Exception as exc:
+                self.after(0, lambda e=str(exc): self._on_wait_note_done(False, e, btn, status_lbl))
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_wait_note_done(self, success, error, btn, status_lbl):
+        if success:
+            suffix = " [DRY RUN]" if self._dry_run else ""
+            status_lbl.configure(text=f"✓ Note added{suffix}", text_color="green")
+            if self._neto_order and hasattr(self, "_notes_content_parent"):
+                def _refresh_notes():
+                    try:
+                        fresh = self._neto_client.get_orders_by_ids([self._order_id])
+                        if fresh:
+                            self._neto_order = fresh[0]
+                        self.after(0, self._rebuild_notes_content)
+                    except Exception:
+                        pass
+                threading.Thread(target=_refresh_notes, daemon=True).start()
+            elif self._ebay_order and self._ebay_client:
+                def _refresh_ebay():
+                    try:
+                        fresh = self._ebay_client.get_orders_by_ids([self._order_id])
+                        self.after(0, lambda: self._on_ebay_note_refreshed(fresh, None))
+                    except Exception:
+                        pass
+                threading.Thread(target=_refresh_ebay, daemon=True).start()
+        else:
+            btn.configure(state="normal")
+            status_lbl.configure(text=f"Error: {error}", text_color="red")
+
+    def _on_add_to_po_clicked(self, line_item, btn, status_lbl):
+        btn.configure(state="disabled")
+        from src.gui.musipos_po_dialog import MusiposPODialog
+
+        def _on_success(po_result):
+            self._on_po_added(line_item, po_result, btn, status_lbl)
+
+        def _on_note_only():
+            self._on_po_note_only(line_item, btn, status_lbl)
+
+        def _on_dialog_close():
+            # Re-enable if dialog was closed without completing
+            if btn.cget("state") == "disabled":
+                btn.configure(state="normal")
+
+        qty = getattr(line_item, "quantity", 1) or 1
+        dialog = MusiposPODialog(
+            self.winfo_toplevel(),
+            neto_sku=line_item.sku,
+            product_name=getattr(line_item, "product_name", None)
+                         or getattr(line_item, "title", "") or "",
+            order_qty=qty,
+            musipos_client=self._musipos_client,
+            suppliers_config=self._suppliers,
+            dry_run=self._dry_run,
+            on_success=_on_success,
+            on_note_only=_on_note_only,
+        )
+        dialog.protocol("WM_DELETE_WINDOW", lambda: (dialog.destroy(), _on_dialog_close()))
+
+    def _add_order_note(self, note_text: str, line_item=None):
+        """Add a note to the current order (background, fire-and-forget).
+
+        For eBay, replaces the note on the specific line_item (or first line item
+        if not provided) and refreshes the note display afterwards.
+        """
+        def _work():
+            try:
+                if self._neto_order and self._neto_client:
+                    from datetime import date
+                    dated = f"[{date.today().strftime('%d/%m/%Y')}] {note_text}"
+                    self._neto_client.add_sticky_note(
+                        self._order_id,
+                        title="Item Status",
+                        description=dated,
+                        dry_run=self._dry_run,
+                    )
+                    if hasattr(self, "_notes_content_parent"):
+                        try:
+                            fresh = self._neto_client.get_orders_by_ids([self._order_id])
+                            if fresh:
+                                self._neto_order = fresh[0]
+                            self.after(0, self._rebuild_notes_content)
+                        except Exception:
+                            pass
+                elif self._ebay_order and self._ebay_client:
+                    target_li = line_item or (
+                        self._ebay_order.line_items[0] if self._ebay_order.line_items else None
+                    )
+                    if target_li:
+                        self._ebay_client.set_private_notes(
+                            item_id=target_li.legacy_item_id,
+                            transaction_id=target_li.legacy_transaction_id,
+                            note_text=note_text[:255],
+                            dry_run=self._dry_run,
+                        )
+                        try:
+                            fresh = self._ebay_client.get_orders_by_ids([self._order_id])
+                            self.after(0, lambda: self._on_ebay_note_refreshed(fresh, None))
+                        except Exception:
+                            pass
+            except Exception as exc:
+                print(f"[OrderDetail] Failed to add order note: {exc}")
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_po_added(self, line_item, po_result, btn, status_lbl):
+        """Called after successful PO addition — add the order note."""
+        note_text = f"{line_item.sku} on PO"
+        self._add_order_note(note_text, line_item=line_item)
+        suffix = " [DRY RUN]" if self._dry_run else ""
+        status_lbl.configure(
+            text=f"✓ Added to PO #{po_result['po_no']}{suffix}", text_color="green"
+        )
+        btn.configure(text="On PO ✓")
+        # Keep button disabled (greyed) — already added
+
+    def _on_po_note_only(self, line_item, btn, status_lbl):
+        """User cancelled PO addition but still wants the order note."""
+        note_text = f"{line_item.sku} on PO"
+        self._add_order_note(note_text, line_item=line_item)
+        status_lbl.configure(text="✓ Note added", text_color="green")
+        btn.configure(state="normal")
 
     # ── Pricing Summary ──────────────────────────────────────────────────
 
@@ -816,7 +1048,7 @@ class OrderDetailView(ctk.CTkFrame):
 
         if self._on_move_to_unmatched:
             ctk.CTkButton(
-                bar, text="Move to Unmatched", width=150, height=36,
+                bar, text=self._move_to_unmatched_label, width=150, height=36,
                 fg_color="gray50", hover_color="gray40",
                 command=self._do_move_to_unmatched,
             ).pack(side="left", padx=(0, 12))

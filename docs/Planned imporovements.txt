@@ -8,3 +8,11 @@ DAILY OPERATIONS
 - make SKU column slightly narrower
 - daily operations order fulfillment screen has a "move to unmatched" button, but should be "remove from list" or something similar
 - "Removed" list needs to refresh when a new session is created
+- handle multiple orders made by the same user
+- date range needs to be from *selected date - midnight* to *current date - current time*
+- opening a neto order should immediately refresh first so notes are updated
+- show which SKU is being used when using the "on po" button (show in modal)
+- show how many of *item* are currently on po
+- need to add a way to search APIC if item is not found in musipos inventory, ask the user if they want to import it into inventory, and use the SKU to order.
+- "on po" button should be inactive while the add to PO modal is open, but not remain inactive if the window is closed without actually adding an item to PO.
+- removing item from list either by right clicking or using the dedicated button in the order detail view should refresh the list in the results tab

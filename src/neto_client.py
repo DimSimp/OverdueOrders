@@ -324,6 +324,52 @@ class NetoClient:
                 return name if name else None
         return None
 
+    def get_item_info(self, sku: str) -> dict | None:
+        """Return {sku, name, internal_id} for a product, or None if not found."""
+        if not sku:
+            return None
+        body = {
+            "Filter": {
+                "SKU": [sku],
+                "OutputSelector": ["SKU", "Name", "InternalID"],
+            }
+        }
+        try:
+            data = self._post_action("GetItem", body, timeout=10)
+        except NetoAPIError:
+            return None
+        items = data.get("Item", [])
+        if isinstance(items, dict):
+            items = [items]
+        for item in items:
+            if str(item.get("SKU", "")).strip().upper() == sku.strip().upper():
+                return {
+                    "sku": item.get("SKU", "").strip(),
+                    "name": str(item.get("Name", "")).strip(),
+                    "internal_id": str(item.get("InternalID", "")).strip(),
+                }
+        return None
+
+    def rename_item_sku(self, old_sku: str, new_sku: str, dry_run: bool = False) -> tuple[bool, str]:
+        """
+        Rename a product's SKU in Neto.
+        Two-step: fetch InternalID via GetItem, then UpdateItem using InternalID as identifier.
+        Returns (success, message).
+        """
+        if dry_run:
+            return (True, f"[DRY RUN] Would rename '{old_sku}' → '{new_sku}'")
+        info = self.get_item_info(old_sku)
+        if not info or not info.get("internal_id"):
+            return (False, f"Item '{old_sku}' not found in Neto")
+        body = {"Item": [{"InternalID": info["internal_id"], "SKU": new_sku}]}
+        try:
+            result = self._post_action("UpdateItem", body)
+        except NetoAPIError as exc:
+            return (False, str(exc))
+        if result.get("Ack") == "Success":
+            return (True, f"Renamed '{old_sku}' → '{new_sku}' in Neto")
+        return (False, str(result.get("Messages", "Unknown error")))
+
     def get_product_images(self, skus: list[str]) -> dict[str, str]:
         """
         Fetch primary image URLs for a list of product SKUs via GetItem.

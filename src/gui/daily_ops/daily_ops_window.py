@@ -36,6 +36,10 @@ class DailyOpsWindow(ctk.CTkToplevel):
         from src.sku_alias_manager import SkuAliasManager
         self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)
 
+        from src.musipos_client import MusiposClient
+        _mc = config.musipos
+        self.musipos_client = MusiposClient(_mc) if (_mc and _mc.enabled) else None
+
         # ── Shared state set by fetch step ──────────────────────────────
         self.neto_orders: list = []
         self.ebay_orders: list = []
@@ -161,7 +165,7 @@ class DailyOpsWindow(ctk.CTkToplevel):
             return
         try:
             data = load_daily_session(path)
-            neto_orders, ebay_orders, envelope_classifications, pick_zones, removed_ids = (
+            neto_orders, ebay_orders, envelope_classifications, pick_zones, removed_ids, ungrouped_ids = (
                 restore_daily_session(data)
             )
         except Exception as exc:
@@ -178,7 +182,7 @@ class DailyOpsWindow(ctk.CTkToplevel):
         if "results" in self._step_frames:
             self._step_frames.pop("results").destroy()
 
-        self._show_results(initial_removed_ids=removed_ids)
+        self._show_results(initial_removed_ids=removed_ids, initial_ungrouped_ids=ungrouped_ids)
 
     def _open_sku_aliases(self):
         from src.gui.sku_alias_modal import SkuAliasModal
@@ -282,7 +286,7 @@ class DailyOpsWindow(ctk.CTkToplevel):
 
     # ── Step 6: Results & Dispatch ────────────────────────────────────────
 
-    def _show_results(self, initial_removed_ids=None):
+    def _show_results(self, initial_removed_ids=None, initial_ungrouped_ids=None):
         if "results" not in self._step_frames:
             from src.gui.daily_ops.results_view import DailyOpsResultsView
             self._step_frames["results"] = DailyOpsResultsView(
@@ -292,7 +296,10 @@ class DailyOpsWindow(ctk.CTkToplevel):
             )
         self.set_header("Daily Operations  —  Results & Dispatch")
         self._show_step(self._step_frames["results"], "Step 6 of 6")
-        self._step_frames["results"].show(initial_removed_ids=initial_removed_ids)
+        self._step_frames["results"].show(
+            initial_removed_ids=initial_removed_ids,
+            initial_ungrouped_ids=initial_ungrouped_ids,
+        )
 
     # ── Placeholder for future steps ────────────────────────────────────
 
@@ -390,10 +397,10 @@ class _DailyOpsMenuView(ctk.CTkFrame):
             text_color=("gray50", "gray60"),
         ).pack(pady=(0, 20))
 
-        # Manage SKU Aliases
+        # SKU Management
         ctk.CTkButton(
             center,
-            text="Manage SKU Aliases",
+            text="SKU Management",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
             fg_color=("gray70", "gray30"),

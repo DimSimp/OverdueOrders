@@ -44,6 +44,10 @@ class App(ctk.CTk):
         from src.sku_alias_manager import SkuAliasManager
         self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)
 
+        from src.musipos_client import MusiposClient
+        _mc = config.musipos
+        self.musipos_client = MusiposClient(_mc) if (_mc and _mc.enabled) else None
+
         if startup_session:
             # Direct .scar open — skip home screen, go straight to afternoon ops
             self._setup_afternoon_window()

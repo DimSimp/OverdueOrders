@@ -384,20 +384,18 @@ class InvoiceTab(ctk.CTkFrame):
         self._error_label.configure(text=text)
 
     def _load_session(self):
-        """Open a file dialog and load a session snapshot."""
-        initial_dir = (
-            self._last_session_dir
-            or self._app.config.app.snapshot_dir
-            or self._app.config.app.output_dir
-        )
-        path = filedialog.askopenfilename(
-            title="Load Session Snapshot",
-            initialdir=initial_dir,
-            filetypes=[("Session files", "*.scar"), ("JSON files", "*.json"), ("All files", "*.*")],
-        )
-        if not path:
+        """Load the latest afternoon session snapshot from the fixed network path."""
+        from tkinter import messagebox
+        from src.session import AFTERNOON_SESSION_DIR, AFTERNOON_SESSION_FILE
+        path = os.path.join(AFTERNOON_SESSION_DIR, AFTERNOON_SESSION_FILE)
+        if not os.path.exists(path):
+            messagebox.showinfo(
+                "No Session Found",
+                f"No afternoon session file was found at:\n{path}\n\n"
+                "Run a new session to generate one.",
+                parent=self,
+            )
             return
-        self._last_session_dir = os.path.dirname(path)
         self.load_session_from_path(path)
 
     def load_session_from_path(self, path: str):
