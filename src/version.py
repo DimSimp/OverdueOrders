@@ -1,3 +1,3 @@
 # Application version — bump this string before tagging a GitHub release.
 # Format: MAJOR.MINOR.PATCH  (semantic versioning)
-__version__ = "1.2.10"
+__version__ = "1.2.11"
