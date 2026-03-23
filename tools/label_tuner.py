@@ -29,6 +29,7 @@ COURIER_DISPLAY = {
     "auspost_express": "Australia Post (Express)",
     "allied": "Allied Express",
     "bonds": "Bonds",
+    "tge": "Team Global Express",
 }
 
 DEFAULTS = {
@@ -38,6 +39,8 @@ DEFAULTS = {
     "no_split": False,
     "rotate_cw": False,
     "skip_initial_rotate": False,
+    "crop_right_fraction": 1.0,
+    "crop_bottom_fraction": 1.0,
 }
 
 
@@ -65,6 +68,8 @@ def _save_settings(
     no_split: bool = False,
     rotate_cw: bool = False,
     skip_initial_rotate: bool = False,
+    crop_right_fraction: float = 1.0,
+    crop_bottom_fraction: float = 1.0,
 ) -> None:
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
     existing: dict = {}
@@ -80,6 +85,8 @@ def _save_settings(
         "no_split": no_split,
         "rotate_cw": rotate_cw,
         "skip_initial_rotate": skip_initial_rotate,
+        "crop_right_fraction": round(crop_right_fraction, 4),
+        "crop_bottom_fraction": round(crop_bottom_fraction, 4),
     }
     SETTINGS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
@@ -165,6 +172,34 @@ class LabelTuner(tk.Tk):
             variable=self._skip_initial_rotate_var, command=self._on_param_changed,
             wraplength=220, justify="left",
         ).pack(anchor="w", pady=(0, 8))
+
+        tk.Label(left, text="Pre-crop — keep left X% of width:").pack(anchor="w", pady=(4, 0))
+        self._crop_right_var = tk.DoubleVar(value=100)
+        crop_right_row = tk.Frame(left)
+        crop_right_row.pack(fill="x", pady=(2, 4))
+        tk.Scale(
+            crop_right_row, from_=10, to=100, resolution=1, orient="horizontal",
+            variable=self._crop_right_var, command=self._on_param_changed, length=200,
+        ).pack(side="left")
+        tk.Spinbox(
+            crop_right_row, from_=10, to=100, increment=1,
+            textvariable=self._crop_right_var, width=5,
+            command=self._on_param_changed,
+        ).pack(side="left", padx=(6, 0))
+
+        tk.Label(left, text="Pre-crop — keep top X% of height:").pack(anchor="w", pady=(2, 0))
+        self._crop_bottom_var = tk.DoubleVar(value=100)
+        crop_bottom_row = tk.Frame(left)
+        crop_bottom_row.pack(fill="x", pady=(2, 8))
+        tk.Scale(
+            crop_bottom_row, from_=10, to=100, resolution=1, orient="horizontal",
+            variable=self._crop_bottom_var, command=self._on_param_changed, length=200,
+        ).pack(side="left")
+        tk.Spinbox(
+            crop_bottom_row, from_=10, to=100, increment=1,
+            textvariable=self._crop_bottom_var, width=5,
+            command=self._on_param_changed,
+        ).pack(side="left", padx=(6, 0))
 
         tk.Label(left, text="Label length (mm):").pack(anchor="w", pady=(6, 0))
         self._length_auto_var = tk.BooleanVar(value=True)
@@ -292,6 +327,10 @@ class LabelTuner(tk.Tk):
         self._rotate_cw_var.set(settings.get("rotate_cw", False))
         self._skip_initial_rotate_var.set(settings.get("skip_initial_rotate", False))
 
+        # crop fractions
+        self._crop_right_var.set(round(settings.get("crop_right_fraction", 1.0) * 100))
+        self._crop_bottom_var.set(round(settings.get("crop_bottom_fraction", 1.0) * 100))
+
         # label_length_mm
         lmm = settings.get("label_length_mm", 0.0)
         if lmm > 0:
@@ -381,12 +420,16 @@ class LabelTuner(tk.Tk):
             rotate_cw = self._rotate_cw_var.get()
             skip_initial_rotate = self._skip_initial_rotate_var.get()
             label_length_mm = 0.0 if self._length_auto_var.get() else self._length_var.get()
+            crop_right_fraction = self._crop_right_var.get() / 100.0
+            crop_bottom_fraction = self._crop_bottom_var.get() / 100.0
 
             if not use_cache or self._strips_cache is None:
                 self._strips_cache = process_label_pdf(
                     self._pdf_bytes, scale=scale, split_ratio=split_ratio, no_split=no_split,
                     label_length_mm=label_length_mm, rotate_cw=rotate_cw,
                     skip_initial_rotate=skip_initial_rotate,
+                    crop_right_fraction=crop_right_fraction,
+                    crop_bottom_fraction=crop_bottom_fraction,
                 )
 
             strips = self._strips_cache
@@ -447,6 +490,8 @@ class LabelTuner(tk.Tk):
         rotate_cw = self._rotate_cw_var.get()
         skip_initial_rotate = self._skip_initial_rotate_var.get()
         label_length_mm = 0.0 if self._length_auto_var.get() else self._length_var.get()
+        crop_right_fraction = self._crop_right_var.get() / 100.0
+        crop_bottom_fraction = self._crop_bottom_var.get() / 100.0
         self._set_status("Sending to printer…")
         self.update_idletasks()
 
@@ -457,6 +502,8 @@ class LabelTuner(tk.Tk):
                     self._pdf_bytes, scale=scale, split_ratio=split_ratio, no_split=no_split,
                     label_length_mm=label_length_mm, rotate_cw=rotate_cw,
                     skip_initial_rotate=skip_initial_rotate,
+                    crop_right_fraction=crop_right_fraction,
+                    crop_bottom_fraction=crop_bottom_fraction,
                 )
                 if err:
                     self.after(0, lambda: self._set_status(f"Print failed:\n{err}"))
@@ -477,9 +524,12 @@ class LabelTuner(tk.Tk):
         rotate_cw = self._rotate_cw_var.get()
         skip_initial_rotate = self._skip_initial_rotate_var.get()
         label_length_mm = 0.0 if self._length_auto_var.get() else self._length_var.get()
+        crop_right_fraction = self._crop_right_var.get() / 100.0
+        crop_bottom_fraction = self._crop_bottom_var.get() / 100.0
         try:
             _save_settings(self._courier_code, scale, split_ratio, label_length_mm,
-                           no_split, rotate_cw, skip_initial_rotate)
+                           no_split, rotate_cw, skip_initial_rotate,
+                           crop_right_fraction, crop_bottom_fraction)
             name = COURIER_DISPLAY.get(self._courier_code, self._courier_code)
             length_str = f"{label_length_mm:.0f}mm" if label_length_mm > 0 else "auto"
             flags = []
@@ -489,6 +539,8 @@ class LabelTuner(tk.Tk):
                 flags.append("rotate CW")
             if skip_initial_rotate:
                 flags.append("skip initial rotate")
+            if crop_right_fraction < 1.0 or crop_bottom_fraction < 1.0:
+                flags.append(f"crop {crop_right_fraction:.0%}×{crop_bottom_fraction:.0%}")
             flag_str = ("  " + "  ".join(flags)) if flags else ""
             self._set_status(
                 f"Saved for {name}:\n  scale={scale:.0%}  split={split_ratio:.0%}"

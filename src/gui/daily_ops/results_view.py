@@ -7,7 +7,7 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import BooleanVar, messagebox
+from tkinter import messagebox
 import tkinter.ttk as ttk
 
 import customtkinter as ctk
@@ -137,14 +137,6 @@ class DailyOpsResultsView(ctk.CTkFrame):
         )
         self._labels_btn.pack(side="left", padx=(0, 10))
 
-        self._env_only_var = BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            toolbar, text="Envelopes only",
-            variable=self._env_only_var,
-            font=ctk.CTkFont(size=13),
-            command=self._refresh_active_tab,
-        ).pack(side="left", padx=(0, 0))
-
         self._status_label = ctk.CTkLabel(
             toolbar, text="", font=ctk.CTkFont(size=12),
             text_color=("gray50", "gray60"),
@@ -232,13 +224,15 @@ class DailyOpsResultsView(ctk.CTkFrame):
             self._clear_overrides()
         # Auto-save session on first arrival
         self._save_session()
-        # Populate tables
+        # Populate tables with current data, then auto-refresh from API so
+        # the most up-to-date details (notes, status, etc.) are shown.
         self._refresh_tables()
+        self._refresh_all_orders()
 
     # ── Data helpers ───────────────────────────────────────────────────────────
 
     def _get_active_orders(self) -> list:
-        """Return non-removed orders, optionally filtered to envelopes only."""
+        """Return non-removed orders."""
         active = []
         for o in self._neto_orders:
             key = (o.sales_channel or "Neto", o.order_id)
@@ -247,12 +241,6 @@ class DailyOpsResultsView(ctk.CTkFrame):
         for o in self._ebay_orders:
             if ("eBay", o.order_id) not in self._removed_order_ids:
                 active.append(o)
-        if self._env_only_var.get():
-            env = self._window.envelope_classifications
-            active = [
-                o for o in active
-                if env.get(o.order_id, "") in ("minilope", "devilope")
-            ]
         return active
 
     def _get_removed_orders(self) -> list:
@@ -355,6 +343,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             "shipping": f"{len(g.orders)} orders",
             "notes": notes,
             "order_notes": order_notes,
+            "postage_type": "Mixed",
             "line_items": all_line_items,
         }
 
@@ -402,6 +391,13 @@ class DailyOpsResultsView(ctk.CTkFrame):
         env_type = env.get(oid, "")
         type_label = env_type.capitalize() if env_type else "—"
 
+        if env_type in ("minilope", "devilope"):
+            postage_type = "Envelopes"
+        elif env_type == "satchel":
+            postage_type = "Satchel"
+        else:
+            postage_type = "Mixed"
+
         item_skus = [li.sku for li in order.line_items if li.sku]
         order_zones = {zones.get(s, "") for s in item_skus}
         order_zones.discard("")
@@ -428,6 +424,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             "shipping": shipping,
             "notes": notes,
             "order_notes": order_notes,
+            "postage_type": postage_type,
             "line_items": line_items,
         }
 
@@ -479,7 +476,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             self._removed_order_ids.add((platform, order_id))
         self._save_overrides()
         self._save_session()
-        self._refresh_tables()
+        self._refresh_all_orders()
 
     def _move_to_active(self, order_id: str, platform: str):
         if order_id in self._collated_groups:
@@ -490,7 +487,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             self._removed_order_ids.discard((platform, order_id))
         self._save_overrides()
         self._save_session()
-        self._refresh_tables()
+        self._refresh_all_orders()
 
     # ── Session & overrides ────────────────────────────────────────────────────
 
@@ -632,17 +629,19 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._detail_frame.tkraise()
 
     def _close_detail_view(self):
+        self._active_tree.block_clicks()
+        self._removed_tree.block_clicks()
         if self._detail_frame is not None:
             self._detail_frame.destroy()
             self._detail_frame = None
         self._list_frame.tkraise()
         if self._last_clicked_order_id:
             self._active_tree.scroll_to(self._last_clicked_order_id)
+        self._refresh_all_orders()
 
     def _on_fulfilled(self):
         """Called when an order is marked dispatched in the detail view."""
-        self._close_detail_view()
-        self._refresh_all_orders()
+        self._close_detail_view()  # already triggers _refresh_all_orders
 
     # ── Collated detail view ───────────────────────────────────────────────────
 
@@ -665,10 +664,13 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._collated_frame.tkraise()
 
     def _close_collated_view(self):
+        self._active_tree.block_clicks()
+        self._removed_tree.block_clicks()
         if self._collated_frame is not None:
             self._collated_frame.destroy()
             self._collated_frame = None
         self._list_frame.tkraise()
+        self._refresh_all_orders()
 
     def _ungroup_orders(self, order_ids: list):
         """Move the given order IDs to the ungrouped set so they display individually."""

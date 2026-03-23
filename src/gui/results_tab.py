@@ -4,6 +4,7 @@ import os
 import subprocess
 import threading
 import re
+import time
 import tkinter as tk
 from tkinter import messagebox, filedialog, Menu, StringVar, BooleanVar
 import tkinter.ttk as ttk
@@ -90,6 +91,9 @@ class OrderTreeview(ctk.CTkFrame):
         self._filter_frame: ctk.CTkFrame | None = None
         self._platform_filters: dict[str, BooleanVar] = {}
         self._shipping_filters: dict[str, BooleanVar] = {}
+        self._postage_filters: dict[str, BooleanVar] = {}
+        # Click guard — blocks spurious release events after view transitions
+        self._click_blocked_until: float = 0.0
         self._apply_style()
         self._build_tree()
 
@@ -313,6 +317,13 @@ class OrderTreeview(ctk.CTkFrame):
             if var is not None and not var.get():
                 return False
 
+        # Postage type filter
+        if self._postage_filters:
+            postage_type = g.get("postage_type", "Mixed")
+            var = self._postage_filters.get(postage_type)
+            if var is not None and not var.get():
+                return False
+
         # Search query
         if query:
             return self._group_matches_query(g, query)
@@ -433,7 +444,7 @@ class OrderTreeview(ctk.CTkFrame):
             self._filter_btn.configure(fg_color=("dodgerblue3", "dodgerblue4"))
 
     def _rebuild_filter_options(self):
-        """Scan groups for unique platforms and update filter variables."""
+        """Scan groups for unique platforms/postage types and update filter variables."""
         platforms = sorted({g.get("platform", "") for g in self._all_groups if g.get("platform")})
         # Preserve existing check states
         old_states = {k: v.get() for k, v in self._platform_filters.items()}
@@ -446,6 +457,14 @@ class OrderTreeview(ctk.CTkFrame):
         if not self._shipping_filters:
             for st in ("Express", "Regular", "Local Pickup"):
                 self._shipping_filters[st] = BooleanVar(value=True)
+
+        # Postage types — scan groups in fixed display order; only add what's present
+        old_postage = {k: v.get() for k, v in self._postage_filters.items()}
+        present_postage = {g.get("postage_type") for g in self._all_groups if g.get("postage_type")}
+        self._postage_filters.clear()
+        for pt in ("Envelopes", "Satchel", "Mixed"):
+            if pt in present_postage:
+                self._postage_filters[pt] = BooleanVar(value=old_postage.get(pt, True))
 
         # Rebuild panel if visible
         if self._filter_visible and self._filter_frame:
@@ -484,10 +503,37 @@ class OrderTreeview(ctk.CTkFrame):
                 command=self._apply_filter,
             ).pack(side="left", padx=(0, 8))
 
+        # Postage Type section (only when groups carry postage_type data)
+        if self._postage_filters:
+            ctk.CTkLabel(self._filter_frame, text="|", text_color="gray50").pack(side="left", padx=(0, 10))
+            post_frame = ctk.CTkFrame(self._filter_frame, fg_color="transparent")
+            post_frame.pack(side="left", padx=(0, 10), pady=6)
+            ctk.CTkLabel(post_frame, text="Postage Type:", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(0, 6))
+            for postage_type, var in self._postage_filters.items():
+                ctk.CTkCheckBox(
+                    post_frame, text=postage_type, variable=var,
+                    font=ctk.CTkFont(size=11), height=24, checkbox_width=18, checkbox_height=18,
+                    command=self._apply_filter,
+                ).pack(side="left", padx=(0, 8))
+
+    # ── Public helpers ────────────────────────────────────────────────────
+
+    def block_clicks(self, duration_ms: int = 150):
+        """Ignore the next click for *duration_ms* milliseconds.
+
+        Called before a view transition so that the ButtonRelease-1 event
+        that fires after a CTkButton press (which destroys the overlay frame
+        and raises this treeview) does not accidentally open an order row.
+        """
+        self._click_blocked_until = time.monotonic() + duration_ms / 1000.0
+
     # ── Events ────────────────────────────────────────────────────────────
 
     def _on_click(self, event):
         if not self._on_row_click:
+            return
+        # Swallow spurious releases that arrive immediately after a transition
+        if time.monotonic() < self._click_blocked_until:
             return
         # Ignore clicks on the expand/collapse indicator
         element = self._tree.identify_element(event.x, event.y)
@@ -1016,7 +1062,7 @@ class ResultsTab(ctk.CTkFrame):
         self._excluded_order_ids.add(key)
         self._force_matched_order_ids.discard(key)
         self._save_shared_overrides()
-        self._refresh_tables()
+        self._refresh_matched_orders()
 
     def _include_order(self, order_id: str, platform: str = ""):
         """Move an order from unmatched → matched."""
@@ -1110,19 +1156,18 @@ class ResultsTab(ctk.CTkFrame):
         self._check_status_background(order_id, platform)
 
     def _close_detail_view(self):
+        self._matched_tree.block_clicks()
         if self._detail_frame is not None:
             self._detail_frame.destroy()
             self._detail_frame = None
+        self._detail_order_already_completed = False
         self._list_frame.tkraise()
         if self._last_clicked_order_id:
             self._matched_tree.scroll_to(self._last_clicked_order_id)
-        if self._detail_order_already_completed:
-            self._detail_order_already_completed = False
-            self._refresh_matched_orders()
+        self._refresh_matched_orders()
 
     def _on_fulfilled(self):
-        self._close_detail_view()
-        self._refresh_matched_orders()
+        self._close_detail_view()  # already triggers _refresh_matched_orders
 
     # ── Freight Booking View ─────────────────────────────────────────────
 

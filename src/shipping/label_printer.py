@@ -43,6 +43,8 @@ def process_label_pdf(
     label_length_mm: float = 0.0,
     rotate_cw: bool = False,
     skip_initial_rotate: bool = False,
+    crop_right_fraction: float = 1.0,
+    crop_bottom_fraction: float = 1.0,
 ) -> list[tuple]:
     """Convert a courier label PDF into printable strip pairs (or a single strip).
 
@@ -68,20 +70,26 @@ def process_label_pdf(
     handles the final portrait orientation. When False (default), the initial
     rotation is applied only when the page is already landscape (w > h).
 
+    *crop_right_fraction* / *crop_bottom_fraction* — when < 1.0, crop the image
+    to the specified fraction of its width / height (from top-left) BEFORE scaling.
+    Use for couriers that embed the label in one corner of an A4 page (e.g. TGE
+    which puts the label in the top-left A6 quadrant: crop_right=0.5, crop_bottom=0.5).
+
     Normal split pipeline:
       1. PDF page → PIL image at 300 dpi
       2. If landscape (w > h) AND NOT skip_initial_rotate: rotate to portrait
-      3. Scale by *scale*
-      4. Split horizontally at *split_ratio* of the image height
-      5. Pad the shorter bottom half with white so both strips are equal height
-      6. Rotate each half to portrait strip (direction controlled by rotate_cw)
-      7. If label_length_mm > 0, resize strip height to achieve target length
+      3. If crop fractions < 1.0: crop image to top-left portion
+      4. Scale by *scale*
+      5. Split horizontally at *split_ratio* of the image height
+      6. Pad the shorter bottom half with white so both strips are equal height
+      7. Rotate each half to portrait strip (direction controlled by rotate_cw)
+      8. If label_length_mm > 0, resize strip height to achieve target length
 
     No-split pipeline (no_split=True):
-      Steps 1–3 as above, then return the full portrait image as the sole
+      Steps 1–4 as above, then return the full portrait image as the sole
       element of the tuple (bot_strip=None). No rotation — the portrait image
       is already the correct orientation for 62mm tape (width→62mm, height→length).
-      Step 7 applied if label_length_mm > 0.
+      Step 8 applied if label_length_mm > 0.
     """
     from pdf2image import convert_from_bytes
     from PIL import Image
@@ -112,6 +120,13 @@ def process_label_pdf(
         # ── 1. Ensure portrait (skipped for landscape labels like Allied) ──
         if w > h and not skip_initial_rotate:
             img = img.transpose(_portrait_rot)
+            w, h = img.size
+
+        # ── 1b. Pre-crop (for A4-format labels like TGE) ────────────────
+        if crop_right_fraction < 1.0 or crop_bottom_fraction < 1.0:
+            new_w = max(1, int(w * min(crop_right_fraction, 1.0)))
+            new_h = max(1, int(h * min(crop_bottom_fraction, 1.0)))
+            img = img.crop((0, 0, new_w, new_h))
             w, h = img.size
 
         # ── 2. Scale ────────────────────────────────────────────────────
@@ -155,9 +170,11 @@ def process_label_pdf(
             log.debug(
                 "process_label_pdf page %d: raw=%dx%d scale=%.2f split=%.2f "
                 "label_length_mm=%.1f rotate_cw=%s skip_initial_rotate=%s "
-                "top_strip=%s bot_strip=%s",
+                "crop=(%.2f,%.2f) top_strip=%s bot_strip=%s",
                 page_num + 1, w, h, scale, split_ratio, label_length_mm,
-                rotate_cw, skip_initial_rotate, top_strip.size, bot_strip.size,
+                rotate_cw, skip_initial_rotate,
+                crop_right_fraction, crop_bottom_fraction,
+                top_strip.size, bot_strip.size,
             )
             result.append((top_strip, bot_strip))
 
@@ -174,6 +191,8 @@ def print_label(
     label_length_mm: float | None = None,
     rotate_cw: bool | None = None,
     skip_initial_rotate: bool | None = None,
+    crop_right_fraction: float | None = None,
+    crop_bottom_fraction: float | None = None,
 ) -> str:
     """Print a 4×6 courier label PDF on a Brother QL-700 (62mm tape).
 
@@ -183,7 +202,8 @@ def print_label(
     Returns empty string on success, or an error message string on failure.
     """
     # ── Resolve settings from file for any None params ─────────────────────
-    if any(v is None for v in (scale, split_ratio, label_length_mm, no_split, rotate_cw, skip_initial_rotate)):
+    if any(v is None for v in (scale, split_ratio, label_length_mm, no_split, rotate_cw,
+                               skip_initial_rotate, crop_right_fraction, crop_bottom_fraction)):
         from src.shipping.label_settings import load as _load_settings
         settings = _load_settings(courier_code)
         if scale is None:
@@ -198,6 +218,10 @@ def print_label(
             rotate_cw = settings.get("rotate_cw", False)
         if skip_initial_rotate is None:
             skip_initial_rotate = settings.get("skip_initial_rotate", False)
+        if crop_right_fraction is None:
+            crop_right_fraction = settings.get("crop_right_fraction", 1.0)
+        if crop_bottom_fraction is None:
+            crop_bottom_fraction = settings.get("crop_bottom_fraction", 1.0)
 
     # ── Lazy imports ──────────────────────────────────────────────────────
     try:
@@ -235,15 +259,18 @@ def print_label(
     # ── Process PDF into strip pairs ──────────────────────────────────────
     log.debug(
         "Converting %d-byte PDF (scale=%.2f split=%.2f no_split=%s "
-        "label_length_mm=%.1f rotate_cw=%s skip_initial_rotate=%s)",
+        "label_length_mm=%.1f rotate_cw=%s skip_initial_rotate=%s "
+        "crop=(%.2f,%.2f))",
         len(label_pdf), scale, split_ratio, no_split, label_length_mm,
-        rotate_cw, skip_initial_rotate,
+        rotate_cw, skip_initial_rotate, crop_right_fraction, crop_bottom_fraction,
     )
     try:
         strip_pairs = process_label_pdf(
             label_pdf, scale=scale, split_ratio=split_ratio, no_split=no_split,
             label_length_mm=label_length_mm, rotate_cw=rotate_cw,
             skip_initial_rotate=skip_initial_rotate,
+            crop_right_fraction=crop_right_fraction,
+            crop_bottom_fraction=crop_bottom_fraction,
         )
     except Exception as exc:
         return f"PDF processing failed: {exc}"

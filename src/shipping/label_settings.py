@@ -20,6 +20,8 @@ DEFAULTS: dict = {
     "no_split": False,
     "rotate_cw": False,
     "skip_initial_rotate": False,
+    "crop_right_fraction": 1.0,
+    "crop_bottom_fraction": 1.0,
 }
 
 # Per-courier overrides applied between global DEFAULTS and any saved settings.
@@ -27,6 +29,9 @@ DEFAULTS: dict = {
 COURIER_DEFAULTS: dict = {
     "allied": {"skip_initial_rotate": True, "rotate_cw": True},
     "auspost_express": {"no_split": True},
+    # TGE returns an A4-format PDF; the label sits in the top-left A6 quadrant.
+    # Crop to 50% × 50% of the page before the normal split pipeline.
+    "tge": {"crop_right_fraction": 0.5, "crop_bottom_fraction": 0.5},
 }
 
 
@@ -57,6 +62,8 @@ def save(
     no_split: bool = False,
     rotate_cw: bool = False,
     skip_initial_rotate: bool = False,
+    crop_right_fraction: float = 1.0,
+    crop_bottom_fraction: float = 1.0,
 ) -> None:
     """Persist settings for one courier without disturbing others."""
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -73,5 +80,7 @@ def save(
         "no_split": no_split,
         "rotate_cw": rotate_cw,
         "skip_initial_rotate": skip_initial_rotate,
+        "crop_right_fraction": round(crop_right_fraction, 4),
+        "crop_bottom_fraction": round(crop_bottom_fraction, 4),
     }
     SETTINGS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")

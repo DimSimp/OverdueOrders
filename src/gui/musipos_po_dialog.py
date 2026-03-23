@@ -43,6 +43,7 @@ class MusiposPODialog(ctk.CTkToplevel):
         dry_run: bool = False,
         on_success=None,   # called with po_result dict
         on_note_only=None, # called if user cancels PO but still wants note
+        on_cancel=None,    # called if user cancels without any action
     ):
         super().__init__(parent)
         self.title("Add to Purchase Order")
@@ -58,6 +59,7 @@ class MusiposPODialog(ctk.CTkToplevel):
         self._dry_run = dry_run
         self._on_success = on_success
         self._on_note_only = on_note_only
+        self._on_cancel = on_cancel
 
         # State
         self._item: dict | None = None              # resolved item dict
@@ -306,6 +308,9 @@ class MusiposPODialog(ctk.CTkToplevel):
             command=self._do_add_to_po,
         )
         self._add_btn.pack(side="left", padx=(0, 10))
+        ctk.CTkButton(btn_row, text="Note only", width=100,
+                      fg_color=("gray70", "gray30"), hover_color=("gray60", "gray25"),
+                      command=self._cancel_note_only).pack(side="left", padx=(0, 10))
         ctk.CTkButton(btn_row, text="Cancel", width=80,
                       fg_color="gray50", hover_color="gray40",
                       command=self._cancel).pack(side="left")
@@ -572,6 +577,11 @@ class MusiposPODialog(ctk.CTkToplevel):
     # ── Shared helpers ────────────────────────────────────────────────────
 
     def _cancel(self):
+        if self._on_cancel:
+            try:
+                self._on_cancel()
+            except Exception:
+                pass
         self.destroy()
 
     def _cancel_note_only(self):

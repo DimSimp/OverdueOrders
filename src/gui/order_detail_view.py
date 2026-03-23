@@ -525,6 +525,7 @@ class OrderDetailView(ctk.CTkFrame):
             dry_run=self._dry_run,
             on_success=_on_success,
             on_note_only=_on_note_only,
+            on_cancel=_on_dialog_close,
         )
         dialog.protocol("WM_DELETE_WINDOW", lambda: (dialog.destroy(), _on_dialog_close()))
 
@@ -585,11 +586,11 @@ class OrderDetailView(ctk.CTkFrame):
         # Keep button disabled (greyed) — already added
 
     def _on_po_note_only(self, line_item, btn, status_lbl):
-        """User cancelled PO addition but still wants the order note."""
+        """User chose note-only — add the order note and keep button inactive."""
         note_text = f"{line_item.sku} on PO"
         self._add_order_note(note_text, line_item=line_item)
         status_lbl.configure(text="✓ Note added", text_color="green")
-        btn.configure(state="normal")
+        btn.configure(text="On PO ✓")
 
     # ── Pricing Summary ──────────────────────────────────────────────────
 

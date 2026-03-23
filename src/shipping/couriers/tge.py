@@ -313,6 +313,9 @@ class TGECourier(BaseCourier):
         receiver = request.receiver
         sender = request.sender
 
+        # TGE ReferenceValue fields are capped at 13 characters
+        ref_id = request.order_id[:13]
+
         # Sanitise name / address fields
         rec_name = receiver.name.replace("'", "").replace("\u2019", "")
         address1 = (receiver.street1 or "").replace("'", "").replace("\u2019", "")
@@ -431,8 +434,8 @@ class TGECourier(BaseCourier):
                 },
                 "References": {
                     "Reference": [
-                        {"ReferenceType": "ConsignorItemReference", "ReferenceValue": request.order_id},
-                        {"ReferenceType": "ConsigneeItemReference", "ReferenceValue": request.order_id},
+                        {"ReferenceType": "ConsignorItemReference", "ReferenceValue": ref_id},
+                        {"ReferenceType": "ConsigneeItemReference", "ReferenceValue": ref_id},
                     ]
                 },
             }
@@ -447,6 +450,10 @@ class TGECourier(BaseCourier):
                     "ServiceDescription": "ROAD EXPRESS",
                     "ShipmentProductCode": "1",
                 },
+                "Commodity": {
+                    "CommodityCode": "Z",
+                    "CommodityDescription": "ALL FREIGHT",
+                },
                 "Description": "Carton",
                 "Dimensions": {
                     "Volume": str(round(pkg.volume_m3, 4)),
@@ -457,8 +464,8 @@ class TGECourier(BaseCourier):
                 },
                 "References": {
                     "Reference": [
-                        {"ReferenceType": "ConsignorItemReference", "ReferenceValue": request.order_id},
-                        {"ReferenceType": "ConsigneeItemReference", "ReferenceValue": request.order_id},
+                        {"ReferenceType": "ConsignorItemReference", "ReferenceValue": ref_id},
+                        {"ReferenceType": "ConsigneeItemReference", "ReferenceValue": ref_id},
                     ]
                 },
             })
@@ -540,22 +547,56 @@ class TGECourier(BaseCourier):
                 timeout=60,
             )
             manifest_resp = r.json()
-            response_id = str(
-                manifest_resp["TollMessage"]["ResponseMessages"]
-                ["ResponseMessage"][0]["ResponseID"]["Value"]
-            )
-            if response_id != "200":
-                err = manifest_resp["TollMessage"]["ErrorMessages"]["ErrorMessage"][0]["ErrorMessage"]
-                return BookingResult(
-                    courier_name=self.name, tracking_number="", label_pdf=None,
-                    booking_reference="",
-                    error=f"TGE manifest API error: {err}",
-                )
         except Exception as exc:
             return BookingResult(
                 courier_name=self.name, tracking_number="", label_pdf=None,
                 booking_reference="",
                 error=f"TGE manifest request failed: {exc}",
+            )
+
+        # Try to extract a meaningful error from the response body first, then
+        # fall back to the HTTP status if the body has no useful message.
+        def _extract_manifest_error(resp: dict) -> str:
+            try:
+                return resp["TollMessage"]["ErrorMessages"]["ErrorMessage"][0]["ErrorMessage"]
+            except (KeyError, IndexError, TypeError):
+                pass
+            try:
+                return resp["TollMessage"]["ResponseMessages"]["ResponseMessage"][0].get(
+                    "ResponseMessage", ""
+                )
+            except (KeyError, IndexError, TypeError):
+                pass
+            return ""
+
+        if r.status_code != 200:
+            err = _extract_manifest_error(manifest_resp) or f"HTTP {r.status_code}"
+            log.error("TGE manifest HTTP %s: %s", r.status_code, err)
+            return BookingResult(
+                courier_name=self.name, tracking_number="", label_pdf=None,
+                booking_reference="",
+                error=f"TGE manifest error: {err}",
+            )
+
+        try:
+            response_id = str(
+                manifest_resp["TollMessage"]["ResponseMessages"]
+                ["ResponseMessage"][0]["ResponseID"]["Value"]
+            )
+        except (KeyError, IndexError, TypeError) as exc:
+            err = _extract_manifest_error(manifest_resp) or str(exc)
+            return BookingResult(
+                courier_name=self.name, tracking_number="", label_pdf=None,
+                booking_reference="",
+                error=f"TGE manifest unexpected response: {err}",
+            )
+
+        if response_id != "200":
+            err = _extract_manifest_error(manifest_resp) or f"ResponseID={response_id}"
+            return BookingResult(
+                courier_name=self.name, tracking_number="", label_pdf=None,
+                booking_reference="",
+                error=f"TGE manifest API error: {err}",
             )
 
         tracking = shipment_id_str
@@ -635,7 +676,7 @@ class TGECourier(BaseCourier):
                             "Reference": [
                                 {
                                     "ReferenceType": "ShipmentReference1",
-                                    "ReferenceValue": request.order_id,
+                                    "ReferenceValue": ref_id,
                                 }
                             ]
                         },
@@ -675,12 +716,6 @@ class TGECourier(BaseCourier):
                 timeout=60,
             )
             print_resp = r.json()
-            pdf_b64 = (
-                print_resp["TollMessage"]["ResponseMessages"]
-                ["ResponseMessage"][0]["ResponseMessage"]
-            )
-            label_pdf = base64.b64decode(pdf_b64)
-            log.info("TGE label downloaded: %d bytes", len(label_pdf))
         except Exception as exc:
             log.error("TGE label download failed: %s", exc)
             return BookingResult(
@@ -689,6 +724,42 @@ class TGECourier(BaseCourier):
                 label_pdf=None,
                 booking_reference=tracking,
                 error=f"Booked (tracking: {tracking}) but label failed: {exc}",
+            )
+
+        def _extract_print_error(resp: dict) -> str:
+            try:
+                return resp["TollMessage"]["ErrorMessages"]["ErrorMessage"][0]["ErrorMessage"]
+            except (KeyError, IndexError, TypeError):
+                pass
+            return ""
+
+        if r.status_code != 200:
+            err = _extract_print_error(print_resp) or f"HTTP {r.status_code}"
+            log.error("TGE print HTTP %s: %s", r.status_code, err)
+            return BookingResult(
+                courier_name=self.name,
+                tracking_number=tracking,
+                label_pdf=None,
+                booking_reference=tracking,
+                error=f"Booked (tracking: {tracking}) but label failed: {err}",
+            )
+
+        try:
+            pdf_b64 = (
+                print_resp["TollMessage"]["ResponseMessages"]
+                ["ResponseMessage"][0]["ResponseMessage"]
+            )
+            label_pdf = base64.b64decode(pdf_b64)
+            log.info("TGE label downloaded: %d bytes", len(label_pdf))
+        except Exception as exc:
+            err = _extract_print_error(print_resp) or str(exc)
+            log.error("TGE label parse failed: %s", err)
+            return BookingResult(
+                courier_name=self.name,
+                tracking_number=tracking,
+                label_pdf=None,
+                booking_reference=tracking,
+                error=f"Booked (tracking: {tracking}) but label failed: {err}",
             )
 
         return BookingResult(
