@@ -6,6 +6,7 @@ import threading
 import re
 import time
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox, filedialog, Menu, StringVar, BooleanVar
 import tkinter.ttk as ttk
 
@@ -643,6 +644,10 @@ class ResultsTab(ctk.CTkFrame):
         # Manual overrides: (platform, order_id) tuples
         self._excluded_order_ids: set[tuple[str, str]] = set()
         self._force_matched_order_ids: set[tuple[str, str]] = set()
+        # Cached counts for per-tab display
+        self._count_matched: int = 0
+        self._count_unmatched_inv: int = 0
+        self._count_unmatched_orders: int = 0
         # Navigation state
         self._detail_frame: OrderDetailView | None = None
         self._freight_frame = None
@@ -667,33 +672,51 @@ class ResultsTab(ctk.CTkFrame):
         parent.grid_rowconfigure(1, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
-        # ── Summary row ───────────────────────────────────────────────────
-        summary = ctk.CTkFrame(parent, fg_color="transparent")
-        summary.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
+        # ── Toolbar ───────────────────────────────────────────────────────
+        toolbar = ctk.CTkFrame(parent, fg_color="transparent")
+        toolbar.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
 
-        self._matched_lbl = ctk.CTkLabel(
-            summary, text="Matched: —", font=ctk.CTkFont(size=13, weight="bold")
+        self._refresh_btn = ctk.CTkButton(
+            toolbar, text="Refresh", width=90,
+            fg_color=("dodgerblue3", "dodgerblue4"),
+            command=self._refresh_matched_orders,
         )
-        self._matched_lbl.pack(side="left", padx=(0, 24))
+        self._refresh_btn.pack(side="left", padx=(0, 6))
 
-        self._unmatched_inv_lbl = ctk.CTkLabel(
-            summary, text="Unmatched invoice items: —", font=ctk.CTkFont(size=13)
+        self._cancel_shipment_btn = ctk.CTkButton(
+            toolbar, text="Cancel / Reprint", width=140,
+            fg_color=("firebrick3", "firebrick4"), hover_color=("firebrick4", "firebrick"),
+            command=self._open_cancel_shipment_dialog,
         )
-        self._unmatched_inv_lbl.pack(side="left", padx=(0, 24))
+        self._cancel_shipment_btn.pack(side="left", padx=(0, 6))
 
-        self._unmatched_orders_lbl = ctk.CTkLabel(
-            summary, text="Unmatched orders: —", font=ctk.CTkFont(size=13)
+        self._export_btn = ctk.CTkButton(
+            toolbar, text="Export Picking List", width=150,
+            command=self._export_csv,
         )
-        self._unmatched_orders_lbl.pack(side="left")
+        self._export_btn.pack(side="left", padx=(0, 6))
+
+        self._status_label = ctk.CTkLabel(
+            toolbar, text="", font=ctk.CTkFont(size=12),
+            text_color=("gray50", "gray60"),
+        )
+        self._status_label.pack(side="right")
+
+        self._error_label = ctk.CTkLabel(
+            toolbar, text="", font=ctk.CTkFont(size=12), text_color="red",
+        )
+        self._error_label.pack(side="right", padx=(0, 8))
 
         # ── Inner tab view ────────────────────────────────────────────────
-        self._inner_tabs = ctk.CTkTabview(parent, corner_radius=6)
-        self._inner_tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
+        self._inner_tabs = ctk.CTkTabview(
+            parent, corner_radius=6, command=self._update_tab_count,
+        )
+        self._inner_tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
 
         for name in ("Matched Orders", "Unmatched Invoice Items", "Unmatched Orders"):
             self._inner_tabs.add(name)
 
-        # Matched Orders tab — treeview + refresh button row
+        # Matched Orders tab
         _matched_container = ctk.CTkFrame(
             self._inner_tabs.tab("Matched Orders"), fg_color="transparent"
         )
@@ -710,23 +733,14 @@ class ResultsTab(ctk.CTkFrame):
         )
         self._matched_tree.grid(row=0, column=0, sticky="nsew")
 
-        _matched_btn_row = ctk.CTkFrame(_matched_container, fg_color="transparent")
-        _matched_btn_row.grid(row=1, column=0, sticky="ew", pady=(4, 2))
-        self._refresh_matched_btn = ctk.CTkButton(
-            _matched_btn_row, text="Refresh Matched", width=140,
-            fg_color=("dodgerblue3", "dodgerblue4"),
-            command=self._refresh_matched_orders,
-        )
-        self._refresh_matched_btn.pack(side="left", padx=(4, 0))
-
-        # Unmatched Invoice Items tree (flat)
+        # Unmatched Invoice Items tab (flat tree)
         self._inv_tree = OrderTreeview(
             self._inner_tabs.tab("Unmatched Invoice Items"),
             col_spec=_INV_COL_SPEC,
         )
         self._inv_tree.pack(fill="both", expand=True)
 
-        # Unmatched Orders tab — label, treeview, refresh button row
+        # Unmatched Orders tab
         _unmatched_container = ctk.CTkFrame(
             self._inner_tabs.tab("Unmatched Orders"), fg_color="transparent"
         )
@@ -752,48 +766,6 @@ class ResultsTab(ctk.CTkFrame):
             context_label="Move to Matched",
         )
         self._unmatched_orders_tree.grid(row=1, column=0, sticky="nsew")
-
-        _unmatched_btn_row = ctk.CTkFrame(_unmatched_container, fg_color="transparent")
-        _unmatched_btn_row.grid(row=2, column=0, sticky="ew", pady=(4, 2))
-        self._refresh_unmatched_btn = ctk.CTkButton(
-            _unmatched_btn_row, text="Refresh Unmatched", width=150,
-            fg_color=("dodgerblue3", "dodgerblue4"),
-            command=self._refresh_unmatched_orders,
-        )
-        self._refresh_unmatched_btn.pack(side="left", padx=(4, 0))
-
-        # ── Bottom row ────────────────────────────────────────────────────
-        bottom = ctk.CTkFrame(parent, fg_color="transparent")
-        bottom.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 12))
-
-        self._export_btn = ctk.CTkButton(
-            bottom, text="Export to Excel", width=140, command=self._export_csv,
-        )
-        self._export_btn.pack(side="left")
-
-        self._save_session_btn = ctk.CTkButton(
-            bottom, text="Save Session As", width=130,
-            fg_color="gray50", hover_color="gray40",
-            command=self._save_session_as,
-        )
-        self._save_session_btn.pack(side="left", padx=(12, 0))
-
-        self._cancel_shipment_btn = ctk.CTkButton(
-            bottom, text="Cancel Shipment", width=130,
-            fg_color=("firebrick3", "firebrick4"), hover_color=("firebrick4", "firebrick"),
-            command=self._open_cancel_shipment_dialog,
-        )
-        self._cancel_shipment_btn.pack(side="left", padx=(12, 0))
-
-        self._export_label = ctk.CTkLabel(
-            bottom, text="", font=ctk.CTkFont(size=12), text_color="gray60"
-        )
-        self._export_label.pack(side="left", padx=(12, 0))
-
-        self._error_label = ctk.CTkLabel(
-            bottom, text="", font=ctk.CTkFont(size=12), text_color="red"
-        )
-        self._error_label.pack(side="left", padx=(12, 0))
 
     # ── Public ────────────────────────────────────────────────────────────
 
@@ -1007,15 +979,26 @@ class ResultsTab(ctk.CTkFrame):
     def _update_summary(self, matched, unmatched_inv):
         candidate_count = len(self._neto_orders) + len(self._ebay_orders)
         matched_order_ids = {(m.platform, m.order_id) for m in matched}
-        unmatched_order_count = max(0, candidate_count - len(matched_order_ids))
-        match_count = sum(1 for m in matched if m.is_invoice_match)
+        self._count_matched = len(matched_order_ids)
+        self._count_unmatched_inv = len(unmatched_inv)
+        self._count_unmatched_orders = max(0, candidate_count - len(matched_order_ids))
+        self._update_tab_count()
 
-        self._matched_lbl.configure(
-            text=f"Matched: {match_count} invoice line{'s' if match_count != 1 else ''}",
-            text_color=("green" if matched else "gray50"),
-        )
-        self._unmatched_inv_lbl.configure(text=f"Unmatched invoice items: {len(unmatched_inv)}")
-        self._unmatched_orders_lbl.configure(text=f"Unmatched orders: {unmatched_order_count}")
+    def _update_tab_count(self):
+        """Update the toolbar status label with the count for the currently active tab."""
+        tab = self._inner_tabs.get()
+        if tab == "Matched Orders":
+            n = self._count_matched
+            text = f"{n} order{'s' if n != 1 else ''}"
+        elif tab == "Unmatched Invoice Items":
+            n = self._count_unmatched_inv
+            text = f"{n} item{'s' if n != 1 else ''}"
+        elif tab == "Unmatched Orders":
+            n = self._count_unmatched_orders
+            text = f"{n} order{'s' if n != 1 else ''}"
+        else:
+            return
+        self._status_label.configure(text=text, text_color=("gray50", "gray60"))
 
     # ── Override management ───────────────────────────────────────────────
 
@@ -1263,11 +1246,27 @@ class ResultsTab(ctk.CTkFrame):
         old_neto_ids: list[str],
         old_ebay_ids: list[str],
     ):
-        """Merge fresh order data into in-memory lists, drop any no longer valid."""
+        """Merge fresh order data into in-memory lists without re-running full matching.
+
+        SKU-to-invoice matches don't change on a refresh (only status/notes/shipping
+        can change), so _matched is updated in-place rather than rebuilt from scratch.
+        Orders absent from the API response (dispatched/cancelled) are dropped, and
+        their invoice items are recovered back into _unmatched_inv.
+
+        Force-matched and excluded overrides are stored in _force_matched_order_ids /
+        _excluded_order_ids (separate from _matched) and are applied unchanged by
+        _refresh_tables(), so manual moves survive the refresh correctly.
+        """
         fresh_neto_map = {o.order_id: o for o in fresh_neto}
         fresh_ebay_map = {o.order_id: o for o in fresh_ebay}
         old_neto_set = set(old_neto_ids)
         old_ebay_set = set(old_ebay_ids)
+
+        # Orders requested but absent from response = dispatched/cancelled
+        dropped_ids = (
+            (old_neto_set - fresh_neto_map.keys()) |
+            (old_ebay_set - fresh_ebay_map.keys())
+        )
 
         self._neto_orders = [
             fresh_neto_map[o.order_id] if o.order_id in old_neto_set else o
@@ -1285,20 +1284,62 @@ class ResultsTab(ctk.CTkFrame):
         # Merge any overrides written by other users since the last refresh
         self._merge_shared_overrides()
 
-        invoice_items = self._app.invoice_tab.get_invoice_items()
-        matched, unmatched_inv = match_orders_to_invoice(
-            invoice_items,
-            self._neto_orders,
-            self._ebay_orders,
-            on_po_phrase=self._app.config.app.on_po_filter_phrase,
-            sku_alias_manager=getattr(self._app, "sku_alias_manager", None),
-            suppliers=self._app.config.suppliers,
-        )
-        self._matched = matched
-        self._unmatched_inv = unmatched_inv
-        self._refresh_tables()
+        all_fresh: dict = {**fresh_neto_map, **fresh_ebay_map}
+
+        if dropped_ids:
+            # Recover invoice items that were only matched by the now-gone orders
+            surviving_inv_skus = {
+                m.invoice_sku for m in self._matched
+                if m.order_id not in dropped_ids and m.is_invoice_match
+            }
+            newly_unmatched_skus = {
+                m.invoice_sku for m in self._matched
+                if m.order_id in dropped_ids and m.is_invoice_match
+                and m.invoice_sku not in surviving_inv_skus
+            }
+            if newly_unmatched_skus:
+                invoice_items = self._app.invoice_tab.get_invoice_items()
+                inv_by_sku = {i.sku_with_suffix.upper().strip(): i for i in invoice_items}
+                existing_unmatched = {i.sku_with_suffix.upper().strip() for i in self._unmatched_inv}
+                for sku in newly_unmatched_skus:
+                    key = sku.upper().strip()
+                    if key and key not in existing_unmatched:
+                        inv = inv_by_sku.get(key)
+                        if inv:
+                            self._unmatched_inv.append(inv)
+
+            self._matched = [m for m in self._matched if m.order_id not in dropped_ids]
+
+        # Update mutable fields on surviving entries from the fresh order data.
+        # Notes are only set on the first MatchedOrder per order (idx==0 in matching),
+        # so track which order_ids have had notes updated already.
+        seen_notes_ids: set = set()
+        for m in self._matched:
+            order = all_fresh.get(m.order_id)
+            if order is None:
+                continue
+            m.shipping_type = order.shipping_type or ""
+            # NetoOrder uses .customer_name; EbayOrder uses .buyer_name
+            m.customer_name = (
+                getattr(order, "customer_name", None)
+                or getattr(order, "buyer_name", "")
+                or ""
+            )
+            if m.order_id not in seen_notes_ids:
+                seen_notes_ids.add(m.order_id)
+                # NetoOrder uses .notes; EbayOrder uses .buyer_notes
+                m.notes = (
+                    getattr(order, "notes", None)
+                    or getattr(order, "buyer_notes", "")
+                    or ""
+                )
+
+        self._refresh_tables()  # also calls _auto_save_session
         self._error_label.configure(text="")
-        self._auto_save_session()
+        self._status_label.configure(
+            text=f"Refreshed {datetime.now().strftime('%H:%M')}",
+            text_color=("gray50", "gray60"),
+        )
 
     # ── Matched orders refresh ────────────────────────────────────────────
 
@@ -1318,7 +1359,7 @@ class ResultsTab(ctk.CTkFrame):
             else:
                 if order_id not in neto_ids:
                     neto_ids.append(order_id)
-        self._refresh_matched_btn.configure(state="disabled")
+        self._refresh_btn.configure(state="disabled")
         self._error_label.configure(text="Refreshing matched orders…")
 
         def _fetch():
@@ -1329,13 +1370,13 @@ class ResultsTab(ctk.CTkFrame):
             except Exception as e:
                 msg = f"Refresh failed: {e}"
                 self.after(0, lambda m=msg: self._error_label.configure(text=m))
-                self.after(0, lambda: self._refresh_matched_btn.configure(state="normal"))
+                self.after(0, lambda: self._refresh_btn.configure(state="normal"))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _on_matched_refresh_done(self, fresh_neto, fresh_ebay, neto_ids, ebay_ids):
         self._apply_targeted_refresh(fresh_neto, fresh_ebay, neto_ids, ebay_ids)
-        self._refresh_matched_btn.configure(state="normal")
+        self._refresh_btn.configure(state="normal")
 
     # ── Unmatched orders refresh ──────────────────────────────────────────
 
@@ -1350,7 +1391,6 @@ class ResultsTab(ctk.CTkFrame):
             o.order_id for o in self._ebay_orders
             if ("eBay", o.order_id) not in matched_ids
         ))
-        self._refresh_unmatched_btn.configure(state="disabled")
         self._error_label.configure(text="Refreshing unmatched orders…")
 
         def _fetch():
@@ -1361,13 +1401,12 @@ class ResultsTab(ctk.CTkFrame):
             except Exception as e:
                 msg = f"Refresh failed: {e}"
                 self.after(0, lambda m=msg: self._error_label.configure(text=m))
-                self.after(0, lambda: self._refresh_unmatched_btn.configure(state="normal"))
+                self.after(0, lambda: self._refresh_btn.configure(state="normal"))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _on_unmatched_refresh_done(self, fresh_neto, fresh_ebay, neto_ids, ebay_ids):
         self._apply_targeted_refresh(fresh_neto, fresh_ebay, neto_ids, ebay_ids)
-        self._refresh_unmatched_btn.configure(state="normal")
 
     # ── Save session ──────────────────────────────────────────────────────
 
@@ -1413,7 +1452,7 @@ class ResultsTab(ctk.CTkFrame):
                 excluded_ids=self._excluded_order_ids,
                 force_matched_ids=self._force_matched_order_ids,
             )
-            self._export_label.configure(text=f"Session saved: {path}", text_color="green")
+            self._status_label.configure(text=f"Session saved: {path}", text_color="green")
         except Exception as e:
             self._error_label.configure(text=f"Save failed: {e}")
 
@@ -1699,9 +1738,9 @@ class ResultsTab(ctk.CTkFrame):
                 self._app.matched_orders,
                 output_dir=output_dir,
             )
-            self._export_label.configure(text=f"Saved: {os.path.basename(path)}", text_color="green")
+            self._status_label.configure(text=f"Saved: {os.path.basename(path)}", text_color="green")
             self._error_label.configure(text="")
             os.startfile(os.path.normpath(path))
         except Exception as e:
             self._error_label.configure(text=f"Export failed: {e}")
-            self._export_label.configure(text="")
+            self._status_label.configure(text="")

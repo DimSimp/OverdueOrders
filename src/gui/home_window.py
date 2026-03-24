@@ -74,8 +74,6 @@ class HomeFrame(ctk.CTkFrame):
             text="Afternoon Operations",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray25"),
             command=self._on_afternoon,
         )
         aft_btn.pack(fill="x", pady=(0, 6))

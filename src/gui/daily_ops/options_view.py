@@ -50,8 +50,10 @@ class OptionsView(ctk.CTkFrame):
         self._filter_switches: dict[str, ctk.CTkSwitch] = {}
         self._phrase_vars: list[ctk.StringVar] = []
         self._phrase_rows: list[ctk.CTkFrame] = []
+        self._phrases_expanded: bool = True
         self._build_ui()
         self._load_saved_toggles()
+        self._toggle_phrases()  # start collapsed
 
     # ── Build ────────────────────────────────────────────────────────────
 
@@ -124,8 +126,22 @@ class OptionsView(ctk.CTkFrame):
             self._filter_switches[key] = sw
 
         # ── Note filter phrases ───────────────────────────────────────
-        phrase_header = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._phrase_header = ctk.CTkFrame(scroll, fg_color="transparent")
+        phrase_header = self._phrase_header
         phrase_header.pack(fill="x", padx=16, pady=(12, 2))
+
+        self._phrases_toggle_btn = ctk.CTkButton(
+            phrase_header,
+            text="▼",
+            width=24,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            hover_color=("gray80", "gray25"),
+            text_color=("gray10", "gray90"),
+            command=self._toggle_phrases,
+        )
+        self._phrases_toggle_btn.pack(side="left", padx=(0, 4))
 
         ctk.CTkLabel(
             phrase_header,
@@ -133,14 +149,15 @@ class OptionsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(side="left")
 
-        ctk.CTkButton(
+        self._phrase_add_btn = ctk.CTkButton(
             phrase_header,
             text="+ Add",
             width=60,
             height=24,
             font=ctk.CTkFont(size=11),
             command=self._add_phrase_row,
-        ).pack(side="right")
+        )
+        self._phrase_add_btn.pack(side="right")
 
         self._phrase_container = ctk.CTkFrame(scroll, fg_color="transparent")
         self._phrase_container.pack(fill="x", padx=16, pady=(0, 4))
@@ -215,6 +232,17 @@ class OptionsView(ctk.CTkFrame):
 
         # Save whenever text changes
         var.trace_add("write", lambda *_: self._save_phrases())
+
+    def _toggle_phrases(self):
+        self._phrases_expanded = not self._phrases_expanded
+        if self._phrases_expanded:
+            self._phrase_container.pack(fill="x", padx=16, pady=(0, 4), after=self._phrase_header)
+            self._phrase_add_btn.pack(side="right")
+            self._phrases_toggle_btn.configure(text="▼")
+        else:
+            self._phrase_container.pack_forget()
+            self._phrase_add_btn.pack_forget()
+            self._phrases_toggle_btn.configure(text="▶")
 
     # ── Persistence ───────────────────────────────────────────────────────
 

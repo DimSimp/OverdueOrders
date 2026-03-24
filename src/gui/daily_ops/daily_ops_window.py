@@ -60,9 +60,12 @@ class DailyOpsWindow(ctk.CTkToplevel):
                 pass
 
         self._build_ui()
-        # Bring to front
-        self.lift()
-        self.focus_force()
+        # Bring to front and maximise — deferred so the window is fully shown first
+        def _raise():
+            self.state("zoomed")
+            self.lift()
+            self.focus_force()
+        self.after(50, _raise)
 
     # ── Layout ──────────────────────────────────────────────────────────
 
@@ -349,8 +352,6 @@ class _DailyOpsMenuView(ctk.CTkFrame):
             text="Load Daily Session",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray25"),
             command=on_load_session,
         ).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
@@ -369,8 +370,6 @@ class _DailyOpsMenuView(ctk.CTkFrame):
             text="Search for Order",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray25"),
             command=on_search_order,
         ).pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(
@@ -386,8 +385,6 @@ class _DailyOpsMenuView(ctk.CTkFrame):
             text="Show All Orders",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray25"),
             command=on_show_orders,
         ).pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(
@@ -403,8 +400,6 @@ class _DailyOpsMenuView(ctk.CTkFrame):
             text="SKU Management",
             font=ctk.CTkFont(size=16, weight="bold"),
             height=64,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray25"),
             command=on_sku_aliases,
         ).pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(

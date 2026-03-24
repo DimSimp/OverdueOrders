@@ -184,16 +184,6 @@ class DailyOpsResultsView(ctk.CTkFrame):
         )
         self._removed_tree.grid(row=0, column=0, sticky="nsew")
 
-        # ── Bottom nav ───────────────────────────────────────────────────────
-        bottom = ctk.CTkFrame(parent, fg_color="transparent")
-        bottom.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 12))
-
-        ctk.CTkButton(
-            bottom, text="← Back",
-            width=120,
-            fg_color=("gray70", "gray30"), hover_color=("gray60", "gray25"),
-            command=self._on_back,
-        ).pack(side="left")
 
     # ── Entry point ────────────────────────────────────────────────────────────
 

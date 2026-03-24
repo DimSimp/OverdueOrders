@@ -83,6 +83,7 @@ class App(ctk.CTk):
         self._home_frame.pack(fill="both", expand=True)
 
     def _enter_afternoon_mode(self):
+        self.iconify()
         win = ctk.CTkToplevel(self)
         win.title("Scarlett Music — Overdue Orders Matcher")
         win.geometry("1150x720")
@@ -90,8 +91,10 @@ class App(ctk.CTk):
         win.resizable(True, True)
         self._build_ui(container=win)
         self._start_update_check()
+        win.after(50, lambda: win.state("zoomed"))
 
     def _enter_daily_mode(self):
+        self.iconify()
         from src.gui.daily_ops.daily_ops_window import DailyOpsWindow
         DailyOpsWindow(
             master=self,
@@ -141,12 +144,9 @@ class App(ctk.CTk):
                 text_color="white",
             ).pack(pady=4)
 
-        # Tab view
-        self.tabview = ctk.CTkTabview(container, corner_radius=8)
-        self.tabview.pack(fill="both", expand=True, padx=12, pady=(8, 12))
-
-        for tab_name in ("1. Invoice", "2. Orders", "3. Results"):
-            self.tabview.add(tab_name)
+        # Step container — no tabview, frames are swapped in/out directly
+        self._step_container = ctk.CTkFrame(container, fg_color="transparent")
+        self._step_container.pack(fill="both", expand=True, padx=12, pady=(8, 12))
 
         # Import tabs lazily to avoid circular imports at module level
         from src.gui.invoice_tab import InvoiceTab
@@ -154,30 +154,35 @@ class App(ctk.CTk):
         from src.gui.results_tab import ResultsTab
 
         self.invoice_tab = InvoiceTab(
-            self.tabview.tab("1. Invoice"),
+            self._step_container,
             app=self,
-            on_complete=lambda: self.tabview.set("2. Orders"),
+            on_complete=self._show_orders,
         )
-        self.invoice_tab.pack(fill="both", expand=True)
 
         self.orders_tab = OrdersTab(
-            self.tabview.tab("2. Orders"),
+            self._step_container,
             app=self,
             on_complete=self._activate_results,
         )
+
+        self.results_tab = ResultsTab(self._step_container, app=self)
+
+        # Show invoice step first
+        self.invoice_tab.pack(fill="both", expand=True)
+
+    def _show_orders(self):
+        self.invoice_tab.pack_forget()
         self.orders_tab.pack(fill="both", expand=True)
 
-        self.results_tab = ResultsTab(
-            self.tabview.tab("3. Results"),
-            app=self,
-        )
+    def _show_results_tab(self):
+        """Switch to the results frame without re-running matching (used by session loads)."""
+        self.invoice_tab.pack_forget()
+        self.orders_tab.pack_forget()
         self.results_tab.pack(fill="both", expand=True)
 
-        self.tabview.set("1. Invoice")
-
     def _activate_results(self):
-        self.tabview.set("3. Results")
-        # Defer loading so the tab renders first, then populates
+        self._show_results_tab()
+        # Defer loading so the frame renders first, then populates
         self.after(50, self.results_tab.load_results)
 
     # ── Auto-update ───────────────────────────────────────────────────────────

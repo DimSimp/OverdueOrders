@@ -1,15 +1,19 @@
+AFTERNOON OPERATIONS
 - make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - fix Bonds couriers label booking
-- fix button colours throughout
 - adda a "dev mode" or debug view so I can keep track of bugs from within the EXE
-- Automatically have booking screen update full state names to abbreviations (New South Wales - NSW, Victoria - VIC, etc)
-- styling of afternoon operations needs to match the daily operations
-- afternoon operations window opens behind the main menu
+- Center and bold the QTY in afternoon picking list
+- remove step tabs from results screen
+- add a copy & print option to the order details view
 
 DAILY OPERATIONS
-- make notes filters collapsible
 - need to add a way to search APIC if item is not found in musipos inventory, ask the user if they want to import it into inventory, and use the SKU to order.
 - add method to update SKU location
 - research if it is possible to show if a user is already processing an order; this may require some kind of user management system
 - refresh order when opening it
 - loading the daily orders current session from the shortcut opens the afternoon session
+- make picking sheet have alternating background colours for each row for easier readability
+
+SETTINGS menu
+- Add to launcher menu
+- Include a way to manage users (this will carry over into POS operations)

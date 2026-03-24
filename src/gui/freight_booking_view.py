@@ -25,6 +25,18 @@ from src.shipping.quote_engine import QuoteEngine
 # Couriers that support express shipping
 EXPRESS_CAPABLE_COURIERS = {"auspost", "allied", "bonds"}
 
+# Full Australian state/territory names → standard abbreviations
+_AU_STATE_ABBREVS = {
+    "NEW SOUTH WALES": "NSW",
+    "VICTORIA": "VIC",
+    "QUEENSLAND": "QLD",
+    "SOUTH AUSTRALIA": "SA",
+    "WESTERN AUSTRALIA": "WA",
+    "TASMANIA": "TAS",
+    "NORTHERN TERRITORY": "NT",
+    "AUSTRALIAN CAPITAL TERRITORY": "ACT",
+}
+
 # ── Courier registry ─────────────────────────────────────────────────────────
 
 def _build_couriers(courier_configs: dict):
@@ -361,6 +373,11 @@ class FreightBookingView(ctk.CTkFrame):
 
         self._build_ui()
         self._auto_fill_dimensions()
+        # Re-run the PO Box / express check after the event loop has rendered all
+        # widgets.  CTkEntry.get() inside a CTkScrollableFrame may return "" during
+        # synchronous construction; the deferred call sees the correct text.
+        # Also bind live re-checks to street address edits.
+        self.after(0, self._setup_address_traces)
 
     # ── UI Construction ──────────────────────────────────────────────────
 
@@ -441,6 +458,15 @@ class FreightBookingView(ctk.CTkFrame):
             self._addr_field(grid, label, val, row=i, col=0)
         for i, (label, val) in enumerate(fields_right):
             self._addr_field(grid, label, val, row=i, col=1)
+
+        self._addr_entries["State"].bind("<FocusOut>", lambda _: self._normalise_state())
+
+    def _normalise_state(self):
+        entry = self._addr_entries["State"]
+        abbrev = _AU_STATE_ABBREVS.get(entry.get().strip().upper())
+        if abbrev:
+            entry.delete(0, "end")
+            entry.insert(0, abbrev)
 
     def _addr_field(self, parent, label: str, value: str, row: int, col: int):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -641,6 +667,16 @@ class FreightBookingView(ctk.CTkFrame):
 
         # Apply express / PO box restrictions for the order's default state
         self._on_shipping_type_changed()
+
+    def _setup_address_traces(self):
+        """Deferred setup: re-run PO Box check now that widgets are rendered,
+        and attach live traces so edits to street lines re-evaluate the check."""
+        self._on_shipping_type_changed()
+        for key in ("Street 1", "Street 2"):
+            entry = self._addr_entries[key]
+            var = ctk.StringVar(value=entry.get())
+            entry.configure(textvariable=var)
+            var.trace_add("write", lambda *_: self._on_shipping_type_changed())
 
     def _is_po_box_address(self) -> bool:
         """Return True if the delivery address is a PO Box or Parcel Locker."""

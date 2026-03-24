@@ -440,7 +440,7 @@ class InvoiceTab(ctk.CTkFrame):
             results._refresh_tables()
 
             # Jump to results tab
-            self._app.tabview.set("3. Results")
+            self._app._show_results_tab()
 
         except Exception as e:
             self._ftp_status_label.configure(text="Load failed.", text_color="orange")

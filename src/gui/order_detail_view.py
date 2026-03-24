@@ -998,6 +998,28 @@ class OrderDetailView(ctk.CTkFrame):
 
     # ── Freight Placeholder ───────────────────────────────────────────────
 
+    def _handle_book_freight(self):
+        """Guard for the Book Freight button.
+
+        If the order's shipping type is Local Pickup, warn the user before
+        opening the freight booking screen — customers sometimes select pickup
+        by mistake and later request shipping instead.
+        """
+        order = self._neto_order or self._ebay_order
+        shipping_type = getattr(order, "shipping_type", "") if order else ""
+        if shipping_type == "Local Pickup":
+            proceed = messagebox.askyesno(
+                "Local Pickup Order",
+                "This order is marked as Local Pickup.\n\n"
+                "Do you still want to proceed to freight booking?\n"
+                "(Only continue if the customer has requested shipping instead.)",
+                icon="warning",
+                parent=self.winfo_toplevel(),
+            )
+            if not proceed:
+                return
+        self._on_book_freight(self._order_id, self._platform)
+
     def _build_freight_placeholder(self, parent):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="x", padx=8, pady=6)
@@ -1007,7 +1029,7 @@ class OrderDetailView(ctk.CTkFrame):
                 frame, text="Book Freight", width=120, height=30,
                 fg_color=("dodgerblue", "dodgerblue3"),
                 hover_color=("dodgerblue3", "dodgerblue"),
-                command=lambda: self._on_book_freight(self._order_id, self._platform),
+                command=self._handle_book_freight,
             ).pack(side="left", padx=10)
         else:
             ctk.CTkButton(
