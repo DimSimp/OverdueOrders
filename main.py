@@ -23,6 +23,9 @@ else:
         datefmt="%H:%M:%S",
     )
 
+from src.log_memory import install as _install_memory_log
+_install_memory_log()
+
 from src.config import config
 from src.gui.app import App
 

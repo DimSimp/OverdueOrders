@@ -1,10 +1,14 @@
+BOTH OPERATIONS
+- Make QTY text colour green if more than 1
+- When using app to put item on PO, use the SKU being ordered in the note left
+- if last name is "NOLASTNAME", make field blank
+- have notes save/refresh when removing order from list, going back, or marking as sent. This is just in case a user types the message without saving it.
+- show a confirmation that note is updating/has been updated
+
 AFTERNOON OPERATIONS
-- make SKU confirmation phase more streamlined, it may not have to show ALL SKUs after every run
 - fix Bonds couriers label booking
-- adda a "dev mode" or debug view so I can keep track of bugs from within the EXE
-- Center and bold the QTY in afternoon picking list
-- remove step tabs from results screen
-- add a copy & print option to the order details view
+- add a "dev mode" or debug view so I can keep track of bugs from within the EXE
+- make default date range smaller (1 month)
 
 DAILY OPERATIONS
 - need to add a way to search APIC if item is not found in musipos inventory, ask the user if they want to import it into inventory, and use the SKU to order.
@@ -17,3 +21,5 @@ DAILY OPERATIONS
 SETTINGS menu
 - Add to launcher menu
 - Include a way to manage users (this will carry over into POS operations)
+- include a way to assign orders to users
+- show users if someone else is currently processing an order

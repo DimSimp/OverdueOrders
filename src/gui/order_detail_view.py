@@ -69,8 +69,11 @@ class OrderDetailView(ctk.CTkFrame):
         self._neto_client = neto_client
         self._ebay_client = ebay_client
         self._dry_run = dry_run
-        self._on_back = on_back
-        self._on_fulfilled = on_fulfilled
+        # Defer navigation callbacks by one event cycle so the mouse-button-release
+        # event fires before the view is swapped — prevents click-through to the
+        # results list sitting behind this frame.
+        self._on_back = lambda cb=on_back: self.after(10, cb)
+        self._on_fulfilled = lambda cb=on_fulfilled: self.after(10, cb)
         self._on_move_to_unmatched = on_move_to_unmatched
         self._move_to_unmatched_label = move_to_unmatched_label
         self._on_book_freight = on_book_freight
@@ -205,13 +208,31 @@ class OrderDetailView(ctk.CTkFrame):
             btn.pack(side="right", padx=4)
 
         all_text = "\n".join(l for l in lines if l)
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=(4, 8))
+
+        print_status = ctk.CTkLabel(
+            btn_row, text="", font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        )
+        print_status.pack(side="right", padx=(8, 0))
+
         copy_all_btn = ctk.CTkButton(
-            frame, text="Copy All", width=70, height=26, font=ctk.CTkFont(size=11),
+            btn_row, text="Copy All", width=70, height=26, font=ctk.CTkFont(size=11),
         )
         copy_all_btn.configure(
             command=lambda b=copy_all_btn: self._copy_to_clipboard(all_text, b, "Copy All")
         )
-        copy_all_btn.pack(anchor="e", padx=10, pady=(4, 8))
+        copy_all_btn.pack(side="right")
+
+        print_btn = ctk.CTkButton(
+            btn_row, text="Print Label", width=90, height=26, font=ctk.CTkFont(size=11),
+        )
+        print_btn.configure(
+            command=lambda b=print_btn, s=print_status: self._print_label(b, s)
+        )
+        print_btn.pack(side="right", padx=(0, 6))
 
     def _get_address_lines(self) -> list[str]:
         if self._neto_order:
@@ -1197,6 +1218,56 @@ class OrderDetailView(ctk.CTkFrame):
         menu.add_command(label="Copy",  command=lambda: widget.event_generate("<<Copy>>"))
         menu.add_command(label="Paste", command=lambda: widget.event_generate("<<Paste>>"))
         widget.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+
+    def _print_label(self, btn, status_label):
+        """Print a shipping label on the Brother QL-700 in a background thread."""
+        import threading
+
+        # Extract individual address fields from the order object
+        if self._neto_order:
+            o = self._neto_order
+            name = f"{o.ship_first_name} {o.ship_last_name}".strip()
+            company  = o.ship_company or ""
+            street1  = o.ship_street1 or ""
+            street2  = o.ship_street2 or ""
+            city     = o.ship_city or ""
+            state    = o.ship_state or ""
+            postcode = o.ship_postcode or ""
+        elif self._ebay_order:
+            o = self._ebay_order
+            name     = o.ship_name or ""
+            company  = ""
+            street1  = o.ship_street1 or ""
+            street2  = o.ship_street2 or ""
+            city     = o.ship_city or ""
+            state    = o.ship_state or ""
+            postcode = o.ship_postcode or ""
+        else:
+            status_label.configure(text="No address data.", text_color="red")
+            return
+
+        btn.configure(state="disabled", text="Printing…")
+        status_label.configure(text="", text_color=("gray50", "gray60"))
+
+        def _work():
+            try:
+                from src.brother_label import print_shipping_label
+                print_shipping_label(
+                    self._order_id, name, company, street1, street2, city, state, postcode
+                )
+                self.after(0, lambda: (
+                    btn.configure(state="normal", text="Print Label"),
+                    status_label.configure(text="Printed!", text_color="green"),
+                    self.after(3000, lambda: status_label.configure(text="")),
+                ))
+            except Exception as exc:
+                msg = str(exc)
+                self.after(0, lambda m=msg: (
+                    btn.configure(state="normal", text="Print Label"),
+                    status_label.configure(text=f"Print failed: {m}", text_color="red"),
+                ))
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def _copy_to_clipboard(self, text: str, btn=None, original_text: str = "Copy"):
         """Copy text to clipboard; briefly change btn label to 'Copied!' if provided."""

@@ -22,6 +22,10 @@ class HomeFrame(ctk.CTkFrame):
         self._on_daily = on_daily
         self._build_ui()
 
+    def _open_dev_console(self):
+        from src.gui.dev_console import open_dev_console
+        open_dev_console(self.winfo_toplevel())
+
     def _build_ui(self):
         # ── Title banner ─────────────────────────────────────────────────
         banner = ctk.CTkFrame(self, height=70, corner_radius=0, fg_color=("gray85", "gray20"))
@@ -34,12 +38,14 @@ class HomeFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(side="left", padx=24, pady=10)
 
-        ctk.CTkLabel(
+        ver_label = ctk.CTkLabel(
             banner,
             text=f"v{__version__}",
             font=ctk.CTkFont(size=11),
             text_color=("gray50", "gray60"),
-        ).pack(side="right", padx=20)
+        )
+        ver_label.pack(side="right", padx=20)
+        ver_label.bind("<Button-3>", lambda e: self._open_dev_console())
 
         # ── Button area ───────────────────────────────────────────────────
         center = ctk.CTkFrame(self, fg_color="transparent")

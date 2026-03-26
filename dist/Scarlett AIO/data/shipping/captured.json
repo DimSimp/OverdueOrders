@@ -1,4 +1,5 @@
 {
   "dai_post": true,
-  "auspost_express": true
+  "auspost": true,
+  "aramex": true
 }

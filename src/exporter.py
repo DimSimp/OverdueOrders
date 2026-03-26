@@ -31,6 +31,11 @@ _PLATFORM_FONT  = Font(bold=True, color="FFFFFF", size=12)
 _ORDER_FONT     = Font(bold=True, size=11)
 _HEADER_FONT    = Font(bold=True, color="FFFFFF", size=11)
 _NORMAL_FONT    = Font(size=11)
+_QTY_FONT       = Font(bold=True, size=11)
+
+# Column index (1-based) of Qty in each sheet
+_QTY_COL_SUMMARY = 2   # [SKU, **Qty**, Description, Notes]
+_QTY_COL_DATA    = 6   # [Platform, Order No, SKU, Description, Arrived, **Qty**, Notes]
 
 
 def _platform_sort_key(platform: str) -> tuple:
@@ -141,8 +146,9 @@ def _write_summary_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:
                 vals = [sku, m.quantity, m.description, m.notes]
                 for col_idx, val in enumerate(vals, start=1):
                     cell = ws.cell(row=row, column=col_idx, value=val)
-                    cell.font = _NORMAL_FONT
+                    cell.font = _QTY_FONT if col_idx == _QTY_COL_SUMMARY else _NORMAL_FONT
                     cell.alignment = Alignment(
+                        horizontal="center" if col_idx == _QTY_COL_SUMMARY else None,
                         vertical="center",
                         wrap_text=(col_idx in (3, 4)),  # Description and Notes wrap
                     )
@@ -236,8 +242,12 @@ def _write_data_sheet(ws, sorted_orders: list[MatchedOrder]) -> None:
                     "*" if m.is_invoice_match else "", m.quantity, m.notes]
             for col_idx, val in enumerate(vals, start=1):
                 cell = ws.cell(row=row, column=col_idx, value=val)
-                cell.font = _NORMAL_FONT
-                cell.alignment = Alignment(vertical="center", wrap_text=(col_idx in (4, 7)))
+                cell.font = _QTY_FONT if col_idx == _QTY_COL_DATA else _NORMAL_FONT
+                cell.alignment = Alignment(
+                    horizontal="center" if col_idx == _QTY_COL_DATA else None,
+                    vertical="center",
+                    wrap_text=(col_idx in (4, 7)),
+                )
             row += 1
         # Blank separator between orders
         row += 1

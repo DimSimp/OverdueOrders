@@ -398,6 +398,15 @@ class InvoiceTab(ctk.CTkFrame):
             return
         self.load_session_from_path(path)
 
+    def load_session(self):
+        """Public entry point: load the fixed afternoon session file."""
+        self._load_session()
+
+    def set_invoice_items(self, items: list):
+        """Set invoice items from an external source (e.g. new session flow)."""
+        self._invoice_items = list(items)
+        self._table.load_items(self._invoice_items)
+
     def load_session_from_path(self, path: str):
         """Load a session snapshot directly from a file path (no dialog)."""
         try:

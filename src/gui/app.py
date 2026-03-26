@@ -83,7 +83,6 @@ class App(ctk.CTk):
         self._home_frame.pack(fill="both", expand=True)
 
     def _enter_afternoon_mode(self):
-        self.iconify()
         win = ctk.CTkToplevel(self)
         win.title("Scarlett Music — Overdue Orders Matcher")
         win.geometry("1150x720")
@@ -93,15 +92,17 @@ class App(ctk.CTk):
         self._start_update_check()
         win.after(50, lambda: win.state("zoomed"))
 
+        win.after(250, self.lower)
+
     def _enter_daily_mode(self):
-        self.iconify()
         from src.gui.daily_ops.daily_ops_window import DailyOpsWindow
-        DailyOpsWindow(
+        win = DailyOpsWindow(
             master=self,
             config=self.config,
             neto_client=self.neto_client,
             ebay_client=self.ebay_client,
         )
+        win.after(250, self.lower)
 
     # ── Afternoon Operations UI ───────────────────────────────────────────
 
@@ -125,12 +126,14 @@ class App(ctk.CTk):
             text="Scarlett Music  —  Overdue Orders Matcher",
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(side="left", padx=20, pady=10)
-        ctk.CTkLabel(
+        _ver_label = ctk.CTkLabel(
             header,
             text=f"v{__version__}",
             font=ctk.CTkFont(size=11),
             text_color=("gray50", "gray60"),
-        ).pack(side="right", padx=16, pady=10)
+        )
+        _ver_label.pack(side="right", padx=16, pady=10)
+        _ver_label.bind("<Button-3>", lambda e: self._open_dev_console(container))
 
         # Dry-run banner
         if self.config.app.dry_run:
@@ -144,46 +147,64 @@ class App(ctk.CTk):
                 text_color="white",
             ).pack(pady=4)
 
-        # Step container — no tabview, frames are swapped in/out directly
+        # Step container — frames are swapped in/out directly (no tabview)
         self._step_container = ctk.CTkFrame(container, fg_color="transparent")
         self._step_container.pack(fill="both", expand=True, padx=12, pady=(8, 12))
 
-        # Import tabs lazily to avoid circular imports at module level
+        # Import lazily to avoid circular imports at module level
         from src.gui.invoice_tab import InvoiceTab
-        from src.gui.orders_tab import OrdersTab
         from src.gui.results_tab import ResultsTab
+        from src.gui.aft_menu_frame import AftMenuFrame
 
-        self.invoice_tab = InvoiceTab(
-            self._step_container,
-            app=self,
-            on_complete=self._show_orders,
-        )
-
-        self.orders_tab = OrdersTab(
-            self._step_container,
-            app=self,
-            on_complete=self._activate_results,
-        )
-
+        # invoice_tab is never shown but holds invoice items for the matching engine
+        self.invoice_tab = InvoiceTab(self._step_container, app=self, on_complete=lambda: None)
         self.results_tab = ResultsTab(self._step_container, app=self)
 
-        # Show invoice step first
-        self.invoice_tab.pack(fill="both", expand=True)
+        self._aft_menu = AftMenuFrame(
+            self._step_container,
+            on_new_session=self._show_new_session,
+            on_load_session=self._load_aft_session,
+        )
+        self._aft_menu.pack(fill="both", expand=True)
 
-    def _show_orders(self):
-        self.invoice_tab.pack_forget()
-        self.orders_tab.pack(fill="both", expand=True)
+    def _hide_all_steps(self):
+        for attr in ("_aft_menu", "_new_session_view", "invoice_tab", "results_tab"):
+            f = getattr(self, attr, None)
+            if f is not None:
+                f.pack_forget()
+
+    def _show_aft_menu(self):
+        self._hide_all_steps()
+        self._aft_menu.pack(fill="both", expand=True)
+
+    def _show_new_session(self):
+        from src.gui.aft_new_session_view import AftNewSessionView
+        if not hasattr(self, "_new_session_view"):
+            self._new_session_view = AftNewSessionView(
+                self._step_container,
+                app=self,
+                on_complete=self._activate_results,
+                on_back=self._show_aft_menu,
+            )
+        self._hide_all_steps()
+        self._new_session_view.pack(fill="both", expand=True)
+
+    def _load_aft_session(self):
+        self.invoice_tab.load_session()
 
     def _show_results_tab(self):
-        """Switch to the results frame without re-running matching (used by session loads)."""
-        self.invoice_tab.pack_forget()
-        self.orders_tab.pack_forget()
+        """Switch to results frame without re-running matching (used by session loads)."""
+        self._hide_all_steps()
         self.results_tab.pack(fill="both", expand=True)
 
     def _activate_results(self):
         self._show_results_tab()
         # Defer loading so the frame renders first, then populates
         self.after(50, self.results_tab.load_results)
+
+    def _open_dev_console(self, window=None):
+        from src.gui.dev_console import open_dev_console
+        open_dev_console(window or self)
 
     # ── Auto-update ───────────────────────────────────────────────────────────
 

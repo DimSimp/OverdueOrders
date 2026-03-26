@@ -498,9 +498,12 @@ class EbayClient:
             if li.legacy_item_id
         }
 
-        # Build lookups: ItemID → PrivateNotes text, ItemID → TransactionID
-        notes_by_item_id: dict[str, str] = {}
-        txn_id_by_item_id: dict[str, str] = {}
+        # Build lookups keyed by (ItemID, TransactionID) so that multiple sales
+        # of the same listing don't overwrite each other's notes.
+        notes_by_txn: dict[tuple[str, str], str] = {}
+        # ItemID → list of TransactionIDs seen (used to correct "0" txn IDs from
+        # the Fulfillment API when there is only one transaction for that item).
+        txn_ids_by_item: dict[str, list[str]] = {}
         ns = {"e": _TRADING_NS}
         page = 1
         while True:
@@ -520,11 +523,15 @@ class EbayClient:
                 item_id = parts[0]
                 transaction_id = parts[1] if len(parts) > 1 else ""
                 if item_id and transaction_id:
-                    txn_id_by_item_id[item_id] = transaction_id
-                # PrivateNotes is under Item within Transaction (confirmed from legacy code)
-                note = _xml_text(txn, "e:Item/e:PrivateNotes", ns)
-                if item_id and note:
-                    notes_by_item_id[item_id] = note
+                    txn_ids_by_item.setdefault(item_id, [])
+                    if transaction_id not in txn_ids_by_item[item_id]:
+                        txn_ids_by_item[item_id].append(transaction_id)
+                # PrivateNotes is at Transaction level (confirmed from legacy code)
+                note = _xml_text(txn, "e:PrivateNotes", ns)
+                if not note:
+                    note = _xml_text(txn, "e:Item/e:PrivateNotes", ns)
+                if item_id and transaction_id and note:
+                    notes_by_txn[(item_id, transaction_id)] = note
 
             # Paginate through SoldList pages
             total_pages_el = root.find(".//e:SoldList/e:PaginationResult/e:TotalNumberOfPages", ns)
@@ -532,7 +539,8 @@ class EbayClient:
 
             # Stop early if we've found transaction IDs for all target orders —
             # all remaining pages contain older sold items we don't need
-            if target_item_ids and target_item_ids.issubset(txn_id_by_item_id):
+            found_items = set(txn_ids_by_item.keys())
+            if target_item_ids and target_item_ids.issubset(found_items):
                 log.debug(
                     "GetMyeBaySelling: all %d target items found on page %d/%d — stopping early",
                     len(target_item_ids), page, total_pages,
@@ -544,31 +552,75 @@ class EbayClient:
             page += 1
 
         log.debug(
-            "Trading API enrichment complete: %d PrivateNotes found, %d transaction IDs found",
-            len(notes_by_item_id), len(txn_id_by_item_id),
+            "Trading API enrichment complete: %d PrivateNotes found across %d items",
+            len(notes_by_txn), len(txn_ids_by_item),
         )
-        if notes_by_item_id:
-            for item_id, note in notes_by_item_id.items():
-                log.debug("  PrivateNote item_id=%s  note=%r", item_id, note)
-        if txn_id_by_item_id and not notes_by_item_id:
+        if notes_by_txn:
+            for (item_id, txn_id), note in notes_by_txn.items():
+                log.debug("  PrivateNote item_id=%s txn_id=%s  note=%r", item_id, txn_id, note)
+        if txn_ids_by_item and not notes_by_txn:
             self.notes_warning = (
                 "PrivateNotes not returned — eBay Trading token may be expired. "
                 "Use 'Update Trading Token' to renew it."
             )
-        if not notes_by_item_id and not txn_id_by_item_id:
+        if not notes_by_txn and not txn_ids_by_item:
             return
 
-        # Apply notes and transaction IDs per line item
+        # For orders where the Fulfillment API gave an empty txn_id and there are
+        # multiple sold transactions for the same item, we can't guess which
+        # transaction belongs to which order. Use GetOrders (Trading API) to resolve.
+        unresolved_order_ids = list(dict.fromkeys(
+            order.order_id
+            for order in orders
+            for li in order.line_items
+            if li.legacy_item_id
+            and not li.legacy_transaction_id
+            and len(txn_ids_by_item.get(li.legacy_item_id, [])) != 1
+        ))
+        txn_by_order_item: dict[tuple[str, str], str] = {}
+        if unresolved_order_ids:
+            log.debug(
+                "GetOrders fallback: resolving txn IDs for %d unresolved orders: %s",
+                len(unresolved_order_ids), unresolved_order_ids,
+            )
+            txn_by_order_item = self._get_txn_ids_for_orders(unresolved_order_ids)
+
+        # Apply notes per line item, keyed by (ItemID, TransactionID)
         for order in orders:
             item_notes = []
             for li in order.line_items:
-                # Populate (or correct) transaction ID — Fulfillment API may give "0"
-                # for fixed-price items; prefer the real ID from GetMyeBaySelling
-                if li.legacy_item_id:
-                    better = txn_id_by_item_id.get(li.legacy_item_id, "")
-                    if better and (not li.legacy_transaction_id or li.legacy_transaction_id == "0"):
-                        li.legacy_transaction_id = better
-                note = notes_by_item_id.get(li.legacy_item_id, "")
+                item_id = li.legacy_item_id
+                txn_id = li.legacy_transaction_id
+
+                log.debug(
+                    "  enrichment lookup: order=%s  sku=%s  item_id=%s  txn_id=%s (from fulfillment API)",
+                    order.order_id, li.sku, item_id, txn_id,
+                )
+
+                # Correct "0" or missing transaction IDs from the Fulfillment API.
+                if item_id and (not txn_id or txn_id == "0"):
+                    candidates = txn_ids_by_item.get(item_id, [])
+                    log.debug(
+                        "    txn_id is %r — candidates from sold list: %s",
+                        txn_id, candidates,
+                    )
+                    if len(candidates) == 1:
+                        txn_id = candidates[0]
+                        li.legacy_transaction_id = txn_id
+                        log.debug("    corrected txn_id → %s (single candidate)", txn_id)
+                    else:
+                        # Multiple (or zero) candidates — use GetOrders result
+                        better = txn_by_order_item.get((order.order_id, item_id), "")
+                        if better:
+                            txn_id = better
+                            li.legacy_transaction_id = txn_id
+                            log.debug("    corrected txn_id → %s (GetOrders fallback)", txn_id)
+
+                note = notes_by_txn.get((item_id, txn_id), "") if item_id and txn_id else ""
+                log.debug(
+                    "    lookup (%s, %s) → %s",
+                    item_id, txn_id, repr(note) if note else "no match",
+                )
                 li.notes = note
                 if note:
                     item_notes.append(note)
@@ -578,6 +630,62 @@ class EbayClient:
                     order.buyer_notes = order.buyer_notes + " | " + combined
                 else:
                     order.buyer_notes = combined
+
+    def _get_txn_ids_for_orders(
+        self,
+        order_ids: list[str],
+    ) -> dict[tuple[str, str], str]:
+        """
+        Use Trading API GetOrders to look up (order_id, item_id) → transaction_id.
+
+        Called as a fallback when the Fulfillment API returns an empty
+        legacyTransactionId for a listing that has sold multiple times, making
+        it impossible to resolve the correct transaction from GetMyeBaySelling alone.
+
+        Accepts new-format order IDs (e.g. "20-14397-93331") via OrderIDType=Platform.
+        Returns {(order_id, item_id): txn_id} keyed by both the extended and legacy IDs
+        so either format can be used for lookup.
+        """
+        if not order_ids:
+            return {}
+
+        ns = {"e": _TRADING_NS}
+        order_ids_xml = "".join(f"<OrderID>{oid}</OrderID>" for oid in order_ids)
+        xml_template = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<GetOrdersRequest xmlns="{_TRADING_NS}">'
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
+            f"<OrderIDArray>{order_ids_xml}</OrderIDArray>"
+            "<OrderIDType>Platform</OrderIDType>"
+            "</GetOrdersRequest>"
+        )
+
+        result: dict[tuple[str, str], str] = {}
+        try:
+            root = self._call_trading_api(xml_template, "GetOrders")
+        except EbayAPIError as exc:
+            log.warning("GetOrders txn ID resolution failed: %s", exc)
+            return result
+
+        for order_el in root.findall(".//e:Order", ns):
+            ext_id = _xml_text(order_el, "e:ExtendedOrderID", ns)
+            legacy_id = _xml_text(order_el, "e:OrderID", ns)
+            for txn_el in order_el.findall(".//e:Transaction", ns):
+                item_id = _xml_text(txn_el, "e:Item/e:ItemID", ns)
+                txn_id_el = txn_el.find("e:TransactionID", ns)
+                txn_id = (txn_id_el.text or "").strip() if txn_id_el is not None else ""
+                if not item_id or not txn_id:
+                    continue
+                if ext_id:
+                    result[(ext_id, item_id)] = txn_id
+                if legacy_id:
+                    result[(legacy_id, item_id)] = txn_id
+                log.debug(
+                    "  GetOrders: order=%s (ext=%s) item=%s → txn=%s",
+                    legacy_id, ext_id, item_id, txn_id,
+                )
+
+        return result
 
     def set_private_notes(
         self,

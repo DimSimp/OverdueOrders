@@ -48,6 +48,21 @@ def save_overrides(
         pass
 
 
+def clear_overrides() -> None:
+    """Overwrite the overrides file with empty sets.
+
+    Called when starting a new afternoon session so that exclusions from a
+    previous session do not carry over.
+    """
+    try:
+        os.makedirs(AFTERNOON_SESSION_DIR, exist_ok=True)
+        filepath = os.path.join(AFTERNOON_SESSION_DIR, AFTERNOON_OVERRIDES_FILE)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump({"force_matched_order_ids": [], "excluded_order_ids": []}, f)
+    except Exception:
+        pass
+
+
 def load_overrides(
     save_dir: str,
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:

@@ -619,8 +619,6 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._detail_frame.tkraise()
 
     def _close_detail_view(self):
-        self._active_tree.block_clicks()
-        self._removed_tree.block_clicks()
         if self._detail_frame is not None:
             self._detail_frame.destroy()
             self._detail_frame = None
@@ -654,8 +652,6 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._collated_frame.tkraise()
 
     def _close_collated_view(self):
-        self._active_tree.block_clicks()
-        self._removed_tree.block_clicks()
         if self._collated_frame is not None:
             self._collated_frame.destroy()
             self._collated_frame = None

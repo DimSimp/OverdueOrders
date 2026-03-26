@@ -81,7 +81,9 @@ class OrderTreeview(ctk.CTkFrame):
         self._all_groups: list[dict] = []
         self._all_flat_rows: list[list[str]] = []
         self._search_var = StringVar()
-        self._hovered_group: str | None = None  # parent iid of currently hovered group
+        self._hovered_group: str | None = None   # parent iid of currently hovered group
+        self._selected_group: str | None = None  # parent iid of persistently highlighted group
+        self._pressed_group: str | None = None   # parent iid while mouse button is held
         # Sorting state
         self._sort_col: str | None = None
         self._sort_reverse: bool = False
@@ -123,17 +125,21 @@ class OrderTreeview(ctk.CTkFrame):
             font=("", 12, "bold"),
             relief="flat",
         )
+        # Match the native selection colour to our group-hover colour so the
+        # clicked row doesn't appear brighter than the rest of the group.
         style.map(
             "Orders.Treeview",
-            background=[("selected", "#3a6ea5")],
-            foreground=[("selected", "#ffffff")],
+            background=[("selected", "#3d5a80" if dark else "#cde0f5")],
+            foreground=[("selected", "#ffffff" if dark else "#1a1a1a")],
         )
 
     def _configure_tags(self):
         dark = ctk.get_appearance_mode() == "Dark"
         self._bg_a = "#303030" if dark else "#f8f8f8"
         self._bg_b = "#252525" if dark else "#ebebeb"
-        self._bg_hover = "#3d5a80" if dark else "#cde0f5"
+        self._bg_hover    = "#2e4060" if dark else "#daeef9"  # subtle transient hover
+        self._bg_pressed  = "#1a2d45" if dark else "#a0c0d8"  # held-down press
+        self._bg_selected = "#3d5a80" if dark else "#cde0f5"  # persistent selection
         self._tree.tag_configure("order_hdr", font=("", 12, "bold"))
         self._tree.tag_configure("matched_sku", foreground="#4fc3f7")
 
@@ -213,7 +219,9 @@ class OrderTreeview(ctk.CTkFrame):
 
         self._configure_tags()
 
-        self._tree.bind("<ButtonRelease-1>", self._on_click)
+        self._tree.bind("<Button-1>", self._on_press)
+        self._tree.bind("<ButtonRelease-1>", self._on_select)
+        self._tree.bind("<Double-Button-1>", self._on_click)
         self._tree.bind("<Button-3>", self._on_right_click)
         self._tree.bind("<Motion>", self._on_hover)
         self._tree.bind("<Leave>", self._on_leave)
@@ -249,6 +257,9 @@ class OrderTreeview(ctk.CTkFrame):
         query = self._search_var.get().lower().strip()
         self._tree.delete(*self._tree.get_children())
         self._group_meta.clear()
+        self._hovered_group = None
+        self._selected_group = None
+        self._pressed_group = None
 
         if self._all_groups:
             visible = [
@@ -533,9 +544,6 @@ class OrderTreeview(ctk.CTkFrame):
     def _on_click(self, event):
         if not self._on_row_click:
             return
-        # Swallow spurious releases that arrive immediately after a transition
-        if time.monotonic() < self._click_blocked_until:
-            return
         # Ignore clicks on the expand/collapse indicator
         element = self._tree.identify_element(event.x, event.y)
         if element == "Treeitem.indicator":
@@ -560,6 +568,68 @@ class OrderTreeview(ctk.CTkFrame):
         )
         menu.tk_popup(event.x_root, event.y_root)
 
+    def _on_press(self, event):
+        """Mouse-down: apply darker pressed colour to the group under the cursor."""
+        iid = self._tree.identify_row(event.y)
+        if not iid or iid not in self._group_meta:
+            return
+        if self._tree.identify_element(event.x, event.y) == "Treeitem.indicator":
+            return
+        parent = self._tree.parent(iid)
+        group_root = parent if parent else iid
+        self._clear_press()
+        self._pressed_group = group_root
+        self._tree.tag_configure(
+            self._group_meta[group_root]["bg_tag"], background=self._bg_pressed
+        )
+        self.after(0, lambda: self._tree.selection_remove(*self._tree.selection()))
+
+    def _on_select(self, event):
+        """Mouse-up: clear press colour and apply persistent selection highlight."""
+        self._clear_press()
+        iid = self._tree.identify_row(event.y)
+        if not iid or iid not in self._group_meta:
+            return
+        if self._tree.identify_element(event.x, event.y) == "Treeitem.indicator":
+            return
+        parent = self._tree.parent(iid)
+        group_root = parent if parent else iid
+        if group_root == self._selected_group:
+            return
+        self._deselect()
+        self._selected_group = group_root
+        self._tree.tag_configure(
+            self._group_meta[group_root]["bg_tag"], background=self._bg_selected
+        )
+        self.after(0, lambda: self._tree.selection_remove(*self._tree.selection()))
+
+    def _clear_press(self):
+        """Remove pressed colour, restoring to selected/hover/base as appropriate."""
+        if self._pressed_group is None:
+            return
+        prev = self._pressed_group
+        meta = self._group_meta.get(prev)
+        self._pressed_group = None
+        if not meta:
+            return
+        if prev == self._selected_group:
+            bg = self._bg_selected
+        elif prev == self._hovered_group:
+            bg = self._bg_hover
+        else:
+            bg = meta["bg"]
+        self._tree.tag_configure(meta["bg_tag"], background=bg)
+
+    def _deselect(self):
+        """Clear persistent group highlight."""
+        if self._selected_group is None:
+            return
+        prev = self._selected_group
+        meta = self._group_meta.get(prev)
+        self._selected_group = None
+        if meta and prev != self._hovered_group:
+            self._tree.tag_configure(meta["bg_tag"], background=meta["bg"])
+
     def _on_hover(self, event):
         iid = self._tree.identify_row(event.y)
         if not iid or iid not in self._group_meta:
@@ -581,16 +651,24 @@ class OrderTreeview(ctk.CTkFrame):
         if self._hovered_group is None:
             return
         meta = self._group_meta.get(self._hovered_group)
+        prev = self._hovered_group
         self._hovered_group = None
         if meta:
-            self._tree.tag_configure(meta["bg_tag"], background=meta["bg"])
+            if prev == self._selected_group:
+                # Restore to selection colour, not base colour
+                self._tree.tag_configure(meta["bg_tag"], background=self._bg_selected)
+            else:
+                self._tree.tag_configure(meta["bg_tag"], background=meta["bg"])
 
     def scroll_to(self, order_id: str):
-        """Scroll to and select the parent row for the given order_id."""
+        """Scroll to and highlight the parent row for the given order_id."""
         for iid, meta in self._group_meta.items():
             if meta["order_id"] == order_id and self._tree.parent(iid) == "":
                 self._tree.see(iid)
-                self._tree.selection_set(iid)
+                self._deselect()
+                self._selected_group = iid
+                self._tree.tag_configure(meta["bg_tag"], background=self._bg_selected)
+                self._tree.selection_remove(*self._tree.selection())
                 break
 
 
@@ -1139,7 +1217,6 @@ class ResultsTab(ctk.CTkFrame):
         self._check_status_background(order_id, platform)
 
     def _close_detail_view(self):
-        self._matched_tree.block_clicks()
         if self._detail_frame is not None:
             self._detail_frame.destroy()
             self._detail_frame = None
