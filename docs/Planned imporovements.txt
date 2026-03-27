@@ -4,6 +4,9 @@ BOTH OPERATIONS
 - if last name is "NOLASTNAME", make field blank
 - have notes save/refresh when removing order from list, going back, or marking as sent. This is just in case a user types the message without saving it.
 - show a confirmation that note is updating/has been updated
+- bulk add to PO, mark as sent, assign to user, etc
+- adding kit items to PO has a blank button. it currently lets the user choose which SKU from the kit to add to PO, just needs a label.
+- Pitch idea to Kyal about having his AI invoice parser create a list of received items so we don't have to export Musipos twice daily
 
 AFTERNOON OPERATIONS
 - fix Bonds couriers label booking
@@ -17,6 +20,7 @@ DAILY OPERATIONS
 - refresh order when opening it
 - loading the daily orders current session from the shortcut opens the afternoon session
 - make picking sheet have alternating background colours for each row for easier readability
+- make button colours distinct when preparing picking list
 
 SETTINGS menu
 - Add to launcher menu

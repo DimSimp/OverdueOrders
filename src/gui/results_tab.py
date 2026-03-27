@@ -70,13 +70,21 @@ class OrderTreeview(ctk.CTkFrame):
         on_row_click=None,
         on_context_action=None,
         context_label: str = "Move to Unmatched",
+        selectable: bool = False,
+        on_selection_change=None,
+        copy_cols: list = None,
         **kwargs,
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_row_click = on_row_click
         self._on_context_action = on_context_action
         self._context_label = context_label
+        self._copy_cols: list = copy_cols or []
         self._col_spec = col_spec
+        self._selectable = selectable
+        self._use_tree_as_check = False  # set in _build_tree; True when #0 becomes checkbox
+        self._checked_order_ids: set[tuple[str, str]] = set()
+        self._on_selection_change = on_selection_change
         self._group_meta: dict[str, dict] = {}  # iid → {order_id, platform}
         self._all_groups: list[dict] = []
         self._all_flat_rows: list[list[str]] = []
@@ -146,8 +154,18 @@ class OrderTreeview(ctk.CTkFrame):
     # ── Widget build ──────────────────────────────────────────────────────
 
     def _build_tree(self):
-        cols = [c for c in self._col_spec if c != "#0"]
+        data_cols = [c for c in self._col_spec if c != "#0"]
         h0, w0 = self._col_spec["#0"]
+        # When selectable and the tree column (#0) is visible, repurpose #0 as
+        # the checkbox column and add an "order_no" data column for the order ID.
+        # When selectable on a flat list (w0=0), prepend a "check" data column.
+        self._use_tree_as_check = self._selectable and w0 > 0
+        if self._use_tree_as_check:
+            cols = ["order_no"] + data_cols
+        elif self._selectable:
+            cols = ["check"] + data_cols
+        else:
+            cols = data_cols
         # Use "headings" (no tree column) when the #0 width is 0 (flat list)
         show = "tree headings" if w0 > 0 else "headings"
         self._tree = ttk.Treeview(
@@ -158,8 +176,23 @@ class OrderTreeview(ctk.CTkFrame):
             selectmode="browse",
         )
 
-        # Tree (#0) column — only when show="tree headings"
-        if w0 > 0:
+        if self._use_tree_as_check:
+            # #0 = checkbox (not in _col_headings so sort indicators don't reset it)
+            self._tree.heading("#0", text="☐", anchor="center",
+                               command=self._toggle_all_checks)
+            self._tree.column("#0", width=40, minwidth=40, stretch=False)
+            # order_no = order ID, takes the place of the old #0 content
+            self._col_headings["order_no"] = h0
+            self._tree.heading("order_no", text=h0, anchor="w",
+                               command=lambda: self._on_header_click("order_no"))
+            self._tree.column("order_no", width=w0, minwidth=60, stretch=False)
+        elif self._selectable:
+            # Flat list: check is the first data column
+            self._tree.heading("check", text="☐", anchor="center",
+                               command=self._toggle_all_checks)
+            self._tree.column("check", width=40, minwidth=40, stretch=False)
+        elif w0 > 0:
+            # Standard (non-selectable) tree column
             self._col_headings["#0"] = h0
             self._tree.heading("#0", text=h0, anchor="w",
                                command=lambda: self._on_header_click("#0"))
@@ -267,7 +300,12 @@ class OrderTreeview(ctk.CTkFrame):
                 if self._group_passes_filters(g, query)
             ]
             _item_cols = {"sku", "description", "qty"}
-            col_ids = [k for k in self._col_spec if k != "#0"]
+            if self._use_tree_as_check:
+                col_ids = ["order_no"] + [k for k in self._col_spec if k != "#0"]
+            elif self._selectable:
+                col_ids = ["check"] + [k for k in self._col_spec if k != "#0"]
+            else:
+                col_ids = [k for k in self._col_spec if k != "#0"]
             for i, g in enumerate(visible):
                 bg = self._bg_a if i % 2 == 0 else self._bg_b
                 tag_bg = f"bg_{i}"
@@ -275,15 +313,19 @@ class OrderTreeview(ctk.CTkFrame):
                 shipping = g.get("shipping", "")
                 ship_display = _shipping_display(shipping)
                 row_tags = [tag_bg, "order_hdr"]
+                checked = (g["platform"], g["order_id"]) in self._checked_order_ids
+                parent_text = ("☑" if checked else "☐") if self._use_tree_as_check else g["order_id"]
                 parent_vals = tuple(
-                    ship_display if c == "shipping"
+                    g["order_id"] if c == "order_no"
+                    else ("☑" if checked else "☐") if c == "check"
+                    else ship_display if c == "shipping"
                     else "" if c in _item_cols
                     else g.get(c, "")
                     for c in col_ids
                 )
                 piid = self._tree.insert(
                     "", "end",
-                    text=g["order_id"],
+                    text=parent_text,
                     values=parent_vals,
                     tags=row_tags,
                     open=True,
@@ -292,7 +334,9 @@ class OrderTreeview(ctk.CTkFrame):
                 for item in g["line_items"]:
                     tags = [tag_bg] + (["matched_sku"] if item["is_matched"] else [])
                     child_vals = tuple(
-                        item.get(c, "") if c in _item_cols else ""
+                        "" if c in ("order_no", "check")
+                        else item.get(c, "") if c in _item_cols
+                        else ""
                         for c in col_ids
                     )
                     ciid = self._tree.insert(
@@ -301,6 +345,8 @@ class OrderTreeview(ctk.CTkFrame):
                         tags=tags,
                     )
                     self._group_meta[ciid] = {"order_id": g["order_id"], "platform": g["platform"], "bg_tag": tag_bg, "bg": bg}
+            if self._selectable:
+                self._update_check_header()
 
         elif self._all_flat_rows:
             visible = [
@@ -311,7 +357,8 @@ class OrderTreeview(ctk.CTkFrame):
                 bg = self._bg_a if i % 2 == 0 else self._bg_b
                 tag_bg = f"bg_{i}"
                 self._tree.tag_configure(tag_bg, background=bg)
-                self._tree.insert("", "end", text="", values=row, tags=[tag_bg])
+                display_row = ("☐",) + tuple(row) if self._selectable else row
+                self._tree.insert("", "end", text="", values=display_row, tags=[tag_bg])
 
     def _group_passes_filters(self, g: dict, query: str) -> bool:
         """Return True if group passes search query + checkbox filters."""
@@ -392,7 +439,7 @@ class OrderTreeview(ctk.CTkFrame):
             return
 
         def _sort_key(g: dict):
-            if col == "#0":
+            if col in ("#0", "order_no"):
                 return _numeric_sort_key(g.get("order_id", ""))
             elif col == "platform":
                 return g.get("platform", "").lower()
@@ -541,7 +588,22 @@ class OrderTreeview(ctk.CTkFrame):
 
     # ── Events ────────────────────────────────────────────────────────────
 
+    def _is_check_col(self, x: int) -> bool:
+        """Return True if the x coordinate falls within the checkbox column."""
+        if not self._selectable:
+            return False
+        col = self._tree.identify_column(x)
+        if self._use_tree_as_check:
+            return col == "#0"
+        try:
+            idx = int(col.lstrip("#")) - 1
+            return self._tree["columns"][idx] == "check"
+        except (ValueError, IndexError):
+            return False
+
     def _on_click(self, event):
+        if self._is_check_col(event.x):
+            return  # handled by _on_press
         if not self._on_row_click:
             return
         # Ignore clicks on the expand/collapse indicator
@@ -554,10 +616,36 @@ class OrderTreeview(ctk.CTkFrame):
             self._on_row_click(meta["order_id"], meta["platform"])
 
     def _on_right_click(self, event):
-        if not self._on_context_action:
-            return
         iid = self._tree.identify_row(event.y)
-        if not iid or iid not in self._group_meta:
+        if not iid:
+            return
+
+        # Flat row (not an order row) — offer copy menu if applicable
+        if iid not in self._group_meta:
+            if not self._copy_cols:
+                return
+            col_id = self._tree.identify_column(event.x)
+            try:
+                idx = int(col_id.lstrip("#")) - 1
+                col_name = self._tree["columns"][idx]
+            except (ValueError, IndexError):
+                return
+            if col_name not in self._copy_cols:
+                return
+            value = self._tree.set(iid, col_name)
+            if not value:
+                return
+            heading = self._col_headings.get(col_name, col_name.title())
+            menu = Menu(self._tree, tearoff=0)
+            menu.add_command(
+                label=f"Copy {heading}",
+                command=lambda v=value: (self._tree.clipboard_clear(), self._tree.clipboard_append(v)),
+            )
+            menu.tk_popup(event.x_root, event.y_root)
+            return
+
+        # Order row — existing context action
+        if not self._on_context_action:
             return
         self._tree.selection_set(iid)
         meta = self._group_meta[iid]
@@ -569,11 +657,18 @@ class OrderTreeview(ctk.CTkFrame):
         menu.tk_popup(event.x_root, event.y_root)
 
     def _on_press(self, event):
-        """Mouse-down: apply darker pressed colour to the group under the cursor."""
+        """Mouse-down: toggle checkbox if on check column, otherwise apply pressed colour."""
         iid = self._tree.identify_row(event.y)
         if not iid or iid not in self._group_meta:
             return
         if self._tree.identify_element(event.x, event.y) == "Treeitem.indicator":
+            return
+        # Check column click → toggle checkbox, suppress row highlight
+        if self._is_check_col(event.x):
+            parent = self._tree.parent(iid)
+            group_root = parent if parent else iid
+            if group_root in self._group_meta:
+                self._toggle_check(group_root)
             return
         parent = self._tree.parent(iid)
         group_root = parent if parent else iid
@@ -587,6 +682,8 @@ class OrderTreeview(ctk.CTkFrame):
     def _on_select(self, event):
         """Mouse-up: clear press colour and apply persistent selection highlight."""
         self._clear_press()
+        if self._is_check_col(event.x):
+            return  # handled entirely in _on_press
         iid = self._tree.identify_row(event.y)
         if not iid or iid not in self._group_meta:
             return
@@ -671,6 +768,92 @@ class OrderTreeview(ctk.CTkFrame):
                 self._tree.selection_remove(*self._tree.selection())
                 break
 
+    # ── Checkbox helpers ──────────────────────────────────────────────────
+
+    def _set_check_glyph(self, piid: str, glyph: str):
+        """Set the checkbox glyph on a parent row (handles both #0 and data column modes)."""
+        if self._use_tree_as_check:
+            self._tree.item(piid, text=glyph)
+        else:
+            self._tree.set(piid, "check", glyph)
+
+    def _check_col_id(self) -> str:
+        """Return the column id used for the checkbox heading."""
+        return "#0" if self._use_tree_as_check else "check"
+
+    def _toggle_check(self, piid: str):
+        """Toggle the checked state for the order at the given parent iid."""
+        meta = self._group_meta.get(piid, {})
+        key = (meta.get("platform", ""), meta.get("order_id", ""))
+        if not key[1]:
+            return
+        if key in self._checked_order_ids:
+            self._checked_order_ids.discard(key)
+            self._set_check_glyph(piid, "☐")
+        else:
+            self._checked_order_ids.add(key)
+            self._set_check_glyph(piid, "☑")
+        self._update_check_header()
+        if self._on_selection_change:
+            self._on_selection_change()
+
+    def _toggle_all_checks(self):
+        """Select all visible parents if not all checked; otherwise deselect all."""
+        visible = [iid for iid in self._tree.get_children() if iid in self._group_meta]
+        if not visible:
+            return
+        all_checked = all(
+            (self._group_meta[p]["platform"], self._group_meta[p]["order_id"])
+            in self._checked_order_ids
+            for p in visible
+        )
+        for piid in visible:
+            meta = self._group_meta[piid]
+            key = (meta["platform"], meta["order_id"])
+            if all_checked:
+                self._checked_order_ids.discard(key)
+                self._set_check_glyph(piid, "☐")
+            else:
+                self._checked_order_ids.add(key)
+                self._set_check_glyph(piid, "☑")
+        self._update_check_header()
+        if self._on_selection_change:
+            self._on_selection_change()
+
+    def _update_check_header(self):
+        """Sync the checkbox column heading glyph with the current selection state."""
+        visible = [iid for iid in self._tree.get_children() if iid in self._group_meta]
+        col = self._check_col_id()
+        if not visible:
+            self._tree.heading(col, text="☐")
+            return
+        all_checked = all(
+            (self._group_meta[p]["platform"], self._group_meta[p]["order_id"])
+            in self._checked_order_ids
+            for p in visible
+        )
+        self._tree.heading(col, text="☑" if all_checked else "☐")
+
+    def get_checked_orders(self) -> list[dict]:
+        """Return [{order_id, platform}, ...] for all currently checked parent rows."""
+        result = []
+        for piid in self._tree.get_children():
+            meta = self._group_meta.get(piid)
+            if meta and (meta["platform"], meta["order_id"]) in self._checked_order_ids:
+                result.append({"order_id": meta["order_id"], "platform": meta["platform"]})
+        return result
+
+    def clear_checks(self):
+        """Deselect all rows and fire the selection-change callback."""
+        self._checked_order_ids.clear()
+        for piid in self._tree.get_children():
+            if piid in self._group_meta:
+                self._set_check_glyph(piid, "☐")
+        if self._selectable:
+            self._tree.heading(self._check_col_id(), text="☐")
+        if self._on_selection_change:
+            self._on_selection_change()
+
 
 # ── Column specs ───────────────────────────────────────────────────────────────
 
@@ -748,6 +931,7 @@ class ResultsTab(ctk.CTkFrame):
 
     def _build_list_page(self, parent):
         parent.grid_rowconfigure(1, weight=1)
+        parent.grid_rowconfigure(2, weight=0)
         parent.grid_columnconfigure(0, weight=1)
 
         # ── Toolbar ───────────────────────────────────────────────────────
@@ -786,8 +970,12 @@ class ResultsTab(ctk.CTkFrame):
         self._error_label.pack(side="right", padx=(0, 8))
 
         # ── Inner tab view ────────────────────────────────────────────────
+        def _on_tab_change():
+            self._update_tab_count()
+            self._on_selection_change()
+
         self._inner_tabs = ctk.CTkTabview(
-            parent, corner_radius=6, command=self._update_tab_count,
+            parent, corner_radius=6, command=_on_tab_change,
         )
         self._inner_tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
 
@@ -808,6 +996,8 @@ class ResultsTab(ctk.CTkFrame):
             on_row_click=self._open_detail_view,
             on_context_action=self._exclude_order,
             context_label="Move to Unmatched",
+            selectable=True,
+            on_selection_change=self._on_selection_change,
         )
         self._matched_tree.grid(row=0, column=0, sticky="nsew")
 
@@ -815,6 +1005,9 @@ class ResultsTab(ctk.CTkFrame):
         self._inv_tree = OrderTreeview(
             self._inner_tabs.tab("Unmatched Invoice Items"),
             col_spec=_INV_COL_SPEC,
+            selectable=True,
+            on_selection_change=self._on_selection_change,
+            copy_cols=["sku"],
         )
         self._inv_tree.pack(fill="both", expand=True)
 
@@ -842,8 +1035,281 @@ class ResultsTab(ctk.CTkFrame):
             col_spec=_UNMATCHED_ORD_COL_SPEC,
             on_context_action=self._include_order,
             context_label="Move to Matched",
+            selectable=True,
+            on_selection_change=self._on_selection_change,
         )
         self._unmatched_orders_tree.grid(row=1, column=0, sticky="nsew")
+
+        # ── Action bar (row 2, hidden by default) ────────────────────────
+        self._build_action_bar(parent)
+
+    def _build_action_bar(self, parent):
+        """Build the bulk-action bar (row 2). Hidden until ≥1 order is checked."""
+        self._action_bar = ctk.CTkFrame(
+            parent, fg_color=("gray85", "gray20"), corner_radius=8,
+        )
+        self._action_bar.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
+        self._action_bar.grid_remove()  # hidden by default
+
+        self._action_clear_btn = ctk.CTkButton(
+            self._action_bar, text="✕ Clear", width=70, height=28,
+            fg_color="gray50", hover_color="gray40",
+            command=self._clear_all_checks,
+        )
+        self._action_clear_btn.pack(side="left", padx=(8, 4), pady=6)
+
+        self._action_count_lbl = ctk.CTkLabel(
+            self._action_bar, text="", font=ctk.CTkFont(size=12),
+        )
+        self._action_count_lbl.pack(side="left", padx=(4, 12))
+
+        self._action_move_btn = ctk.CTkButton(
+            self._action_bar, text="Move", width=140, height=28,
+            command=self._bulk_move,
+        )
+        self._action_move_btn.pack(side="left", padx=(0, 6))
+
+        self._action_sent_btn = ctk.CTkButton(
+            self._action_bar, text="Mark as Sent", width=120, height=28,
+            fg_color=("#2E7D32", "#1B5E20"), hover_color=("#256528", "#164A18"),
+            command=self._bulk_mark_as_sent,
+        )
+        self._action_sent_btn.pack(side="left", padx=(0, 6))
+
+        self._action_po_btn = ctk.CTkButton(
+            self._action_bar, text="Add to PO", width=100, height=28,
+            command=self._bulk_add_to_po,
+        )
+        self._action_po_btn.pack(side="left", padx=(0, 6))
+
+        self._action_assign_btn = ctk.CTkButton(
+            self._action_bar, text="Assign to User", width=130, height=28,
+            fg_color="gray50", hover_color="gray50",
+            state="disabled",
+        )
+        self._action_assign_btn.pack(side="left", padx=(0, 6))
+
+    def _active_tree(self) -> OrderTreeview:
+        """Return the OrderTreeview for the currently visible inner tab."""
+        tab = self._inner_tabs.get()
+        if tab == "Matched Orders":
+            return self._matched_tree
+        if tab == "Unmatched Invoice Items":
+            return self._inv_tree
+        return self._unmatched_orders_tree
+
+    def _on_selection_change(self):
+        """Update action bar visibility and labels based on current tab's selection."""
+        tree = self._active_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            self._action_bar.grid_remove()
+            return
+
+        n = len(checked)
+        self._action_count_lbl.configure(text=f"{n} order{'s' if n != 1 else ''} selected")
+        self._action_bar.grid()
+
+        tab = self._inner_tabs.get()
+        if tab == "Matched Orders":
+            self._action_move_btn.configure(text="Move to Unmatched", state="normal")
+            self._action_sent_btn.configure(state="normal")
+            self._action_po_btn.configure(
+                state="normal" if getattr(self._app, "musipos_client", None) else "disabled"
+            )
+        elif tab == "Unmatched Orders":
+            self._action_move_btn.configure(text="Move to Matched", state="normal")
+            self._action_sent_btn.configure(state="disabled")
+            self._action_po_btn.configure(state="disabled")
+        else:  # Unmatched Invoice Items
+            self._action_move_btn.configure(state="disabled")
+            self._action_sent_btn.configure(state="disabled")
+            self._action_po_btn.configure(state="disabled")
+
+    def _clear_all_checks(self):
+        """Clear selection on the active tab's tree."""
+        self._active_tree().clear_checks()
+
+    # ── Bulk actions ──────────────────────────────────────────────────────
+
+    def _find_order_for_bulk(self, order_id: str, platform: str):
+        """Return the order object (Neto or eBay) for a given id/platform pair."""
+        if platform.lower() == "ebay":
+            for o in self._ebay_orders:
+                if o.order_id == order_id:
+                    return o
+        else:
+            for o in self._neto_orders:
+                if o.order_id == order_id:
+                    return o
+        return None
+
+    def _bulk_move(self):
+        """Move all checked orders to the other list (tab-dependent direction)."""
+        tree = self._active_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            return
+        tab = self._inner_tabs.get()
+        for c in checked:
+            if tab == "Matched Orders":
+                self._exclude_order(c["order_id"], c["platform"])
+            elif tab == "Unmatched Orders":
+                self._include_order(c["order_id"], c["platform"])
+        tree.clear_checks()
+
+    def _bulk_mark_as_sent(self):
+        """Mark all checked orders as dispatched after confirmation."""
+        tree = self._active_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            return
+        n = len(checked)
+        if not messagebox.askyesno(
+            "Mark as Sent",
+            f"Mark {n} order{'s' if n != 1 else ''} as sent without tracking numbers?\n\nThis cannot be undone.",
+            parent=self,
+        ):
+            return
+
+        dry_run = self._app.config.app.dry_run
+        neto_client = self._app.neto_client
+        ebay_client = self._app.ebay_client
+        results: list[str] = []
+
+        def _work():
+            for c in checked:
+                order = self._find_order_for_bulk(c["order_id"], c["platform"])
+                if order is None:
+                    results.append(f"⚠ {c['order_id']}: not found")
+                    continue
+                try:
+                    if c["platform"].lower() == "ebay":
+                        ebay_client.create_shipping_fulfillment(
+                            c["order_id"],
+                            line_items=order.line_items,
+                            tracking_number="",
+                            carrier="",
+                            dry_run=dry_run,
+                        )
+                    else:
+                        skus = [li.sku for li in order.line_items]
+                        neto_client.update_order_status(
+                            c["order_id"],
+                            new_status="Dispatched",
+                            tracking_number="",
+                            shipping_method="",
+                            line_item_skus=skus,
+                            dry_run=dry_run,
+                        )
+                    label = "[DRY RUN] " if dry_run else ""
+                    results.append(f"✓ {label}{c['order_id']}")
+                except Exception as exc:
+                    results.append(f"✗ {c['order_id']}: {exc}")
+            self.after(0, lambda: _done())
+
+        def _done():
+            tree.clear_checks()
+            summary = "\n".join(results)
+            messagebox.showinfo("Mark as Sent — Results", summary, parent=self)
+            self._refresh_matched_orders()
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _bulk_add_to_po(self):
+        """Open MusiposPODialog sequentially for every line item in checked orders."""
+        musipos_client = getattr(self._app, "musipos_client", None)
+        if musipos_client is None:
+            messagebox.showinfo("Not configured", "Musipos is not configured.", parent=self)
+            return
+        tree = self._active_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            return
+
+        from collections import deque
+        items_queue: deque = deque()
+        for c in checked:
+            order = self._find_order_for_bulk(c["order_id"], c["platform"])
+            if order is None:
+                continue
+            for li in (order.line_items or []):
+                items_queue.append((c["order_id"], c["platform"], li))
+
+        if not items_queue:
+            messagebox.showinfo("Add to PO", "No line items found in selected orders.", parent=self)
+            return
+
+        self._bulk_po_next(items_queue)
+
+    def _bulk_po_next(self, queue):
+        """Open MusiposPODialog for the next item in the queue."""
+        if not queue:
+            messagebox.showinfo("Add to PO", "All items processed.", parent=self.winfo_toplevel())
+            return
+
+        from collections import deque
+        from src.gui.musipos_po_dialog import MusiposPODialog
+
+        order_id, platform, line_item = queue.popleft()
+        musipos_client = getattr(self._app, "musipos_client", None)
+        if musipos_client is None:
+            return
+
+        qty = getattr(line_item, "quantity", 1) or 1
+        product_name = (
+            getattr(line_item, "product_name", None)
+            or getattr(line_item, "title", "")
+            or ""
+        )
+
+        advanced = [False]
+
+        def _advance():
+            if not advanced[0]:
+                advanced[0] = True
+                self.after(0, lambda: self._bulk_po_next(queue))
+
+        def _on_success(po_result):
+            self._bulk_po_write_note(order_id, platform, line_item.sku)
+
+        def _on_note_only():
+            self._bulk_po_write_note(order_id, platform, line_item.sku)
+
+        def _on_cancel():
+            pass
+
+        dialog = MusiposPODialog(
+            self.winfo_toplevel(),
+            neto_sku=line_item.sku,
+            product_name=product_name,
+            order_qty=qty,
+            musipos_client=musipos_client,
+            suppliers_config=self._app.config.suppliers,
+            dry_run=self._app.config.app.dry_run,
+            on_success=_on_success,
+            on_note_only=_on_note_only,
+            on_cancel=_on_cancel,
+        )
+        dialog.protocol("WM_DELETE_WINDOW", lambda: (dialog.destroy(), _advance()))
+        dialog.bind("<Destroy>", lambda e: _advance() if e.widget is dialog else None)
+
+    def _bulk_po_write_note(self, order_id: str, platform: str, sku: str):
+        """Fire-and-forget: add '{sku} on PO' sticky note to a Neto order."""
+        if platform.lower() == "ebay":
+            return
+        neto_client = self._app.neto_client
+        if not neto_client:
+            return
+        from datetime import date
+        note = f"[{date.today().strftime('%d/%m/%Y')}] {sku} on PO"
+
+        def _work():
+            try:
+                neto_client.add_sticky_note(order_id, title="Item Status", description=note)
+            except Exception:
+                pass
+        threading.Thread(target=_work, daemon=True).start()
 
     # ── Public ────────────────────────────────────────────────────────────
 
@@ -1209,6 +1675,7 @@ class ResultsTab(ctk.CTkFrame):
             sku_alias_manager=getattr(self._app, "sku_alias_manager", None),
             suppliers=self._app.config.suppliers,
             musipos_client=getattr(self._app, "musipos_client", None),
+            variation_manager=getattr(self._app, "ebay_variation_manager", None),
         )
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()
@@ -1702,7 +2169,7 @@ class ResultsTab(ctk.CTkFrame):
                 return
             order_id     = booking.get("order_id", "")
             booking_date = booking.get("date", "")
-            courier_code = booking.get("courier_code", "")
+            courier_code = booking.get("print_courier_code") or booking.get("courier_code", "")
             label_path   = _Path(bookings_dir) / "Labels" / booking_date / f"{order_id}.pdf"
             if not label_path.exists():
                 status_lbl.configure(

@@ -98,6 +98,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._list_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._list_frame.grid(row=0, column=0, sticky="nsew")
         self._list_frame.grid_rowconfigure(1, weight=1)
+        self._list_frame.grid_rowconfigure(2, weight=0)
         self._list_frame.grid_columnconfigure(0, weight=1)
 
         self._build_list_page(self._list_frame)
@@ -149,7 +150,10 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._error_label.pack(side="right", padx=(0, 8))
 
         # ── Tab view ────────────────────────────────────────────────────────
-        self._tabs = ctk.CTkTabview(parent, corner_radius=6)
+        def _on_tab_change():
+            self._on_selection_change()
+
+        self._tabs = ctk.CTkTabview(parent, corner_radius=6, command=_on_tab_change)
         self._tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
         self._tabs.add("Active Orders")
         self._tabs.add("Removed")
@@ -166,6 +170,8 @@ class DailyOpsResultsView(ctk.CTkFrame):
             on_row_click=self._open_detail_view,
             on_context_action=self._move_to_removed,
             context_label="Move to Removed",
+            selectable=True,
+            on_selection_change=self._on_selection_change,
         )
         self._active_tree.grid(row=0, column=0, sticky="nsew")
 
@@ -181,9 +187,271 @@ class DailyOpsResultsView(ctk.CTkFrame):
             on_row_click=self._open_detail_view,
             on_context_action=self._move_to_active,
             context_label="Move back to Active",
+            selectable=True,
+            on_selection_change=self._on_selection_change,
         )
         self._removed_tree.grid(row=0, column=0, sticky="nsew")
 
+        # ── Action bar (row 2, hidden by default) ────────────────────────
+        self._build_action_bar(parent)
+
+
+    def _build_action_bar(self, parent):
+        """Build the bulk-action bar (row 2). Hidden until ≥1 order is checked."""
+        self._action_bar = ctk.CTkFrame(
+            parent, fg_color=("gray85", "gray20"), corner_radius=8,
+        )
+        self._action_bar.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
+        self._action_bar.grid_remove()
+
+        self._action_clear_btn = ctk.CTkButton(
+            self._action_bar, text="✕ Clear", width=70, height=28,
+            fg_color="gray50", hover_color="gray40",
+            command=self._clear_all_checks,
+        )
+        self._action_clear_btn.pack(side="left", padx=(8, 4), pady=6)
+
+        self._action_count_lbl = ctk.CTkLabel(
+            self._action_bar, text="", font=ctk.CTkFont(size=12),
+        )
+        self._action_count_lbl.pack(side="left", padx=(4, 12))
+
+        self._action_move_btn = ctk.CTkButton(
+            self._action_bar, text="Move", width=140, height=28,
+            command=self._bulk_move,
+        )
+        self._action_move_btn.pack(side="left", padx=(0, 6))
+
+        self._action_sent_btn = ctk.CTkButton(
+            self._action_bar, text="Mark as Sent", width=120, height=28,
+            fg_color=("#2E7D32", "#1B5E20"), hover_color=("#256528", "#164A18"),
+            command=self._bulk_mark_as_sent,
+        )
+        self._action_sent_btn.pack(side="left", padx=(0, 6))
+
+        self._action_po_btn = ctk.CTkButton(
+            self._action_bar, text="Add to PO", width=100, height=28,
+            command=self._bulk_add_to_po,
+        )
+        self._action_po_btn.pack(side="left", padx=(0, 6))
+
+        self._action_assign_btn = ctk.CTkButton(
+            self._action_bar, text="Assign to User", width=130, height=28,
+            fg_color="gray50", hover_color="gray50",
+            state="disabled",
+        )
+        self._action_assign_btn.pack(side="left", padx=(0, 6))
+
+    def _current_tree(self):
+        """Return the OrderTreeview for the currently visible tab."""
+        if self._tabs.get() == "Active Orders":
+            return self._active_tree
+        return self._removed_tree
+
+    def _on_selection_change(self):
+        """Update action bar visibility and labels based on current tab's selection."""
+        tree = self._current_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            self._action_bar.grid_remove()
+            return
+
+        n = len(checked)
+        self._action_count_lbl.configure(text=f"{n} order{'s' if n != 1 else ''} selected")
+        self._action_bar.grid()
+
+        tab = self._tabs.get()
+        musipos = getattr(self._window, "musipos_client", None)
+        if tab == "Active Orders":
+            self._action_move_btn.configure(text="Move to Removed", state="normal")
+            self._action_sent_btn.configure(state="normal")
+            self._action_po_btn.configure(state="normal" if musipos else "disabled")
+        else:  # Removed
+            self._action_move_btn.configure(text="Move to Active", state="normal")
+            self._action_sent_btn.configure(state="disabled")
+            self._action_po_btn.configure(state="disabled")
+
+    def _clear_all_checks(self):
+        self._current_tree().clear_checks()
+
+    # ── Bulk actions ──────────────────────────────────────────────────────────
+
+    def _find_order_for_bulk(self, order_id: str, platform: str):
+        if platform.lower() == "ebay":
+            for o in self._ebay_orders:
+                if o.order_id == order_id:
+                    return o
+        else:
+            for o in self._neto_orders:
+                if o.order_id == order_id:
+                    return o
+        return None
+
+    def _bulk_move(self):
+        tree = self._current_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            return
+        tab = self._tabs.get()
+        for c in checked:
+            if tab == "Active Orders":
+                self._move_to_removed(c["order_id"], c["platform"])
+            else:
+                self._move_to_active(c["order_id"], c["platform"])
+        tree.clear_checks()
+
+    def _bulk_mark_as_sent(self):
+        import threading
+        from tkinter import messagebox
+        tree = self._current_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            return
+        n = len(checked)
+        if not messagebox.askyesno(
+            "Mark as Sent",
+            f"Mark {n} order{'s' if n != 1 else ''} as sent without tracking numbers?\n\nThis cannot be undone.",
+            parent=self,
+        ):
+            return
+
+        dry_run = self._window.config.app.dry_run
+        neto_client = self._window.neto_client
+        ebay_client = self._window.ebay_client
+        results: list = []
+
+        def _work():
+            for c in checked:
+                order = self._find_order_for_bulk(c["order_id"], c["platform"])
+                if order is None:
+                    results.append(f"⚠ {c['order_id']}: not found")
+                    continue
+                try:
+                    if c["platform"].lower() == "ebay":
+                        ebay_client.create_shipping_fulfillment(
+                            c["order_id"],
+                            line_items=order.line_items,
+                            tracking_number="",
+                            carrier="",
+                            dry_run=dry_run,
+                        )
+                    else:
+                        skus = [li.sku for li in order.line_items]
+                        neto_client.update_order_status(
+                            c["order_id"],
+                            new_status="Dispatched",
+                            tracking_number="",
+                            shipping_method="",
+                            line_item_skus=skus,
+                            dry_run=dry_run,
+                        )
+                    label = "[DRY RUN] " if dry_run else ""
+                    results.append(f"✓ {label}{c['order_id']}")
+                except Exception as exc:
+                    results.append(f"✗ {c['order_id']}: {exc}")
+            self.after(0, lambda: _done())
+
+        def _done():
+            tree.clear_checks()
+            messagebox.showinfo("Mark as Sent — Results", "\n".join(results), parent=self)
+            self._refresh_all_orders()
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _bulk_add_to_po(self):
+        from tkinter import messagebox
+        musipos_client = getattr(self._window, "musipos_client", None)
+        if musipos_client is None:
+            messagebox.showinfo("Not configured", "Musipos is not configured.", parent=self)
+            return
+        tree = self._current_tree()
+        checked = tree.get_checked_orders()
+        if not checked:
+            return
+
+        from collections import deque
+        items_queue: deque = deque()
+        for c in checked:
+            order = self._find_order_for_bulk(c["order_id"], c["platform"])
+            if order is None:
+                continue
+            for li in (order.line_items or []):
+                items_queue.append((c["order_id"], c["platform"], li))
+
+        if not items_queue:
+            messagebox.showinfo("Add to PO", "No line items found in selected orders.", parent=self)
+            return
+
+        self._bulk_po_next(items_queue)
+
+    def _bulk_po_next(self, queue):
+        from tkinter import messagebox
+        if not queue:
+            messagebox.showinfo("Add to PO", "All items processed.", parent=self.winfo_toplevel())
+            return
+
+        from collections import deque
+        from src.gui.musipos_po_dialog import MusiposPODialog
+
+        order_id, platform, line_item = queue.popleft()
+        musipos_client = getattr(self._window, "musipos_client", None)
+        if musipos_client is None:
+            return
+
+        qty = getattr(line_item, "quantity", 1) or 1
+        product_name = (
+            getattr(line_item, "product_name", None)
+            or getattr(line_item, "title", "")
+            or ""
+        )
+
+        advanced = [False]
+
+        def _advance():
+            if not advanced[0]:
+                advanced[0] = True
+                self.after(0, lambda: self._bulk_po_next(queue))
+
+        def _on_success(po_result):
+            self._bulk_po_write_note(order_id, platform, line_item.sku)
+
+        def _on_note_only():
+            self._bulk_po_write_note(order_id, platform, line_item.sku)
+
+        def _on_cancel():
+            pass
+
+        dialog = MusiposPODialog(
+            self.winfo_toplevel(),
+            neto_sku=line_item.sku,
+            product_name=product_name,
+            order_qty=qty,
+            musipos_client=musipos_client,
+            suppliers_config=self._window.config.suppliers,
+            dry_run=self._window.config.app.dry_run,
+            on_success=_on_success,
+            on_note_only=_on_note_only,
+            on_cancel=_on_cancel,
+        )
+        dialog.protocol("WM_DELETE_WINDOW", lambda: (dialog.destroy(), _advance()))
+        dialog.bind("<Destroy>", lambda e: _advance() if e.widget is dialog else None)
+
+    def _bulk_po_write_note(self, order_id: str, platform: str, sku: str):
+        import threading
+        if platform.lower() == "ebay":
+            return
+        neto_client = self._window.neto_client
+        if not neto_client:
+            return
+        from datetime import date
+        note = f"[{date.today().strftime('%d/%m/%Y')}] {sku} on PO"
+
+        def _work():
+            try:
+                neto_client.add_sticky_note(order_id, title="Item Status", description=note)
+            except Exception:
+                pass
+        threading.Thread(target=_work, daemon=True).start()
 
     # ── Entry point ────────────────────────────────────────────────────────────
 
@@ -614,6 +882,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             sku_alias_manager=self._window.sku_alias_manager,
             suppliers=self._window.config.suppliers,
             musipos_client=getattr(self._window, "musipos_client", None),
+            variation_manager=getattr(self._window, "ebay_variation_manager", None),
         )
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()
@@ -985,7 +1254,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
                 return
             order_id = booking.get("order_id", "")
             booking_date = booking.get("date", "")
-            courier_code = booking.get("courier_code", "")
+            courier_code = booking.get("print_courier_code") or booking.get("courier_code", "")
             label_path = Path(bookings_dir) / "Labels" / booking_date / f"{order_id}.pdf"
             if not label_path.exists():
                 status_lbl.configure(text=f"Label not found:\n{label_path}", fg="red")

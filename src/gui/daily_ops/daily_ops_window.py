@@ -27,11 +27,12 @@ class DailyOpsWindow(ctk.CTkToplevel):
         6. ResultsView   — order list + freight booking        (Phase 2d)
     """
 
-    def __init__(self, master, config, neto_client, ebay_client):
+    def __init__(self, master, config, neto_client, ebay_client, ebay_variation_manager=None):
         super().__init__(master)
         self.config = config
         self.neto_client = neto_client
         self.ebay_client = ebay_client
+        self.ebay_variation_manager = ebay_variation_manager
 
         from src.sku_alias_manager import SkuAliasManager
         self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)

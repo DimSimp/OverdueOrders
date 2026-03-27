@@ -11,13 +11,16 @@ log = logging.getLogger(__name__)
 
 class SkuAliasModal(ctk.CTkToplevel):
     """
-    Modal for SKU management — two tabs:
+    Modal for SKU management — up to three tabs:
 
     Tab 1 "SKU Aliases"
         Create / edit / remove invoice-SKU alias mappings (CSV).
 
     Tab 2 "Rename SKU"
         Rename a product's SKU directly in Neto via the API.
+
+    Tab 3 "eBay Variations"  (only shown when variation_manager is provided)
+        Map eBay item variation specifics strings to their Neto SKUs.
 
     Two modes
     ---------
@@ -43,6 +46,8 @@ class SkuAliasModal(ctk.CTkToplevel):
         suppliers=None,   # list[SupplierConfig] from config
         on_sku_renamed=None,   # callable(old_sku, new_sku) or None
         dry_run: bool = False,
+        variation_manager=None,           # EbayVariationSkuManager or None
+        variation_items=None,             # [(item_id, variation_specifics, title), ...]
     ):
         super().__init__(master)
         self._manager = sku_alias_manager
@@ -51,6 +56,8 @@ class SkuAliasModal(ctk.CTkToplevel):
         self._neto_client = neto_client
         self._on_sku_renamed = on_sku_renamed
         self._dry_run = dry_run
+        self._variation_manager = variation_manager
+        self._variation_items = variation_items or []
 
         # Build supplier option list: display label → supplier name (empty = no supplier)
         self._supplier_options: list[str] = ["— No supplier —"]
@@ -109,6 +116,13 @@ class SkuAliasModal(ctk.CTkToplevel):
 
         self._build_aliases_tab(tab_aliases)
         self._build_rename_tab(tab_rename)
+
+        if self._variation_manager is not None:
+            tab_variations = tabview.add("eBay Variations")
+            self._build_variations_tab(tab_variations)
+            # If this order has variation items, open straight to that tab
+            if self._variation_items:
+                tabview.set("eBay Variations")
 
     # ── Tab 1: SKU Aliases ────────────────────────────────────────────────
 
@@ -774,6 +788,161 @@ class SkuAliasModal(ctk.CTkToplevel):
                 saved += 1
             except Exception as exc:
                 errors.append(f"{sku_upper}: {exc}")
+
+        if errors:
+            messagebox.showerror(
+                "Save Error",
+                "Some mappings could not be saved:\n\n" + "\n".join(errors),
+                parent=self,
+            )
+        else:
+            self.destroy()
+
+
+    # ── Tab 3: eBay Variations ────────────────────────────────────────────
+
+    def _build_variations_tab(self, tab):
+        tab.grid_rowconfigure(0, weight=1)
+        tab.grid_columnconfigure(0, weight=1)
+
+        self._var_scroll = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        self._var_scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        self._var_scroll.grid_columnconfigure(0, weight=1)
+
+        footer = ctk.CTkFrame(tab, fg_color="transparent")
+        footer.grid(row=1, column=0, sticky="ew", padx=0, pady=(8, 4))
+
+        ctk.CTkButton(
+            footer,
+            text="Cancel",
+            width=100,
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray25"),
+            command=self.destroy,
+        ).pack(side="right", padx=(6, 0))
+
+        ctk.CTkButton(
+            footer,
+            text="Save",
+            width=100,
+            command=self._save_variations,
+        ).pack(side="right")
+
+        # Determine which items to show
+        items = list(self._variation_items)
+        if not items and self._mode == "search":
+            # Show all CSV entries in search mode
+            items = [
+                (item_id, specs, "")
+                for item_id, specs, _sku in self._variation_manager.get_all()
+            ]
+
+        self._var_rows: list[tuple[str, str, ctk.StringVar]] = []
+
+        if not items:
+            ctk.CTkLabel(
+                self._var_scroll,
+                text="No eBay variation items to map.",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray50", "gray60"),
+            ).pack(padx=12, pady=20)
+            return
+
+        for item_id, specifics, title in items:
+            self._add_variation_row(item_id, specifics, title)
+
+    def _add_variation_row(self, item_id: str, specifics: str, title: str):
+        existing_sku = self._variation_manager.lookup(item_id, specifics)
+        # None = never looked up; "" = checked, no SKU in listing; "XYZ" = mapped
+
+        frame = ctk.CTkFrame(
+            self._var_scroll,
+            border_width=1,
+            border_color=("gray65", "gray45"),
+            corner_radius=6,
+        )
+        frame.pack(fill="x", padx=4, pady=(0, 8))
+
+        if title:
+            ctk.CTkLabel(
+                frame,
+                text=title[:80],
+                font=ctk.CTkFont(size=11),
+                text_color=("gray45", "gray65"),
+                anchor="w",
+            ).pack(fill="x", padx=10, pady=(8, 2))
+
+        ctk.CTkLabel(
+            frame,
+            text=f"eBay item: {item_id}",
+            font=ctk.CTkFont(size=10),
+            text_color=("gray55", "gray50"),
+            anchor="w",
+        ).pack(fill="x", padx=10, pady=(0, 2))
+
+        ctk.CTkLabel(
+            frame,
+            text=specifics,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w",
+            wraplength=580,
+        ).pack(fill="x", padx=10, pady=(0, 6))
+
+        sku_row = ctk.CTkFrame(frame, fg_color="transparent")
+        sku_row.pack(fill="x", padx=10, pady=(0, 8))
+
+        ctk.CTkLabel(
+            sku_row,
+            text="Neto SKU:",
+            font=ctk.CTkFont(size=12),
+            width=80,
+            anchor="w",
+        ).pack(side="left")
+
+        sku_var = ctk.StringVar(value=existing_sku if existing_sku else "")
+        ctk.CTkEntry(
+            sku_row,
+            textvariable=sku_var,
+            placeholder_text="Enter Neto SKU",
+            font=ctk.CTkFont(size=12),
+            width=200,
+        ).pack(side="left", padx=(0, 10))
+
+        if existing_sku is None:
+            status_text = "Not yet looked up"
+            status_color = ("gray50", "gray60")
+        elif existing_sku == "":
+            status_text = "No SKU in eBay listing"
+            status_color = "orange"
+        else:
+            status_text = f"Current: {existing_sku}"
+            status_color = "green"
+
+        ctk.CTkLabel(
+            sku_row,
+            text=status_text,
+            font=ctk.CTkFont(size=11),
+            text_color=status_color,
+        ).pack(side="left")
+
+        self._var_rows.append((item_id, specifics, sku_var))
+
+    def _save_variations(self):
+        if not getattr(self, "_var_rows", None):
+            self.destroy()
+            return
+
+        errors: list[str] = []
+        saved = 0
+        for item_id, specifics, sku_var in self._var_rows:
+            new_sku = sku_var.get().strip().upper()
+            if not new_sku:
+                continue
+            try:
+                self._variation_manager.save(item_id, specifics, new_sku)
+                saved += 1
+            except Exception as exc:
+                errors.append(f"{specifics[:40]}: {exc}")
 
         if errors:
             messagebox.showerror(

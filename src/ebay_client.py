@@ -46,6 +46,8 @@ class EbayLineItem:
     notes: str = ""                 # PrivateNotes for this specific item
     image_url: str = ""             # Product image URL
     unit_price: float = 0.0         # Price per unit
+    variation_specifics: str = ""   # Raw variation string when no SKU is set on the listing
+                                    # e.g. "Size: Medium Light ·String: 3G - .022"
 
 
 @dataclass
@@ -82,13 +84,18 @@ class EbayAPIError(Exception):
 
 
 class EbayClient:
-    def __init__(self, config: EbayConfig, token_save_callback):
+    def __init__(self, config: EbayConfig, token_save_callback, variation_sku_manager=None):
         """
         token_save_callback(access_token, expires_at, refresh_token=None)
         called after any token exchange or refresh to persist tokens.
+
+        variation_sku_manager: optional EbayVariationSkuManager instance; when
+        provided, variation specifics strings are resolved to real SKUs via the
+        CSV cache and/or Trading API GetItem.
         """
         self._config = config
         self._save_tokens = token_save_callback
+        self._variation_sku_manager = variation_sku_manager
         self._session = requests.Session()
         self.notes_warning: str = ""  # set by _enrich_with_private_notes on failure
 
@@ -282,7 +289,8 @@ class EbayClient:
                 skus, o.buyer_notes,
             )
 
-        # Enrich buyer_notes with PrivateNotes from the Trading API (if credentials configured)
+        # Enrich PrivateNotes from Trading API (also populates variation_specifics
+        # for listings where Fulfillment API returns no SKU/lineItemProperties)
         if self._config.dev_id:
             self._enrich_with_private_notes(orders, date_from, date_to)
         else:
@@ -290,6 +298,11 @@ class EbayClient:
                 "eBay Trading API credentials not configured (dev_id missing) — "
                 "PrivateNotes will not be fetched. Add dev_id to config.json to enable."
             )
+
+        # Resolve variation specifics strings to real SKUs (run after Trading API
+        # enrichment so variation_specifics is populated even when lineItemProperties
+        # was absent from the Fulfillment API response)
+        self._enrich_variation_skus(orders)
 
         log.debug("eBay fetch complete: returning %d orders", len(orders))
         for o in orders:
@@ -328,6 +341,7 @@ class EbayClient:
             date_from = datetime.now() - timedelta(days=60)
             date_to = datetime.now()
             self._enrich_with_private_notes(orders, date_from, date_to)
+        self._enrich_variation_skus(orders)
         return orders
 
     def get_order_status(self, order_id: str) -> str:
@@ -504,6 +518,9 @@ class EbayClient:
         # ItemID → list of TransactionIDs seen (used to correct "0" txn IDs from
         # the Fulfillment API when there is only one transaction for that item).
         txn_ids_by_item: dict[str, list[str]] = {}
+        # (ItemID, TransactionID) → (variation_specifics_str, variation_sku)
+        # Populated from GetMyeBaySelling for variation listings.
+        variation_by_txn: dict[tuple[str, str], tuple[str, str]] = {}
         ns = {"e": _TRADING_NS}
         page = 1
         while True:
@@ -532,6 +549,20 @@ class EbayClient:
                     note = _xml_text(txn, "e:Item/e:PrivateNotes", ns)
                 if item_id and transaction_id and note:
                     notes_by_txn[(item_id, transaction_id)] = note
+
+                # Extract variation specifics for variation listings
+                if item_id and transaction_id:
+                    var_specs: dict[str, str] = {}
+                    for nvl in txn.findall("e:Variation/e:VariationSpecifics/e:NameValueList", ns):
+                        name = _xml_text(nvl, "e:Name", ns)
+                        value = _xml_text(nvl, "e:Value", ns)
+                        if name:
+                            var_specs[name] = value
+                    if var_specs:
+                        var_sku_el = txn.find("e:Variation/e:SKU", ns)
+                        var_sku = (var_sku_el.text or "").strip() if var_sku_el is not None else ""
+                        specs_str = " \u00b7".join(f"{k}: {v}" for k, v in var_specs.items())
+                        variation_by_txn[(item_id, transaction_id)] = (specs_str, var_sku)
 
             # Paginate through SoldList pages
             total_pages_el = root.find(".//e:SoldList/e:PaginationResult/e:TotalNumberOfPages", ns)
@@ -631,6 +662,174 @@ class EbayClient:
                 else:
                     order.buyer_notes = combined
 
+        # Apply variation specifics from the Trading API sold list for items that
+        # have no SKU (Fulfillment API returned empty sku + no lineItemProperties).
+        if variation_by_txn:
+            for order in orders:
+                for li in order.line_items:
+                    if li.sku or li.variation_specifics:
+                        continue  # already resolved
+                    item_id = li.legacy_item_id
+                    txn_id = li.legacy_transaction_id
+                    if not item_id or not txn_id:
+                        continue
+                    var_info = variation_by_txn.get((item_id, txn_id))
+                    if var_info:
+                        specs_str, var_sku = var_info
+                        li.variation_specifics = specs_str
+                        label = _variation_label(specs_str)
+                        if label:
+                            li.title = f"{li.title} [{label}]"
+                        if var_sku:
+                            li.sku = var_sku
+                        log.debug(
+                            "  variation from Trading API sold list: item=%s txn=%s → %r sku=%r",
+                            item_id, txn_id, specs_str, var_sku,
+                        )
+
+        # GetOrders fallback: variation specifics for items still missing SKU/variation
+        empty_sku_order_ids = list(dict.fromkeys(
+            order.order_id
+            for order in orders
+            for li in order.line_items
+            if not li.sku and not li.variation_specifics
+            and li.legacy_item_id and li.legacy_transaction_id
+        ))
+        if empty_sku_order_ids:
+            log.debug(
+                "Variation data: GetOrders fallback for %d orders",
+                len(empty_sku_order_ids),
+            )
+            extra_variations = self._fetch_order_variation_data(empty_sku_order_ids)
+            for order in orders:
+                for li in order.line_items:
+                    if li.sku or li.variation_specifics:
+                        continue
+                    var_info = extra_variations.get(
+                        (li.legacy_item_id, li.legacy_transaction_id)
+                    )
+                    if var_info:
+                        specs_str, var_sku = var_info
+                        li.variation_specifics = specs_str
+                        label = _variation_label(specs_str)
+                        if label:
+                            li.title = f"{li.title} [{label}]"
+                        if var_sku:
+                            li.sku = var_sku
+                        log.debug(
+                            "  variation applied from GetOrders: item=%s txn=%s → %r sku=%r",
+                            li.legacy_item_id, li.legacy_transaction_id, specs_str, var_sku,
+                        )
+
+    def _fetch_item_variations(self, item_id: str) -> list[tuple[dict[str, str], str]]:
+        """
+        Call Trading API GetItem and return [(variation_specifics_dict, sku), ...].
+        variation_specifics_dict maps Name → Value (e.g. {'Size': 'Medium Light', 'String': '3G - .022'}).
+        sku is the variation SKU, or "" if none is set on that variation.
+        """
+        xml_template = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<GetItemRequest xmlns="{_TRADING_NS}">'
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
+            f"<ItemID>{item_id}</ItemID>"
+            "<IncludeVariations>true</IncludeVariations>"
+            "<OutputSelector>Variations</OutputSelector>"
+            "</GetItemRequest>"
+        )
+        ns = {"e": _TRADING_NS}
+        result: list[tuple[dict[str, str], str]] = []
+        try:
+            root = self._call_trading_api(xml_template, "GetItem")
+        except EbayAPIError as exc:
+            log.warning("GetItem variations failed for item %s: %s", item_id, exc)
+            return result
+        for variation in root.findall(".//e:Variations/e:Variation", ns):
+            sku_el = variation.find("e:SKU", ns)
+            var_sku = (sku_el.text or "").strip() if sku_el is not None else ""
+            var_specs: dict[str, str] = {}
+            for nvl in variation.findall("e:VariationSpecifics/e:NameValueList", ns):
+                name = _xml_text(nvl, "e:Name", ns)
+                value = _xml_text(nvl, "e:Value", ns)
+                if name:
+                    var_specs[name] = value
+            result.append((var_specs, var_sku))
+        log.debug(
+            "GetItem %s: %d variations found (%d with SKUs)",
+            item_id, len(result), sum(1 for _, s in result if s),
+        )
+        return result
+
+    def _enrich_variation_skus(self, orders: list[EbayOrder]) -> None:
+        """
+        Resolve variation specifics strings to real Neto SKUs.
+
+        Priority order:
+          1. CSV cache (EbayVariationSkuManager) — instant, no API call
+          2. Trading API GetItem — fetches variation SKUs from the eBay listing;
+             result is saved to the CSV for future fetches
+
+        Line items where variation_specifics is empty are skipped.
+        If a SKU is resolved it replaces li.sku; the title tag applied in
+        _parse_order is preserved regardless.
+        """
+        if self._variation_sku_manager is None:
+            return
+
+        # Group by item_id so we only call GetItem once per listing
+        needs_api: dict[str, list[EbayLineItem]] = {}
+
+        for order in orders:
+            for li in order.line_items:
+                if not li.variation_specifics:
+                    continue
+                cached = self._variation_sku_manager.lookup(
+                    li.legacy_item_id, li.variation_specifics
+                )
+                if cached is not None:
+                    # cached == "" means "tried before, listing has no SKU set"
+                    if cached:
+                        li.sku = cached
+                        log.debug(
+                            "  variation SKU: item=%s %r → %s (CSV cache)",
+                            li.legacy_item_id, li.variation_specifics, cached,
+                        )
+                    continue
+                # Not yet cached — queue for API lookup
+                needs_api.setdefault(li.legacy_item_id, []).append(li)
+
+        if not needs_api:
+            return
+
+        log.debug("Variation SKU: API lookup needed for %d item IDs", len(needs_api))
+
+        for item_id, line_items in needs_api.items():
+            variations = self._fetch_item_variations(item_id)
+
+            for li in line_items:
+                our_specs = _parse_variation_specifics(li.variation_specifics)
+                matched_sku = ""
+                for var_specs, var_sku in variations:
+                    if var_specs == our_specs:
+                        matched_sku = var_sku
+                        break
+
+                if matched_sku:
+                    li.sku = matched_sku
+                    log.debug(
+                        "  variation SKU: item=%s %r → %s (GetItem)",
+                        item_id, li.variation_specifics, matched_sku,
+                    )
+                else:
+                    log.debug(
+                        "  variation SKU: item=%s %r → no SKU in listing",
+                        item_id, li.variation_specifics,
+                    )
+
+                # Save to CSV (empty string if no SKU, to avoid future API calls)
+                self._variation_sku_manager.save(
+                    item_id, li.variation_specifics, matched_sku
+                )
+
     def _get_txn_ids_for_orders(
         self,
         order_ids: list[str],
@@ -683,6 +882,62 @@ class EbayClient:
                 log.debug(
                     "  GetOrders: order=%s (ext=%s) item=%s → txn=%s",
                     legacy_id, ext_id, item_id, txn_id,
+                )
+
+        return result
+
+    def _fetch_order_variation_data(
+        self,
+        order_ids: list[str],
+    ) -> dict[tuple[str, str], tuple[str, str]]:
+        """
+        Use Trading API GetOrders to extract variation specifics per transaction.
+
+        Returns {(item_id, txn_id): (specs_str, var_sku)}.
+        """
+        if not order_ids:
+            return {}
+
+        ns = {"e": _TRADING_NS}
+        order_ids_xml = "".join(f"<OrderID>{oid}</OrderID>" for oid in order_ids)
+        xml_template = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<GetOrdersRequest xmlns="{_TRADING_NS}">'
+            "<RequesterCredentials><eBayAuthToken>{TOKEN}</eBayAuthToken></RequesterCredentials>"
+            f"<OrderIDArray>{order_ids_xml}</OrderIDArray>"
+            "<OrderIDType>Platform</OrderIDType>"
+            "</GetOrdersRequest>"
+        )
+
+        result: dict[tuple[str, str], tuple[str, str]] = {}
+        try:
+            root = self._call_trading_api(xml_template, "GetOrders")
+        except EbayAPIError as exc:
+            log.warning("GetOrders variation data failed: %s", exc)
+            return result
+
+        for order_el in root.findall(".//e:Order", ns):
+            for txn_el in order_el.findall(".//e:Transaction", ns):
+                item_id = _xml_text(txn_el, "e:Item/e:ItemID", ns)
+                txn_id_el = txn_el.find("e:TransactionID", ns)
+                txn_id = (txn_id_el.text or "").strip() if txn_id_el is not None else ""
+                if not item_id or not txn_id:
+                    continue
+                var_specs: dict[str, str] = {}
+                for nvl in txn_el.findall("e:Variation/e:VariationSpecifics/e:NameValueList", ns):
+                    name = _xml_text(nvl, "e:Name", ns)
+                    value = _xml_text(nvl, "e:Value", ns)
+                    if name:
+                        var_specs[name] = value
+                if not var_specs:
+                    continue
+                var_sku_el = txn_el.find("e:Variation/e:SKU", ns)
+                var_sku = (var_sku_el.text or "").strip() if var_sku_el is not None else ""
+                specs_str = " \u00b7".join(f"{k}: {v}" for k, v in var_specs.items())
+                result[(item_id, txn_id)] = (specs_str, var_sku)
+                log.debug(
+                    "  GetOrders variation: item=%s txn=%s → %r sku=%r",
+                    item_id, txn_id, specs_str, var_sku,
                 )
 
         return result
@@ -869,15 +1124,66 @@ class EbayClient:
                 unit_price = float(str(li.get("lineItemCost", {}).get("value", 0) or 0))
             except (ValueError, TypeError):
                 unit_price = 0.0
+
+            sku_raw = str(li.get("sku", "") or "").strip()
+            title = str(li.get("title", "")).strip()
+            variation_specifics = ""
+
+            if _is_variation_specifics(sku_raw):
+                # Legacy path: eBay put variation specifics in the sku field
+                # (middle-dot separated "Name: Value ·Name: Value").
+                variation_specifics = sku_raw
+                sku_raw = ""
+                label = _variation_label(variation_specifics)
+                if label:
+                    title = f"{title} [{label}]"
+            elif not sku_raw:
+                # No SKU — check lineItemProperties for variation specifics.
+                # eBay Fulfillment API returns [{name, value}, ...] here for
+                # variation listings where the seller hasn't set per-variation SKUs.
+                # Log all keys when SKU is empty so we can identify the right field.
+                log.debug(
+                    "  empty SKU on item=%s title=%r — raw li keys: %s",
+                    li.get("legacyItemId", ""), li.get("title", "")[:40],
+                    list(li.keys()),
+                )
+                props = li.get("lineItemProperties", [])
+                if props:
+                    parts = [
+                        f"{p.get('name', '').strip()}: {p.get('value', '').strip()}"
+                        for p in props
+                        if p.get("name") and p.get("value")
+                    ]
+                    if parts:
+                        variation_specifics = " \u00b7".join(parts)
+                        label = _variation_label(variation_specifics)
+                        if label:
+                            title = f"{title} [{label}]"
+                        log.debug(
+                            "  variation specifics from lineItemProperties: item=%s %r",
+                            li.get("legacyItemId", ""), variation_specifics,
+                        )
+                else:
+                    log.debug(
+                        "  no lineItemProperties for item=%s — checking other keys",
+                        li.get("legacyItemId", ""),
+                    )
+                    # Log values of any keys that might contain variation data
+                    for key in li:
+                        val = li[key]
+                        if isinstance(val, (list, dict)) and val:
+                            log.debug("    li[%r] = %r", key, val)
+
             line_items.append(EbayLineItem(
                 line_item_id=str(li.get("lineItemId", "")),
-                sku=str(li.get("sku", "") or "").strip(),
-                title=str(li.get("title", "")).strip(),
+                sku=sku_raw,
+                title=title,
                 quantity=int(li.get("quantity", 1)),
                 legacy_item_id=str(li.get("legacyItemId", "") or ""),
                 legacy_transaction_id=str(li.get("legacyTransactionId", "") or ""),
                 image_url=image_url,
                 unit_price=unit_price,
+                variation_specifics=variation_specifics,
             ))
 
         # Extract shipping address from fulfillmentStartInstructions
@@ -986,6 +1292,32 @@ def _parse_ebay_date(raw: str) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return None
+
+
+def _is_variation_specifics(sku: str) -> bool:
+    """Return True if the SKU field from the Fulfillment API is actually a
+    variation specifics string rather than a real SKU.
+    eBay uses the middle dot (U+00B7) as a separator between specifics pairs.
+    Note: newer eBay API responses use lineItemProperties instead; this handles
+    the legacy case where specifics were packed into the sku field."""
+    return "\u00b7" in sku
+
+
+def _parse_variation_specifics(specifics: str) -> dict[str, str]:
+    """Parse 'Size: Medium Light ·String: 3G - .022' → {'Size': 'Medium Light', 'String': '3G - .022'}."""
+    result: dict[str, str] = {}
+    for part in specifics.split("\u00b7"):
+        part = part.strip()
+        if ": " in part:
+            name, _, value = part.partition(": ")
+            result[name.strip()] = value.strip()
+    return result
+
+
+def _variation_label(specifics: str) -> str:
+    """Extract just the values for display: 'Medium Light / 3G - .022'."""
+    parsed = _parse_variation_specifics(specifics)
+    return " / ".join(parsed.values()) if parsed else ""
 
 
 def _xml_escape(text: str) -> str:

@@ -46,11 +46,15 @@ def add_booking(
     order_id: str = "",
     recipient: str = "",
     extras: dict | None = None,
+    print_courier_code: str = "",
 ) -> None:
     """Append a booking record to today's ledger file.
 
     Args:
         extras: Optional courier-specific data (e.g. shipment_id for AusPost).
+        print_courier_code: Courier code used for label printing when it differs
+            from *courier_code* (e.g. ``"auspost_express"`` vs ``"auspost"``).
+            Stored in the record so reprints use the correct label settings.
     """
     path = _today_file(directory)
     records = _read(path)
@@ -63,6 +67,8 @@ def add_booking(
         "booked_at": datetime.now().isoformat(timespec="seconds"),
         "cancelled": False,
     }
+    if print_courier_code and print_courier_code != courier_code:
+        record["print_courier_code"] = print_courier_code
     if extras:
         record["extras"] = extras
     records.append(record)

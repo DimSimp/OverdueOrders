@@ -995,6 +995,16 @@ class FreightBookingView(ctk.CTkFrame):
                 courier_code = code
                 break
 
+        # AusPost Express has a vertical barcode spanning the full label height — print as single strip
+        _no_split = (
+            courier_code == "auspost"
+            and self._last_request is not None
+            and self._last_request.shipping_type == "Express"
+        )
+        _print_courier_code = "auspost_express" if (
+            courier_code == "auspost" and _no_split
+        ) else courier_code
+
         # Record booking in daily ledger
         bookings_dir = self._shipping_config.bookings_dir
         if bookings_dir and result.tracking_number:
@@ -1013,19 +1023,10 @@ class FreightBookingView(ctk.CTkFrame):
                     order_id=self._order_id,
                     recipient=self._receiver.name,
                     extras=extras if extras else None,
+                    print_courier_code=_print_courier_code,
                 )
             except Exception as exc:
                 log.warning("Failed to record booking in ledger: %s", exc)
-
-        # AusPost Express has a vertical barcode spanning the full label height — print as single strip
-        _no_split = (
-            courier_code == "auspost"
-            and self._last_request is not None
-            and self._last_request.shipping_type == "Express"
-        )
-        _print_courier_code = "auspost_express" if (
-            courier_code == "auspost" and _no_split
-        ) else courier_code
 
         # Always save the latest label for this courier (overwrites previous)
         if result.label_pdf and _print_courier_code:

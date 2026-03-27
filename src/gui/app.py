@@ -36,9 +36,13 @@ class App(ctk.CTk):
 
         # API clients
         self.neto_client = NetoClient(config.neto)
+
+        from src.ebay_variation_sku_manager import EbayVariationSkuManager
+        self.ebay_variation_manager = EbayVariationSkuManager(config.app.ebay_variation_skus_file)
         self.ebay_client = EbayClient(
             config.ebay,
             token_save_callback=config.save_ebay_tokens,
+            variation_sku_manager=self.ebay_variation_manager,
         )
 
         from src.sku_alias_manager import SkuAliasManager
@@ -101,6 +105,7 @@ class App(ctk.CTk):
             config=self.config,
             neto_client=self.neto_client,
             ebay_client=self.ebay_client,
+            ebay_variation_manager=self.ebay_variation_manager,
         )
         win.after(250, self.lower)
 

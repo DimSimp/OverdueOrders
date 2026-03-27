@@ -104,6 +104,7 @@ class AppConfig:
     note_filter_phrases: list = field(default_factory=lambda: ["on po"])
     daily_ops_toggles: dict = field(default_factory=dict)
     sku_aliases_file: str = ""
+    ebay_variation_skus_file: str = ""
 
 
 @dataclass
@@ -223,6 +224,10 @@ class ConfigManager:
             sku_aliases_file=a.get(
                 "sku_aliases_file",
                 r"\\SERVER\Project Folder\Order-Fulfillment-App\Inventory_Reports\sku_mappings.csv",
+            ),
+            ebay_variation_skus_file=a.get(
+                "ebay_variation_skus_file",
+                r"\\SERVER\Project Folder\Order-Fulfillment-App\Inventory_Reports\ebay_variation_skus.csv",
             ),
         )
 

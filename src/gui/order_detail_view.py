@@ -59,6 +59,7 @@ class OrderDetailView(ctk.CTkFrame):
         sku_alias_manager=None,
         suppliers=None,
         musipos_client=None,
+        variation_manager=None,
     ):
         super().__init__(master, fg_color="transparent")
         self._order_id = order_id
@@ -80,6 +81,7 @@ class OrderDetailView(ctk.CTkFrame):
         self._sku_alias_manager = sku_alias_manager
         self._suppliers = suppliers or []
         self._musipos_client = musipos_client
+        self._variation_manager = variation_manager
         self._completed = False
         self._image_refs: list = []
         self._full_images: dict[str, bytes] = {}  # url → raw bytes for enlargement
@@ -269,7 +271,7 @@ class OrderDetailView(ctk.CTkFrame):
         li_header = ctk.CTkFrame(frame, fg_color="transparent")
         li_header.pack(fill="x", padx=10, pady=(8, 4))
         ctk.CTkLabel(li_header, text="Line Items", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
-        if self._sku_alias_manager is not None:
+        if self._sku_alias_manager is not None or self._variation_manager is not None:
             ctk.CTkButton(
                 li_header,
                 text="⚙",
@@ -308,6 +310,15 @@ class OrderDetailView(ctk.CTkFrame):
             items = [(li.sku, li.product_name or "") for li in self._neto_order.line_items]
         elif self._ebay_order:
             items = [(li.sku, li.title or "") for li in self._ebay_order.line_items]
+
+        variation_items = []
+        if self._ebay_order and self._variation_manager:
+            variation_items = [
+                (li.legacy_item_id, li.variation_specifics, li.title or "")
+                for li in self._ebay_order.line_items
+                if li.variation_specifics and li.legacy_item_id
+            ]
+
         SkuAliasModal(
             self,
             sku_alias_manager=self._sku_alias_manager,
@@ -317,6 +328,8 @@ class OrderDetailView(ctk.CTkFrame):
             suppliers=self._suppliers,
             on_sku_renamed=self._on_sku_renamed,
             dry_run=self._dry_run,
+            variation_manager=self._variation_manager,
+            variation_items=variation_items,
         )
 
     def _on_sku_renamed(self, old_sku: str, new_sku: str):

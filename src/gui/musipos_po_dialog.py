@@ -299,7 +299,7 @@ class MusiposPODialog(ctk.CTkToplevel):
         alias_map = self._client.load_kit_mappings()
         _alias_skus = alias_map.get(self._neto_sku.upper().strip(), [])
 
-        # Buttons
+        # Primary action buttons
         btn_row = ctk.CTkFrame(f, fg_color="transparent")
         btn_row.pack(fill="x", pady=(10, 0))
         self._add_btn = ctk.CTkButton(
@@ -314,16 +314,19 @@ class MusiposPODialog(ctk.CTkToplevel):
         ctk.CTkButton(btn_row, text="Cancel", width=80,
                       fg_color="gray50", hover_color="gray40",
                       command=self._cancel).pack(side="left")
-        # Right-side escape hatches (packed right-to-left)
-        ctk.CTkButton(btn_row, text="Not the correct item?", width=150,
+
+        # Escape-hatch buttons on a second row so they are never squashed
+        esc_row = ctk.CTkFrame(f, fg_color="transparent")
+        esc_row.pack(fill="x", pady=(6, 0))
+        ctk.CTkButton(esc_row, text="Not the correct item?", width=160,
                       fg_color="transparent", border_width=1,
                       hover_color=("gray80", "gray25"),
-                      command=lambda: self._transition(_NOT_FOUND)).pack(side="right")
+                      command=lambda: self._transition(_NOT_FOUND)).pack(side="left", padx=(0, 8))
         if _alias_skus:
-            ctk.CTkButton(btn_row, text="Use SKU alias", width=110,
+            ctk.CTkButton(esc_row, text="Choose kit item", width=140,
                           fg_color="transparent", border_width=1,
                           hover_color=("gray80", "gray25"),
-                          command=lambda a=_alias_skus: self._try_alias(a)).pack(side="right", padx=(0, 6))
+                          command=lambda a=_alias_skus: self._try_alias(a)).pack(side="left")
 
     def _decrement_qty(self):
         try:
