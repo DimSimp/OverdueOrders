@@ -52,6 +52,15 @@ class App(ctk.CTk):
         _mc = config.musipos
         self.musipos_client = MusiposClient(_mc) if (_mc and _mc.enabled) else None
 
+        # User system
+        from src.user_manager import UserManager
+        from src.assignment_manager import AssignmentManager
+        self.user_manager = UserManager()
+        self.assignment_manager = AssignmentManager()
+        self._current_user: dict | None = None          # set after login
+        self._processing_order_id: str | None = None   # set when detail view is open
+        self._order_close_callback = None               # registered by OrderDetailView
+
         if startup_session:
             # Direct .scar open — skip home screen, go straight to afternoon ops
             self._setup_afternoon_window()
@@ -59,14 +68,15 @@ class App(ctk.CTk):
             self._start_update_check()
             self.after(200, lambda: self.invoice_tab.load_session_from_path(startup_session))
         else:
-            # Show home screen first
+            # Show login / first-run screen
             self._setup_home_window()
-            self._build_home_screen()
+            self._build_login_screen()
+            self.protocol("WM_DELETE_WINDOW", self._logout_and_exit)
 
     # ── Window size helpers ────────────────────────────────────────────────
 
     def _setup_home_window(self):
-        self.geometry("500x400")
+        self.geometry("500x430")
         self.resizable(False, False)
 
     def _setup_afternoon_window(self):
@@ -75,16 +85,96 @@ class App(ctk.CTk):
         self.minsize(900, 600)
         self.resizable(True, True)
 
+    # ── Login / first-run screen ──────────────────────────────────────────
+
+    def _build_login_screen(self):
+        """Show login or first-run frame depending on whether users exist."""
+        # Clear any existing frame
+        for child in self.winfo_children():
+            child.destroy()
+
+        if not self.user_manager.is_available():
+            self._show_server_unavailable()
+            return
+
+        if self.user_manager.has_any_users():
+            self.geometry("500x430")
+            self.resizable(False, False)
+            from src.gui.login_frame import LoginFrame
+            frame = LoginFrame(self, self.user_manager, self._on_login_success)
+        else:
+            self.geometry("500x560")
+            self.resizable(True, True)
+            from src.gui.first_run_frame import FirstRunFrame
+            frame = FirstRunFrame(self, self.user_manager, self._on_login_success)
+        frame.pack(fill="both", expand=True)
+
+    def _show_server_unavailable(self):
+        """Show a simple error screen when the network share is unreachable."""
+        from src.version import __version__
+        frame = ctk.CTkFrame(self, fg_color="transparent")
+        frame.pack(fill="both", expand=True)
+
+        banner = ctk.CTkFrame(frame, height=70, corner_radius=0, fg_color=("gray85", "gray20"))
+        banner.pack(fill="x", side="top")
+        banner.pack_propagate(False)
+        ctk.CTkLabel(
+            banner,
+            text="Scarlett Music  —  Overdue Orders",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(side="left", padx=24, pady=10)
+        ctk.CTkLabel(
+            banner,
+            text=f"v{__version__}",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        ).pack(side="right", padx=20)
+
+        body = ctk.CTkFrame(frame, fg_color="transparent")
+        body.pack(expand=True)
+        ctk.CTkLabel(
+            body,
+            text="Cannot reach the server.",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=("red3", "#FF6B6B"),
+        ).pack(pady=(0, 8))
+        ctk.CTkLabel(
+            body,
+            text="Make sure you are connected to the network\nand the server is online.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray65"),
+        ).pack(pady=(0, 16))
+        ctk.CTkButton(
+            body,
+            text="Retry",
+            width=120,
+            command=self._build_login_screen,
+        ).pack()
+
+    def _on_login_success(self, user: dict):
+        """Called by LoginFrame / FirstRunFrame after a successful login."""
+        self._current_user = user
+        self._start_heartbeat()
+        self._build_home_screen()
+
     # ── Home screen ───────────────────────────────────────────────────────
 
     def _build_home_screen(self):
+        for child in self.winfo_children():
+            child.destroy()
         from src.gui.home_window import HomeFrame
         self._home_frame = HomeFrame(
             self,
             on_afternoon=self._enter_afternoon_mode,
             on_daily=self._enter_daily_mode,
+            on_settings=self._open_settings,
+            current_user=self._current_user,
         )
         self._home_frame.pack(fill="both", expand=True)
+
+    def _open_settings(self):
+        from src.gui.settings_window import SettingsWindow
+        SettingsWindow(self, self.user_manager, self._current_user)
 
     def _enter_afternoon_mode(self):
         win = ctk.CTkToplevel(self)
@@ -95,7 +185,7 @@ class App(ctk.CTk):
         self._build_ui(container=win)
         self._start_update_check()
         win.after(50, lambda: win.state("zoomed"))
-
+        win.protocol("WM_DELETE_WINDOW", lambda: self._on_workflow_window_close(win))
         win.after(250, self.lower)
 
     def _enter_daily_mode(self):
@@ -106,8 +196,108 @@ class App(ctk.CTk):
             neto_client=self.neto_client,
             ebay_client=self.ebay_client,
             ebay_variation_manager=self.ebay_variation_manager,
+            user_manager=self.user_manager,
+            current_user=self._current_user,
+            assignment_manager=self.assignment_manager,
         )
         win.after(250, self.lower)
+
+    def _on_workflow_window_close(self, win):
+        """Clear processing flag when a workflow window is closed, then destroy it."""
+        if self._current_user and self._processing_order_id:
+            try:
+                self.user_manager.clear_processing_order(self._current_user["username"])
+            except Exception:
+                pass
+            self._processing_order_id = None
+            self._order_close_callback = None
+        win.destroy()
+
+    # ── Logout ───────────────────────────────────────────────────────────────
+
+    def _logout_and_exit(self):
+        """Logout the current user and exit the application."""
+        self._stop_heartbeat()
+        if self._current_user:
+            try:
+                self.user_manager.logout(self._current_user["username"])
+            except Exception:
+                pass
+        self.destroy()
+
+    # ── Heartbeat & polling ──────────────────────────────────────────────────
+
+    def _start_heartbeat(self):
+        self._heartbeat_active = True
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, daemon=True, name="heartbeat"
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self):
+        self._heartbeat_active = False
+
+    def _heartbeat_loop(self):
+        import time
+        while self._heartbeat_active:
+            time.sleep(10)
+            if not self._heartbeat_active or not self._current_user:
+                break
+            username = self._current_user["username"]
+            try:
+                self.user_manager.heartbeat(username)
+            except Exception:
+                pass
+            # Check if we've been displaced from the order we're processing
+            if self._processing_order_id:
+                try:
+                    session = self.user_manager.get_session(username)
+                    if session.get("processing_order_id") != self._processing_order_id:
+                        # Someone took over
+                        taken_by = self.user_manager.get_processing_user(
+                            self._processing_order_id
+                        ) or "another user"
+                        order_id = self._processing_order_id
+                        self._processing_order_id = None
+                        self.after(0, lambda b=taken_by, o=order_id: self._on_processing_taken_over(b, o))
+                except Exception:
+                    pass
+            # Check if we've been force-logged-out from another device
+            try:
+                session = self.user_manager.get_session(username)
+                if session and not session.get("logged_in"):
+                    self._heartbeat_active = False
+                    device = session.get("device_name", "another device")
+                    self.after(0, lambda d=device: self._force_relogin(d))
+            except Exception:
+                pass
+
+    def _on_processing_taken_over(self, taken_by: str, order_id: str):
+        from tkinter import messagebox
+        if self._order_close_callback:
+            try:
+                self._order_close_callback()
+            except Exception:
+                pass
+            self._order_close_callback = None
+        messagebox.showinfo(
+            "Order Taken Over",
+            f"{taken_by} has taken over order #{order_id}.\nYour processing session has been closed.",
+            parent=self,
+        )
+
+    def _force_relogin(self, device: str):
+        from tkinter import messagebox
+        self._stop_heartbeat()
+        self._current_user = None
+        self._processing_order_id = None
+        self._order_close_callback = None
+        messagebox.showwarning(
+            "Logged Out",
+            f"You have been logged out because your account signed in on another device.",
+            parent=self,
+        )
+        self._build_login_screen()
 
     # ── Afternoon Operations UI ───────────────────────────────────────────
 
@@ -139,6 +329,16 @@ class App(ctk.CTk):
         )
         _ver_label.pack(side="right", padx=16, pady=10)
         _ver_label.bind("<Button-3>", lambda e: self._open_dev_console(container))
+        if self._current_user:
+            _u = self._current_user
+            _display = (f"{_u.get('first_name', '')} {_u.get('last_name', '')}".strip()
+                        or _u.get("username", ""))
+            ctk.CTkLabel(
+                header,
+                text=f"👤 {_display}",
+                font=ctk.CTkFont(size=11),
+                text_color=("gray50", "gray60"),
+            ).pack(side="right", padx=(0, 8), pady=10)
 
         # Dry-run banner
         if self.config.app.dry_run:

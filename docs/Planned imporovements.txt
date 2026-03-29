@@ -23,7 +23,8 @@ DAILY OPERATIONS
 - make button colours distinct when preparing picking list
 
 SETTINGS menu
-- Add to launcher menu
 - Include a way to manage users (this will carry over into POS operations)
-- include a way to assign orders to users
 - show users if someone else is currently processing an order
+- add a way to log out/switch user
+- configure Neto API per user, have notes on Neto update according to specific user API
+

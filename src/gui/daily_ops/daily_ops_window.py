@@ -27,12 +27,25 @@ class DailyOpsWindow(ctk.CTkToplevel):
         6. ResultsView   — order list + freight booking        (Phase 2d)
     """
 
-    def __init__(self, master, config, neto_client, ebay_client, ebay_variation_manager=None):
+    def __init__(
+        self,
+        master,
+        config,
+        neto_client,
+        ebay_client,
+        ebay_variation_manager=None,
+        user_manager=None,
+        current_user=None,
+        assignment_manager=None,
+    ):
         super().__init__(master)
         self.config = config
         self.neto_client = neto_client
         self.ebay_client = ebay_client
         self.ebay_variation_manager = ebay_variation_manager
+        self.user_manager = user_manager
+        self.current_user = current_user
+        self.assignment_manager = assignment_manager
 
         from src.sku_alias_manager import SkuAliasManager
         self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)
@@ -61,12 +74,27 @@ class DailyOpsWindow(ctk.CTkToplevel):
                 pass
 
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         # Bring to front and maximise — deferred so the window is fully shown first
         def _raise():
             self.state("zoomed")
             self.lift()
             self.focus_force()
         self.after(50, _raise)
+
+    def _on_close(self):
+        """Clear processing flag (if any) before closing the window."""
+        if self.user_manager and self.current_user:
+            try:
+                self.user_manager.clear_processing_order(self.current_user["username"])
+            except Exception:
+                pass
+        # Notify the parent App so it can clear its own tracking
+        master = self.master
+        if hasattr(master, "_processing_order_id"):
+            master._processing_order_id = None
+            master._order_close_callback = None
+        self.destroy()
 
     # ── Layout ──────────────────────────────────────────────────────────
 
@@ -89,6 +117,16 @@ class DailyOpsWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11),
             text_color=("gray50", "gray60"),
         ).pack(side="right", padx=16, pady=10)
+        if self.current_user:
+            _u = self.current_user
+            _display = (f"{_u.get('first_name', '')} {_u.get('last_name', '')}".strip()
+                        or _u.get("username", ""))
+            ctk.CTkLabel(
+                header,
+                text=f"👤 {_display}",
+                font=ctk.CTkFont(size=11),
+                text_color=("gray50", "gray60"),
+            ).pack(side="right", padx=(0, 8), pady=10)
 
         # Step indicator (right side of header)
         self._step_label = ctk.CTkLabel(

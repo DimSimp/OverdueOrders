@@ -33,6 +33,7 @@ _DAILY_COL_SPEC = {
     "customer":    ("Customer",    170),
     "date":        ("State",        60),
     "shipping":    ("Shipping",     90),
+    "assigned":    ("Assigned",     80),
     "sku":         ("SKU",         130),
     "description": ("Description", 180),
     "qty":         ("Qty",          40),
@@ -64,6 +65,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._window = window
         self._on_back = on_back
+        self._assign_filter = "All"
 
         # Local copies of the order lists (refreshed independently of window)
         self._neto_orders: list = list(window.neto_orders)
@@ -149,6 +151,19 @@ class DailyOpsResultsView(ctk.CTkFrame):
         )
         self._error_label.pack(side="right", padx=(0, 8))
 
+        self._assign_seg = ctk.CTkSegmentedButton(
+            toolbar, values=["All", "Mine", "Unassigned"],
+            command=self._on_assign_filter_change,
+            height=28, font=ctk.CTkFont(size=12),
+        )
+        self._assign_seg.set("All")
+        self._assign_seg.pack(side="right", padx=(0, 12))
+
+        ctk.CTkLabel(
+            toolbar, text="Assign:", font=ctk.CTkFont(size=12),
+            text_color=("gray50", "gray60"),
+        ).pack(side="right", padx=(0, 4))
+
         # ── Tab view ────────────────────────────────────────────────────────
         def _on_tab_change():
             self._on_selection_change()
@@ -172,6 +187,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             context_label="Move to Removed",
             selectable=True,
             on_selection_change=self._on_selection_change,
+            on_assign_request=self._handle_assign_request if self._is_admin() else None,
         )
         self._active_tree.grid(row=0, column=0, sticky="nsew")
 
@@ -189,6 +205,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
             context_label="Move back to Active",
             selectable=True,
             on_selection_change=self._on_selection_change,
+            on_assign_request=self._handle_assign_request if self._is_admin() else None,
         )
         self._removed_tree.grid(row=0, column=0, sticky="nsew")
 
@@ -237,8 +254,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
 
         self._action_assign_btn = ctk.CTkButton(
             self._action_bar, text="Assign to User", width=130, height=28,
-            fg_color="gray50", hover_color="gray50",
-            state="disabled",
+            command=self._bulk_assign,
         )
         self._action_assign_btn.pack(side="left", padx=(0, 6))
 
@@ -270,6 +286,11 @@ class DailyOpsResultsView(ctk.CTkFrame):
             self._action_move_btn.configure(text="Move to Active", state="normal")
             self._action_sent_btn.configure(state="disabled")
             self._action_po_btn.configure(state="disabled")
+        self._action_assign_btn.configure(state="normal" if self._is_admin() else "disabled")
+
+    def _is_admin(self) -> bool:
+        cu = getattr(self._window, "current_user", None)
+        return bool(cu and cu.get("role") == "admin")
 
     def _clear_all_checks(self):
         self._current_tree().clear_checks()
@@ -453,6 +474,96 @@ class DailyOpsResultsView(ctk.CTkFrame):
                 pass
         threading.Thread(target=_work, daemon=True).start()
 
+    # ── Assignment ─────────────────────────────────────────────────────────────
+
+    def _on_assign_filter_change(self, value: str) -> None:
+        self._assign_filter = value
+        self._refresh_tables()
+
+    def _handle_assign_request(self, order_ids: list, platform: str,
+                               single: bool = False, remove: bool = False) -> None:
+        """Handle right-click assign request (single order)."""
+        if remove:
+            am = getattr(self._window, "assignment_manager", None)
+            if am:
+                try:
+                    am.unassign(order_ids)
+                except Exception:
+                    pass
+            self._refresh_all_orders()
+            return
+        self._open_assign_popup(order_ids)
+
+    def _bulk_assign(self) -> None:
+        """Called by 'Assign to User' action bar button."""
+        checked = self._current_tree().get_checked_orders()
+        if not checked:
+            return
+        order_ids = [c["order_id"] for c in checked]
+        self._open_assign_popup(order_ids)
+
+    def _open_assign_popup(self, order_ids: list) -> None:
+        """Show a small popup to pick a user (or unassign) for the given order IDs."""
+        am = getattr(self._window, "assignment_manager", None)
+        um = getattr(self._window, "user_manager", None)
+        cu = getattr(self._window, "current_user", None)
+        if not am or not um or not cu:
+            return
+        try:
+            users = um.get_active_users()
+        except Exception:
+            return
+
+        popup = ctk.CTkToplevel(self.winfo_toplevel())
+        popup.title("Assign Orders")
+        popup.geometry("320x180")
+        popup.resizable(False, False)
+        popup.transient(self.winfo_toplevel())
+        popup.grab_set()
+
+        body = ctk.CTkFrame(popup, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        n = len(order_ids)
+        ctk.CTkLabel(
+            body,
+            text=f"Assign {n} order{'s' if n != 1 else ''} to:",
+            font=ctk.CTkFont(size=13),
+        ).pack(anchor="w", pady=(0, 10))
+
+        user_options = ["— Unassign —"] + [
+            f"{u['first_name']} {u['last_name']}".strip() or u["username"]
+            for u in users
+        ]
+        user_map = {"— Unassign —": ""} | {
+            (f"{u['first_name']} {u['last_name']}".strip() or u["username"]): u["username"]
+            for u in users
+        }
+        sel_var = ctk.StringVar(value=user_options[0])
+        ctk.CTkComboBox(body, variable=sel_var, values=user_options,
+                        state="readonly", height=34).pack(fill="x", pady=(0, 14))
+
+        btn_row = ctk.CTkFrame(body, fg_color="transparent")
+        btn_row.pack(fill="x")
+
+        def _confirm():
+            target_username = user_map.get(sel_var.get(), "")
+            try:
+                if target_username:
+                    am.assign(order_ids, target_username, cu["username"])
+                else:
+                    am.unassign(order_ids)
+            except Exception:
+                pass
+            self._current_tree().clear_checks()
+            self._refresh_all_orders()
+            popup.destroy()
+
+        ctk.CTkButton(btn_row, text="Assign", command=_confirm).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Cancel", fg_color="transparent",
+                      border_width=1, command=popup.destroy).pack(side="left")
+        popup.after(50, popup.lift)
+
     # ── Entry point ────────────────────────────────────────────────────────────
 
     def show(self, initial_removed_ids=None, initial_ungrouped_ids=None):
@@ -527,11 +638,50 @@ class DailyOpsResultsView(ctk.CTkFrame):
         # Register collated groups so _open_detail_view can look them up
         self._collated_groups.update({g.synthetic_id: g for g in coll_groups})
 
+        # Load assignment data once for this build pass
+        _assignments: dict = {}
+        _users_cache: dict = {}
+        _am = getattr(self._window, "assignment_manager", None)
+        _um = getattr(self._window, "user_manager", None)
+        if _am:
+            try:
+                _assignments = _am.get_all_assignments()
+            except Exception:
+                pass
+        if _um:
+            try:
+                _users_cache = {u["username"]: u for u in _um.get_active_users()}
+            except Exception:
+                pass
+
+        def _assigned_label(order_id: str) -> str:
+            a = _assignments.get(order_id, {})
+            u = _users_cache.get(a.get("assigned_to", ""), {})
+            return u.get("first_name", "") or a.get("assigned_to", "")
+
+        # Apply assignment filter
+        _filt = getattr(self, "_assign_filter", "All")
+        if _filt != "All":
+            cu = getattr(self._window, "current_user", None)
+            current_username = cu.get("username", "") if cu else ""
+            def _passes(order_id: str) -> bool:
+                assigned_to = _assignments.get(order_id, {}).get("assigned_to", "")
+                if _filt == "Mine":
+                    return assigned_to == current_username
+                return not assigned_to  # Unassigned
+            neto_singles = [o for o in neto_singles if _passes(o.order_id)]
+            ebay_singles = [o for o in ebay_singles if _passes(o.order_id)]
+            coll_groups = []  # collated groups skipped when filtering by assignment
+
         result = []
         for g in coll_groups:
-            result.append(self._group_dict_for_collated(g))
+            d = self._group_dict_for_collated(g)
+            d["assigned"] = ""  # collated groups don't have a single assignment
+            result.append(d)
         for o in neto_singles + ebay_singles:
-            result.append(self._group_dict_for_single(o))
+            d = self._group_dict_for_single(o)
+            d["assigned"] = _assigned_label(o.order_id)
+            result.append(d)
         return result
 
     def _group_dict_for_collated(self, g) -> dict:
@@ -818,6 +968,9 @@ class DailyOpsResultsView(ctk.CTkFrame):
 
         # Merge shared overrides from other workstations
         self._merge_overrides()
+        # Reset assignment filter on each API refresh
+        self._assign_filter = "All"
+        self._assign_seg.set("All")
         self._refresh_tables()
         self._save_session()
 
@@ -849,6 +1002,26 @@ class DailyOpsResultsView(ctk.CTkFrame):
         if neto_order is None and ebay_order is None:
             self._error_label.configure(text=f"Order {order_id} not found")
             return
+
+        # ── Order conflict check ──────────────────────────────────────────────
+        um = getattr(self._window, "user_manager", None)
+        cu = getattr(self._window, "current_user", None)
+        if um and cu:
+            other = um.get_processing_user(order_id)
+            if other and other != f"{cu.get('first_name','')} {cu.get('last_name','')}".strip():
+                from tkinter import messagebox
+                if not messagebox.askyesno(
+                    "Order In Progress",
+                    f"{other} is currently processing order #{order_id}.\n\nTake over?",
+                    parent=self.winfo_toplevel(),
+                ):
+                    return
+            um.set_processing_order(cu["username"], order_id)
+            # Also track on the root App for heartbeat polling
+            app = getattr(self._window, "master", None)
+            if app and hasattr(app, "_processing_order_id"):
+                app._processing_order_id = order_id
+                app._order_close_callback = self._clear_processing_flag
 
         if self._detail_frame is not None:
             self._detail_frame.destroy()
@@ -887,7 +1060,22 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._detail_frame.grid(row=0, column=0, sticky="nsew")
         self._detail_frame.tkraise()
 
+    def _clear_processing_flag(self):
+        """Clear the order-processing state in UserManager and on the App."""
+        um = getattr(self._window, "user_manager", None)
+        cu = getattr(self._window, "current_user", None)
+        if um and cu:
+            try:
+                um.clear_processing_order(cu["username"])
+            except Exception:
+                pass
+        app = getattr(self._window, "master", None)
+        if app and hasattr(app, "_processing_order_id"):
+            app._processing_order_id = None
+            app._order_close_callback = None
+
     def _close_detail_view(self):
+        self._clear_processing_flag()
         if self._detail_frame is not None:
             self._detail_frame.destroy()
             self._detail_frame = None
@@ -898,6 +1086,13 @@ class DailyOpsResultsView(ctk.CTkFrame):
 
     def _on_fulfilled(self):
         """Called when an order is marked dispatched in the detail view."""
+        if self._last_clicked_order_id:
+            am = getattr(self._window, "assignment_manager", None)
+            if am:
+                try:
+                    am.clear_on_dispatch(self._last_clicked_order_id)
+                except Exception:
+                    pass
         self._close_detail_view()  # already triggers _refresh_all_orders
 
     # ── Collated detail view ───────────────────────────────────────────────────

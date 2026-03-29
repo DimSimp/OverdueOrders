@@ -16,10 +16,12 @@ class HomeFrame(ctk.CTkFrame):
     Shows mode-selection buttons before the user enters a workflow.
     """
 
-    def __init__(self, master, on_afternoon, on_daily, **kwargs):
+    def __init__(self, master, on_afternoon, on_daily, on_settings=None, current_user=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_afternoon = on_afternoon
         self._on_daily = on_daily
+        self._on_settings = on_settings
+        self._current_user = current_user
         self._build_ui()
 
     def _open_dev_console(self):
@@ -47,9 +49,21 @@ class HomeFrame(ctk.CTkFrame):
         ver_label.pack(side="right", padx=20)
         ver_label.bind("<Button-3>", lambda e: self._open_dev_console())
 
+        # Logged-in user name (right of version label)
+        if self._current_user:
+            first = self._current_user.get("first_name", "")
+            last = self._current_user.get("last_name", "")
+            display = f"{first} {last}".strip() or self._current_user.get("username", "")
+            ctk.CTkLabel(
+                banner,
+                text=f"👤 {display}",
+                font=ctk.CTkFont(size=11),
+                text_color=("gray50", "gray60"),
+            ).pack(side="right", padx=(0, 4))
+
         # ── Button area ───────────────────────────────────────────────────
         center = ctk.CTkFrame(self, fg_color="transparent")
-        center.pack(expand=True, fill="both", padx=50, pady=30)
+        center.pack(expand=True, fill="both", padx=50, pady=(20, 10))
 
         ctk.CTkLabel(
             center,
@@ -89,3 +103,18 @@ class HomeFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
             text_color=("gray50", "gray60"),
         ).pack()
+
+        # ── Settings button ───────────────────────────────────────────────
+        if self._on_settings:
+            ctk.CTkButton(
+                center,
+                text="⚙  Settings",
+                font=ctk.CTkFont(size=12),
+                height=32,
+                fg_color="transparent",
+                border_width=1,
+                border_color=("gray60", "gray45"),
+                text_color=("gray40", "gray70"),
+                hover_color=("gray85", "gray25"),
+                command=self._on_settings,
+            ).pack(pady=(14, 0))
