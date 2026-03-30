@@ -13,6 +13,7 @@ class ReceivedItem:
     sku: str
     quantity: float
     supplier: str
+    description: str = ""
 
 
 def download_and_compare(host: str, username: str, password: str,
@@ -45,6 +46,24 @@ def compare_local_files(morning_path: str, afternoon_path: str) -> list[Received
     Uses the same delta logic as the FTP method.
     """
     return _compare_reports(morning_path, afternoon_path)
+
+
+def read_received_csv(path: str) -> list[ReceivedItem]:
+    """Read today's received-items CSV (headers: SKU, Quantity, Description)."""
+    df = pd.read_csv(path)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    results = []
+    for _, row in df.iterrows():
+        try:
+            sku = str(row.get("sku", "")).strip()
+            qty = float(row.get("quantity", 0))
+            desc = str(row.get("description", "")).strip()
+        except (ValueError, TypeError):
+            continue
+        if not sku or sku.lower() == "nan":
+            continue
+        results.append(ReceivedItem(sku=sku, quantity=qty, supplier="", description=desc))
+    return results
 
 
 def _compare_reports(morning_path: str, afternoon_path: str) -> list[ReceivedItem]:

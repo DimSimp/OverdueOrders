@@ -1,30 +1,24 @@
 BOTH OPERATIONS
-- Make QTY text colour green if more than 1
+- add fallback local destination folders for when developing app away from scarlett server
 - When using app to put item on PO, use the SKU being ordered in the note left
 - if last name is "NOLASTNAME", make field blank
 - have notes save/refresh when removing order from list, going back, or marking as sent. This is just in case a user types the message without saving it.
 - show a confirmation that note is updating/has been updated
-- bulk add to PO, mark as sent, assign to user, etc
-- adding kit items to PO has a blank button. it currently lets the user choose which SKU from the kit to add to PO, just needs a label.
-- Pitch idea to Kyal about having his AI invoice parser create a list of received items so we don't have to export Musipos twice daily
+- export picking list based on visible items in tab (useful for creating user-specific pick lists)
+- kick users from an active session if a new one is started
 
 AFTERNOON OPERATIONS
 - fix Bonds couriers label booking
-- add a "dev mode" or debug view so I can keep track of bugs from within the EXE
 - make default date range smaller (1 month)
 
 DAILY OPERATIONS
 - need to add a way to search APIC if item is not found in musipos inventory, ask the user if they want to import it into inventory, and use the SKU to order.
 - add method to update SKU location
-- research if it is possible to show if a user is already processing an order; this may require some kind of user management system
 - refresh order when opening it
-- loading the daily orders current session from the shortcut opens the afternoon session
 - make picking sheet have alternating background colours for each row for easier readability
 - make button colours distinct when preparing picking list
 
 SETTINGS menu
-- Include a way to manage users (this will carry over into POS operations)
-- show users if someone else is currently processing an order
-- add a way to log out/switch user
+- add a "forgot password" feature
 - configure Neto API per user, have notes on Neto update according to specific user API
 

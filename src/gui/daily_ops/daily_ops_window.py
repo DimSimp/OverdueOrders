@@ -37,6 +37,7 @@ class DailyOpsWindow(ctk.CTkToplevel):
         user_manager=None,
         current_user=None,
         assignment_manager=None,
+        on_switch_user=None,
     ):
         super().__init__(master)
         self.config = config
@@ -46,6 +47,7 @@ class DailyOpsWindow(ctk.CTkToplevel):
         self.user_manager = user_manager
         self.current_user = current_user
         self.assignment_manager = assignment_manager
+        self._on_switch_user = on_switch_user
 
         from src.sku_alias_manager import SkuAliasManager
         self.sku_alias_manager = SkuAliasManager(config.app.sku_aliases_file)
@@ -121,12 +123,25 @@ class DailyOpsWindow(ctk.CTkToplevel):
             _u = self.current_user
             _display = (f"{_u.get('first_name', '')} {_u.get('last_name', '')}".strip()
                         or _u.get("username", ""))
+            if self._on_switch_user:
+                ctk.CTkButton(
+                    header,
+                    text="Switch User",
+                    font=ctk.CTkFont(size=11),
+                    height=26, width=96,
+                    fg_color="transparent",
+                    border_width=1,
+                    border_color=("gray60", "gray45"),
+                    text_color=("gray40", "gray70"),
+                    hover_color=("gray85", "gray25"),
+                    command=self._on_switch_user,
+                ).pack(side="right", padx=(0, 8), pady=10)
             ctk.CTkLabel(
                 header,
                 text=f"👤 {_display}",
                 font=ctk.CTkFont(size=11),
                 text_color=("gray50", "gray60"),
-            ).pack(side="right", padx=(0, 8), pady=10)
+            ).pack(side="right", padx=(0, 4), pady=10)
 
         # Step indicator (right side of header)
         self._step_label = ctk.CTkLabel(

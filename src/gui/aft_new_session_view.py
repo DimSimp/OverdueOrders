@@ -12,11 +12,14 @@ from src.neto_client import NetoAPIError
 
 # Neto SalesChannel values covered by each toggle label — kept in sync with orders_tab.py
 _NETO_CHANNEL_MAP: dict[str, list[str]] = {
-    "Website":         ["Website"],
-    "eBay (via Neto)": ["eBay"],
-    "BigW":            ["BigW"],
-    "Kogan":           ["Kogan"],
-    "Amazon":          ["Amazon AU", "Amazon"],
+    "Website":          ["Website"],
+    "eBay (via Neto)":  ["eBay"],
+    "BigW":             ["BigW"],
+    "Kogan":            ["Kogan"],
+    "Amazon":           ["Amazon AU", "Amazon"],
+    "Everydaymarket":   ["Everydaymarket"],
+    "Control Panel":    ["Control Panel"],
+    "Quote":            ["Quote"],
 }
 
 
@@ -151,7 +154,7 @@ class AftNewSessionView(ctk.CTkFrame):
         self._progress_bar.pack(fill="x", pady=(0, 16))
 
         self._inv_status = ctk.CTkLabel(
-            inner, text="Comparing inventory reports…",
+            inner, text="Reading received items…",
             font=ctk.CTkFont(size=13), anchor="w", text_color=("gray50", "gray60"),
         )
         self._inv_status.pack(fill="x", pady=2)
@@ -210,7 +213,7 @@ class AftNewSessionView(ctk.CTkFrame):
         self._progress_panel.pack(fill="both", expand=True)
 
         # Reset progress state
-        self._inv_status.configure(text="Comparing inventory reports…", text_color=("gray50", "gray60"))
+        self._inv_status.configure(text="Reading received items…", text_color=("gray50", "gray60"))
         self._neto_status.configure(text="Neto: waiting…", text_color=("gray50", "gray60"))
         self._ebay_status.configure(text="eBay: waiting…", text_color=("gray50", "gray60"))
         self._progress_error.configure(text="")
@@ -225,49 +228,44 @@ class AftNewSessionView(ctk.CTkFrame):
         threading.Thread(target=self._run_session, daemon=True).start()
 
     def _run_session(self):
-        """Background thread: compare inventory files, then launch order fetch."""
+        """Background thread: read today's received items file, then launch order fetch."""
         from src.session import clear_overrides
         clear_overrides()
 
-        ftp_cfg = self._app.config.ftp
-        if ftp_cfg is None or not ftp_cfg.local_inventory_dir:
-            self.after(0, lambda: self._fatal_error(
-                'Local inventory directory not configured.\n'
-                'Add "local_inventory_dir" to the "ftp" section of config.json.'
-            ))
-            return
+        from datetime import date
+        today = date.today().strftime("%Y-%m-%d")
+        received_dir = self._app.config.app.received_items_dir
+        csv_path = os.path.join(received_dir, f"received_{today}.csv")
 
-        morning_path = os.path.join(ftp_cfg.local_inventory_dir, ftp_cfg.morning_filename)
-        afternoon_path = os.path.join(ftp_cfg.local_inventory_dir, ftp_cfg.afternoon_filename)
-
-        if not os.path.exists(morning_path):
-            self.after(0, lambda: self._fatal_error(f"Morning report not found:\n{morning_path}"))
-            return
-        if not os.path.exists(afternoon_path):
-            self.after(0, lambda: self._fatal_error(f"Afternoon report not found:\n{afternoon_path}"))
+        if not os.path.exists(csv_path):
+            def _no_file():
+                self._inv_status.configure(
+                    text="No received items file for today — proceeding with 0 items.",
+                    text_color="orange",
+                )
+                self._after_inventory([])
+            self.after(0, _no_file)
             return
 
         try:
-            from src.ftp_inventory import compare_local_files
-            received = compare_local_files(morning_path, afternoon_path)
+            from src.ftp_inventory import read_received_csv
+            received = read_received_csv(csv_path)
         except Exception as e:
-            self.after(0, lambda msg=str(e): self._fatal_error(f"Inventory comparison failed:\n{msg}"))
+            self.after(0, lambda msg=str(e): self._fatal_error(f"Failed to read received items:\n{msg}"))
             return
 
-        # Convert to InvoiceItem list
         from src.pdf_parser import InvoiceItem
         items = [
             InvoiceItem(
                 sku=r.sku,
                 sku_with_suffix=r.sku,
-                description="",
+                description=r.description,
                 quantity=max(1, int(r.quantity)),
                 source_page=0,
                 supplier_name=r.supplier,
             )
             for r in received
         ]
-
         self.after(0, lambda i=items: self._after_inventory(i))
 
     def _after_inventory(self, items):

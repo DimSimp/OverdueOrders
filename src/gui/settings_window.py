@@ -24,10 +24,11 @@ class SettingsWindow(ctk.CTkToplevel):
         ("Users", "_build_users_view"),
     ]
 
-    def __init__(self, master, user_manager: "UserManager", current_user: dict, **kwargs) -> None:
+    def __init__(self, master, user_manager: "UserManager", current_user: dict, on_switch_user=None, **kwargs) -> None:
         super().__init__(master, **kwargs)
         self.user_manager = user_manager
         self.current_user = current_user
+        self._on_switch_user = on_switch_user
 
         self.title("Settings")
         self.geometry("720x520")
@@ -61,12 +62,25 @@ class SettingsWindow(ctk.CTkToplevel):
             _u = self.current_user
             _display = (f"{_u.get('first_name', '')} {_u.get('last_name', '')}".strip()
                         or _u.get("username", ""))
+            if self._on_switch_user:
+                ctk.CTkButton(
+                    header,
+                    text="Switch User",
+                    font=ctk.CTkFont(size=11),
+                    height=26, width=96,
+                    fg_color="transparent",
+                    border_width=1,
+                    border_color=("gray60", "gray45"),
+                    text_color=("gray40", "gray70"),
+                    hover_color=("gray85", "gray25"),
+                    command=self._on_switch_user,
+                ).pack(side="right", padx=(0, 12), pady=10)
             ctk.CTkLabel(
                 header,
                 text=f"👤 {_display}",
                 font=ctk.CTkFont(size=11),
                 text_color=("gray50", "gray60"),
-            ).pack(side="right", padx=16, pady=10)
+            ).pack(side="right", padx=(0, 4), pady=10)
 
         # Body — sidebar + content
         body = ctk.CTkFrame(self, fg_color="transparent")

@@ -8,6 +8,8 @@ import customtkinter as ctk
 
 log = logging.getLogger(__name__)
 
+_PICK_ZONES = ["Picks", "Out Front", "Back Area", "String Room"]
+
 
 class SkuAliasModal(ctk.CTkToplevel):
     """
@@ -87,6 +89,15 @@ class SkuAliasModal(ctk.CTkToplevel):
         self._rename_current_sku_lbl: ctk.CTkLabel | None = None
         self._rename_current_name_lbl: ctk.CTkLabel | None = None
 
+        # Location tab state
+        self._loc_current_sku: str | None = None
+        self._loc_zone_var = ctk.StringVar(value=_PICK_ZONES[0])
+        self._loc_status_lbl: ctk.CTkLabel | None = None
+        self._loc_apply_btn: ctk.CTkButton | None = None
+        self._loc_sku_lbl: ctk.CTkLabel | None = None
+        self._loc_name_lbl: ctk.CTkLabel | None = None
+        self._loc_zone_lbl: ctk.CTkLabel | None = None
+
         self.title("SKU Management")
         self.geometry("700x600")
         self.minsize(580, 420)
@@ -113,9 +124,11 @@ class SkuAliasModal(ctk.CTkToplevel):
 
         tab_aliases = tabview.add("SKU Aliases")
         tab_rename = tabview.add("Rename SKU")
+        tab_location = tabview.add("Update Location")
 
         self._build_aliases_tab(tab_aliases)
         self._build_rename_tab(tab_rename)
+        self._build_location_tab(tab_location)
 
         if self._variation_manager is not None:
             tab_variations = tabview.add("eBay Variations")
@@ -438,6 +451,195 @@ class SkuAliasModal(ctk.CTkToplevel):
                 self._on_sku_renamed(old_sku, new_sku)
         else:
             self._rename_status_lbl.configure(text=f"✗ {msg}", text_color="red")
+
+    # ── Tab 4: Update Location ────────────────────────────────────────────
+
+    def _build_location_tab(self, tab):
+        tab.grid_rowconfigure(2, weight=1)
+        tab.grid_columnconfigure(0, weight=1)
+
+        # ── SKU search bar ────────────────────────────────────────────────
+        search_frame = ctk.CTkFrame(tab, fg_color=("gray90", "gray20"), corner_radius=6)
+        search_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 10))
+        search_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            search_frame,
+            text="Neto SKU:",
+            font=ctk.CTkFont(size=13),
+        ).grid(row=0, column=0, padx=(12, 6), pady=10)
+
+        self._loc_search_var = ctk.StringVar()
+        loc_entry = ctk.CTkEntry(
+            search_frame,
+            textvariable=self._loc_search_var,
+            placeholder_text="e.g. 2221CMC",
+            font=ctk.CTkFont(size=13),
+        )
+        loc_entry.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=10)
+        loc_entry.bind("<Return>", lambda _e: self._do_loc_lookup())
+
+        self._loc_lookup_btn = ctk.CTkButton(
+            search_frame,
+            text="Look up",
+            width=90,
+            command=self._do_loc_lookup,
+        )
+        self._loc_lookup_btn.grid(row=0, column=2, padx=(0, 12), pady=10)
+
+        self._loc_lookup_status = ctk.CTkLabel(
+            search_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        )
+        self._loc_lookup_status.grid(row=1, column=0, columnspan=3, padx=12, pady=(0, 8), sticky="w")
+
+        # ── Item details + update form ────────────────────────────────────
+        self._loc_form_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        self._loc_form_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=0)
+        self._loc_form_frame.grid_columnconfigure(1, weight=1)
+
+        _LW = 120  # label width
+
+        ctk.CTkLabel(self._loc_form_frame, text="SKU:", font=ctk.CTkFont(size=12),
+                     width=_LW, anchor="w").grid(row=0, column=0, padx=(4, 8), pady=(8, 2), sticky="w")
+        self._loc_sku_lbl = ctk.CTkLabel(self._loc_form_frame, text="—",
+                                          font=ctk.CTkFont(size=12, weight="bold"), anchor="w")
+        self._loc_sku_lbl.grid(row=0, column=1, pady=(8, 2), sticky="w")
+
+        ctk.CTkLabel(self._loc_form_frame, text="Product Name:", font=ctk.CTkFont(size=12),
+                     width=_LW, anchor="w").grid(row=1, column=0, padx=(4, 8), pady=(2, 2), sticky="w")
+        self._loc_name_lbl = ctk.CTkLabel(self._loc_form_frame, text="",
+                                           font=ctk.CTkFont(size=12),
+                                           text_color=("gray45", "gray65"), anchor="w", wraplength=400)
+        self._loc_name_lbl.grid(row=1, column=1, pady=(2, 2), sticky="w")
+
+        ctk.CTkLabel(self._loc_form_frame, text="Current Zone:", font=ctk.CTkFont(size=12),
+                     width=_LW, anchor="w").grid(row=2, column=0, padx=(4, 8), pady=(2, 10), sticky="w")
+        self._loc_zone_lbl = ctk.CTkLabel(self._loc_form_frame, text="",
+                                           font=ctk.CTkFont(size=12),
+                                           text_color=("gray45", "gray65"), anchor="w")
+        self._loc_zone_lbl.grid(row=2, column=1, pady=(2, 10), sticky="w")
+
+        # Divider
+        ctk.CTkFrame(self._loc_form_frame, height=1,
+                     fg_color=("gray70", "gray40")).grid(row=3, column=0, columnspan=2,
+                                                          sticky="ew", padx=4, pady=(0, 10))
+
+        ctk.CTkLabel(self._loc_form_frame, text="New Pick Zone:", font=ctk.CTkFont(size=12),
+                     width=_LW, anchor="w").grid(row=4, column=0, padx=(4, 8), pady=(0, 6), sticky="w")
+        ctk.CTkOptionMenu(
+            self._loc_form_frame,
+            variable=self._loc_zone_var,
+            values=_PICK_ZONES,
+            font=ctk.CTkFont(size=12),
+            width=180,
+            dynamic_resizing=False,
+        ).grid(row=4, column=1, pady=(0, 6), sticky="w")
+
+        self._loc_apply_btn = ctk.CTkButton(
+            self._loc_form_frame,
+            text="Update Location",
+            width=160,
+            state="disabled",
+            command=self._do_loc_update,
+        )
+        self._loc_apply_btn.grid(row=5, column=0, columnspan=2, pady=(4, 8))
+
+        self._loc_status_lbl = ctk.CTkLabel(
+            self._loc_form_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray50", "gray60"),
+            wraplength=480,
+        )
+        self._loc_status_lbl.grid(row=6, column=0, columnspan=2, padx=4, pady=(0, 4), sticky="w")
+
+        # Spacer
+        ctk.CTkFrame(tab, fg_color="transparent").grid(row=2, column=0, sticky="nsew")
+
+    def _do_loc_lookup(self):
+        sku = self._loc_search_var.get().strip().upper()
+        if not sku:
+            return
+        if not self._neto_client:
+            self._loc_lookup_status.configure(text="No Neto connection available.", text_color="orange")
+            return
+
+        self._loc_lookup_btn.configure(state="disabled")
+        self._loc_lookup_status.configure(text="Looking up…", text_color=("gray50", "gray60"))
+        self._loc_apply_btn.configure(state="disabled")
+
+        def _fetch():
+            try:
+                info = self._neto_client.get_item_location_info(sku)
+            except Exception as exc:
+                log.warning("location tab lookup failed: %s", exc)
+                info = None
+            self.after(0, lambda: self._on_loc_lookup_done(sku, info))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_loc_lookup_done(self, sku: str, info: dict | None):
+        self._loc_lookup_btn.configure(state="normal")
+        if info is None:
+            self._loc_lookup_status.configure(
+                text=f"'{sku}' not found in Neto.", text_color="orange"
+            )
+            self._loc_current_sku = None
+            self._loc_sku_lbl.configure(text="—")
+            self._loc_name_lbl.configure(text="")
+            self._loc_zone_lbl.configure(text="")
+            self._loc_apply_btn.configure(state="disabled")
+            return
+
+        self._loc_lookup_status.configure(text="", text_color=("gray50", "gray60"))
+        self._loc_current_sku = info["sku"]
+        self._loc_sku_lbl.configure(text=info["sku"])
+        self._loc_name_lbl.configure(text=info["name"] or "—")
+        current_zone = info.get("pick_zone", "")
+        self._loc_zone_lbl.configure(text=current_zone or "—")
+        if current_zone in _PICK_ZONES:
+            self._loc_zone_var.set(current_zone)
+        self._loc_apply_btn.configure(state="normal")
+        self._loc_status_lbl.configure(text="")
+
+    def _do_loc_update(self):
+        sku = self._loc_current_sku
+        zone = self._loc_zone_var.get()
+        if not sku:
+            return
+
+        self._loc_apply_btn.configure(state="disabled")
+        self._loc_status_lbl.configure(text="Updating…", text_color=("gray50", "gray60"))
+
+        def _work():
+            try:
+                if self._neto_client:
+                    result = self._neto_client.update_item_pick_zone(sku, zone, dry_run=self._dry_run)
+                    ok = result.get("Ack") in ("Success", "Warning")
+                    if result.get("DryRun"):
+                        msg = f"[DRY RUN] Would set '{sku}' → {zone}"
+                    elif ok:
+                        msg = f"Updated '{sku}' to {zone}"
+                    else:
+                        msg = f"API error: {result}"
+                else:
+                    ok, msg = True, f"[DRY RUN] Would set '{sku}' → {zone}"
+            except Exception as exc:
+                ok, msg = False, str(exc)
+            self.after(0, lambda: self._on_loc_update_done(sku, zone, ok, msg))
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_loc_update_done(self, sku: str, zone: str, success: bool, msg: str):
+        self._loc_apply_btn.configure(state="normal")
+        if success:
+            self._loc_status_lbl.configure(text=f"✓ {msg}", text_color="green")
+            self._loc_zone_lbl.configure(text=zone)
+        else:
+            self._loc_status_lbl.configure(text=f"✗ {msg}", text_color="red")
 
     # ── Search (alias tab, search mode) ───────────────────────────────────
 

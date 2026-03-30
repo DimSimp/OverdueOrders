@@ -168,13 +168,14 @@ class App(ctk.CTk):
             on_afternoon=self._enter_afternoon_mode,
             on_daily=self._enter_daily_mode,
             on_settings=self._open_settings,
+            on_switch_user=self.switch_user,
             current_user=self._current_user,
         )
         self._home_frame.pack(fill="both", expand=True)
 
     def _open_settings(self):
         from src.gui.settings_window import SettingsWindow
-        SettingsWindow(self, self.user_manager, self._current_user)
+        SettingsWindow(self, self.user_manager, self._current_user, on_switch_user=self.switch_user)
 
     def _enter_afternoon_mode(self):
         win = ctk.CTkToplevel(self)
@@ -199,6 +200,7 @@ class App(ctk.CTk):
             user_manager=self.user_manager,
             current_user=self._current_user,
             assignment_manager=self.assignment_manager,
+            on_switch_user=self.switch_user,
         )
         win.after(250, self.lower)
 
@@ -213,7 +215,20 @@ class App(ctk.CTk):
             self._order_close_callback = None
         win.destroy()
 
-    # ── Logout ───────────────────────────────────────────────────────────────
+    # ── Logout / switch user ─────────────────────────────────────────────────
+
+    def switch_user(self):
+        """Log out the current user and return to the login screen."""
+        self._stop_heartbeat()
+        if self._current_user:
+            try:
+                self.user_manager.logout(self._current_user["username"])
+            except Exception:
+                pass
+        self._current_user = None
+        self._processing_order_id = None
+        self._order_close_callback = None
+        self._build_login_screen()
 
     def _logout_and_exit(self):
         """Logout the current user and exit the application."""
@@ -333,12 +348,24 @@ class App(ctk.CTk):
             _u = self._current_user
             _display = (f"{_u.get('first_name', '')} {_u.get('last_name', '')}".strip()
                         or _u.get("username", ""))
+            ctk.CTkButton(
+                header,
+                text="Switch User",
+                font=ctk.CTkFont(size=11),
+                height=26, width=96,
+                fg_color="transparent",
+                border_width=1,
+                border_color=("gray60", "gray45"),
+                text_color=("gray40", "gray70"),
+                hover_color=("gray85", "gray25"),
+                command=self.switch_user,
+            ).pack(side="right", padx=(0, 8), pady=10)
             ctk.CTkLabel(
                 header,
                 text=f"👤 {_display}",
                 font=ctk.CTkFont(size=11),
                 text_color=("gray50", "gray60"),
-            ).pack(side="right", padx=(0, 8), pady=10)
+            ).pack(side="right", padx=(0, 4), pady=10)
 
         # Dry-run banner
         if self.config.app.dry_run:

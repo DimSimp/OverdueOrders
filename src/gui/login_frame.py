@@ -64,15 +64,15 @@ class LoginFrame(ctk.CTkFrame):
         ctk.CTkLabel(form, text="Username", anchor="w").pack(fill="x")
         self._username_var = ctk.StringVar()
         usernames = self._load_usernames()
+        _PLACEHOLDER = "Select user…"
         self._username_combo = ctk.CTkComboBox(
             form,
             variable=self._username_var,
-            values=usernames,
+            values=[_PLACEHOLDER] + usernames,
             state="readonly",
             height=36,
         )
-        if usernames:
-            self._username_var.set(usernames[0])
+        self._username_var.set(_PLACEHOLDER)
         self._username_combo.pack(fill="x", pady=(2, 12))
 
         # Password
@@ -131,7 +131,7 @@ class LoginFrame(ctk.CTkFrame):
     def _do_login(self) -> None:
         username = self._username_var.get().strip()
         password = self._password_var.get()
-        if not username:
+        if not username or username == "Select user…":
             self._status_var.set("Please select a username.")
             return
         if not password:

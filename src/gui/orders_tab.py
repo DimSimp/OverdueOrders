@@ -12,11 +12,14 @@ from src.neto_client import NetoAPIError
 # Neto SalesChannel values covered by each toggle label.
 # Orders from channels NOT listed here are always included.
 _NETO_CHANNEL_MAP: dict[str, list[str]] = {
-    "Website":         ["Website"],
-    "eBay (via Neto)": ["eBay"],
-    "BigW":            ["BigW"],
-    "Kogan":           ["Kogan"],
-    "Amazon":          ["Amazon AU", "Amazon"],
+    "Website":          ["Website"],
+    "eBay (via Neto)":  ["eBay"],
+    "BigW":             ["BigW"],
+    "Kogan":            ["Kogan"],
+    "Amazon":           ["Amazon AU", "Amazon"],
+    "Everydaymarket":   ["Everydaymarket"],
+    "Control Panel":    ["Control Panel"],
+    "Quote":            ["Quote"],
 }
 
 

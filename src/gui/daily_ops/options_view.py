@@ -6,11 +6,14 @@ import customtkinter as ctk
 
 # Mirrors the channel map from orders_tab.py
 _NETO_CHANNEL_MAP: dict[str, list[str]] = {
-    "Website":         ["Website"],
-    "eBay (via Neto)": ["eBay"],
-    "BigW":            ["BigW"],
-    "Kogan":           ["Kogan"],
-    "Amazon":          ["Amazon AU", "Amazon"],
+    "Website":          ["Website"],
+    "eBay (via Neto)":  ["eBay"],
+    "BigW":             ["BigW"],
+    "Kogan":            ["Kogan"],
+    "Amazon":           ["Amazon AU", "Amazon"],
+    "Everydaymarket":   ["Everydaymarket"],
+    "Control Panel":    ["Control Panel"],
+    "Quote":            ["Quote"],
 }
 
 _FILTER_KEYS = ["include_express", "include_click_collect", "ebay_direct"]

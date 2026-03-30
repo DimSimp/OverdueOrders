@@ -16,11 +16,12 @@ class HomeFrame(ctk.CTkFrame):
     Shows mode-selection buttons before the user enters a workflow.
     """
 
-    def __init__(self, master, on_afternoon, on_daily, on_settings=None, current_user=None, **kwargs):
+    def __init__(self, master, on_afternoon, on_daily, on_settings=None, on_switch_user=None, current_user=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_afternoon = on_afternoon
         self._on_daily = on_daily
         self._on_settings = on_settings
+        self._on_switch_user = on_switch_user
         self._current_user = current_user
         self._build_ui()
 
@@ -49,11 +50,24 @@ class HomeFrame(ctk.CTkFrame):
         ver_label.pack(side="right", padx=20)
         ver_label.bind("<Button-3>", lambda e: self._open_dev_console())
 
-        # Logged-in user name (right of version label)
+        # Logged-in user name + switch button (right of version label)
         if self._current_user:
             first = self._current_user.get("first_name", "")
             last = self._current_user.get("last_name", "")
             display = f"{first} {last}".strip() or self._current_user.get("username", "")
+            if self._on_switch_user:
+                ctk.CTkButton(
+                    banner,
+                    text="Switch User",
+                    font=ctk.CTkFont(size=11),
+                    height=26, width=96,
+                    fg_color="transparent",
+                    border_width=1,
+                    border_color=("gray60", "gray45"),
+                    text_color=("gray40", "gray70"),
+                    hover_color=("gray85", "gray25"),
+                    command=self._on_switch_user,
+                ).pack(side="right", padx=(0, 12))
             ctk.CTkLabel(
                 banner,
                 text=f"👤 {display}",

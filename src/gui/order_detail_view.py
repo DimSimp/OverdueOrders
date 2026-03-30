@@ -12,6 +12,7 @@ from PIL import Image, ImageTk
 
 from src.ebay_client import EbayClient, EbayOrder
 from src.neto_client import NetoClient, NetoOrder
+from src.shipping.models import clean_last_name
 
 
 _PLACEHOLDER_SIZE = (50, 50)
@@ -239,7 +240,8 @@ class OrderDetailView(ctk.CTkFrame):
     def _get_address_lines(self) -> list[str]:
         if self._neto_order:
             o = self._neto_order
-            name = f"{o.ship_first_name} {o.ship_last_name}".strip()
+            last = clean_last_name(o.ship_last_name or "")
+            name = f"{o.ship_first_name} {last}".strip()
             return [
                 name,
                 o.ship_company,
@@ -432,7 +434,10 @@ class OrderDetailView(ctk.CTkFrame):
         price_str = f"${price:.2f}" if price else ""
         ctk.CTkLabel(row, text=sku, width=130, anchor="w", wraplength=130).pack(side="left", padx=(0, 6))
         ctk.CTkLabel(row, text=desc, width=260, anchor="w", wraplength=260).pack(side="left", padx=(0, 6))
-        ctk.CTkLabel(row, text=str(qty), width=40, anchor="w").pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            row, text=str(qty), width=40, anchor="w",
+            text_color=("dodgerblue3", "dodgerblue") if qty and qty > 1 else None,
+        ).pack(side="left", padx=(0, 6))
         ctk.CTkLabel(row, text=price_str, width=70, anchor="w").pack(side="left", padx=(0, 6))
         ctk.CTkLabel(
             row, text=arrived, width=60, anchor="w",
@@ -1239,7 +1244,8 @@ class OrderDetailView(ctk.CTkFrame):
         # Extract individual address fields from the order object
         if self._neto_order:
             o = self._neto_order
-            name = f"{o.ship_first_name} {o.ship_last_name}".strip()
+            last = clean_last_name(o.ship_last_name or "")
+            name = f"{o.ship_first_name} {last}".strip()
             company  = o.ship_company or ""
             street1  = o.ship_street1 or ""
             street2  = o.ship_street2 or ""

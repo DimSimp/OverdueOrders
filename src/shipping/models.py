@@ -136,6 +136,18 @@ class BookingResult:
 
 # ── Address extraction helpers ───────────────────────────────────────────────
 
+_NO_LAST_NAME_PATTERNS = {
+    "nolastname", "none", "don't have one", "dont have one",
+}
+
+
+def clean_last_name(last: str) -> str:
+    """Replace common placeholder last names (e.g. NOLASTNAME, none) with '-'."""
+    if last and last.strip().lower() in _NO_LAST_NAME_PATTERNS:
+        return "-"
+    return last
+
+
 def _normalise_streets(street1: str, street2: str) -> tuple:
     """Drop eBay delivery codes (e.g. 'ebay:dq7kkcb') from street1.
 
@@ -150,8 +162,9 @@ def _normalise_streets(street1: str, street2: str) -> tuple:
 def address_from_neto_order(order) -> Address:
     """Build an Address from a NetoOrder instance."""
     s1, s2 = _normalise_streets(order.ship_street1, order.ship_street2)
+    last = clean_last_name(order.ship_last_name or "")
     return Address(
-        name=f"{order.ship_first_name} {order.ship_last_name}".strip(),
+        name=f"{order.ship_first_name} {last}".strip(),
         company=order.ship_company,
         street1=s1,
         street2=s2,

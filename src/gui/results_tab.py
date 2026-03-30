@@ -1058,16 +1058,6 @@ class ResultsTab(ctk.CTkFrame):
         _unmatched_container.grid_rowconfigure(1, weight=1)
         _unmatched_container.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            _unmatched_container,
-            text=(
-                "Neto: 'on PO' orders (paid, undispatched) whose SKUs did not match the invoice.\n"
-                "eBay: all paid, unfulfilled orders whose SKUs did not match the invoice.\n\n"
-                "Right-click an order to move it to the Matched list."
-            ),
-            font=ctk.CTkFont(size=13),
-            justify="left",
-        ).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 4))
 
         self._unmatched_orders_tree = OrderTreeview(
             _unmatched_container,
@@ -1177,7 +1167,9 @@ class ResultsTab(ctk.CTkFrame):
 
     def _on_assign_filter_change(self, value: str) -> None:
         self._assign_filter = value
-        self._populate_matched(self._matched)
+        self._populate_matched(
+            getattr(self._app, "matched_orders", None) or self._matched
+        )
 
     def _handle_assign_request(self, order_ids: list, platform: str,
                                single: bool = False, remove: bool = False) -> None:

@@ -64,6 +64,95 @@ def exclude_phrases(orders: list, phrases: list) -> list:
     return [o for o in orders if id(o) not in matched_ids]
 
 
+_CMC_SUFFIX   = "CMC"   # Supplier suffix that triggers the P0-prefix special case
+_CMC_P0_PREFIX = "P0"   # CMC reschemed their SKUs; older online listings omit this prefix
+
+
+def _find_supplier_config(name: str, suppliers: list):
+    """
+    Return the SupplierConfig whose name matches *name*, or None.
+
+    Handles two forms of match:
+    - Exact (case-insensitive): "Electric Factory" == "ELECTRIC FACTORY"
+    - Prefix (truncated CSV names): "ELECTRI" → "Electric Factory"
+      Only used when the candidate is at least 4 characters.
+    """
+    if not name or not suppliers:
+        return None
+    name_upper = name.upper().strip()
+    for s in suppliers:
+        if s.name.upper() == name_upper:
+            return s
+    if len(name_upper) >= 4:
+        for s in suppliers:
+            if s.name.upper().startswith(name_upper):
+                return s
+    return None
+
+
+def _sku_variants(item: "InvoiceItem", supplier_cfg) -> set:
+    """
+    Return all normalised uppercase SKU keys that should map to *item* in the
+    invoice lookup, implementing three matching passes plus a CMC special case.
+
+    Pass 1 – as-is:
+        The sku_with_suffix produced by the parser (character substitutions +
+        suffix already applied).  This is the standard Neto SKU form.
+
+    Pass 2 – suffix stripped:
+        If sku_with_suffix already ends (or starts, for prepend) with the
+        supplier's suffix, the version *without* the suffix is also registered.
+        Handles orders where the Neto SKU is stored without a suffix.
+        Also catches double-suffix situations (CSV SKU already had the suffix
+        before the parser applied it again).
+
+    Pass 3 – suffix appended:
+        If sku_with_suffix does *not* already carry the suffix, the version
+        *with* the suffix added is also registered.
+        Handles orders whose Neto SKU includes the suffix but the CSV row did not.
+
+    CMC special case:
+        CMC changed their SKU numbering scheme.  Our online listings were set up
+        before the change, so many Neto/eBay SKUs omit the "P0" prefix that
+        appears in CMC's own invoices.  For every variant that starts with "P0",
+        the P0-stripped form (with and without the CMC suffix) is added.
+    """
+    base = item.sku_with_suffix.upper().strip()
+    variants: set = {base}
+
+    if not supplier_cfg or not supplier_cfg.suffix:
+        # No-suffix supplier: also register the raw SKU as a fallback key.
+        variants.add(item.sku.upper().strip())
+        variants.discard("")
+        return variants
+
+    sfx = supplier_cfg.suffix.upper()
+    pos = getattr(supplier_cfg, "suffix_position", "append")
+
+    if pos == "prepend":
+        if base.startswith(sfx):
+            variants.add(base[len(sfx):])       # Pass 2: strip prefix
+        else:
+            variants.add(f"{sfx}{base}")        # Pass 3: add prefix
+    else:
+        if base.endswith(sfx):
+            variants.add(base[:-len(sfx)])      # Pass 2: strip suffix
+        else:
+            variants.add(f"{base}{sfx}")        # Pass 3: add suffix
+
+    # CMC special: strip "P0" from any variant to bridge old/new SKU numbering
+    if sfx == _CMC_SUFFIX:
+        for v in list(variants):
+            if v.startswith(_CMC_P0_PREFIX) and len(v) > len(_CMC_P0_PREFIX):
+                no_p0 = v[len(_CMC_P0_PREFIX):]
+                variants.add(no_p0)
+                if not no_p0.endswith(_CMC_SUFFIX):
+                    variants.add(f"{no_p0}{_CMC_SUFFIX}")
+
+    variants.discard("")
+    return variants
+
+
 def _apply_supplier_transform(raw_sku: str, supplier_name: str, suppliers: list) -> str:
     """
     Apply a supplier's character substitutions and suffix to a raw invoice SKU,
@@ -110,15 +199,24 @@ def match_orders_to_invoice(
         unmatched_inv — invoice items that matched no order
     """
     # Build lookup: normalised SKU → InvoiceItem
+    # Each item is registered under all SKU variants (see _sku_variants docstring):
+    #   Pass 1 – sku_with_suffix as-is
+    #   Pass 2 – suffix stripped (catches orders that store the bare SKU)
+    #   Pass 3 – suffix appended (catches orders that store the suffixed SKU when
+    #             the CSV row did not include it, or when it was double-applied)
+    #   CMC    – P0-prefix stripped variants for old/new CMC SKU numbering
     invoice_lookup: dict[str, InvoiceItem] = {}
     for item in invoice_items:
-        key = item.sku_with_suffix.upper().strip()
-        if key:
-            invoice_lookup[key] = item
+        sup_cfg = _find_supplier_config(item.supplier_name, suppliers or [])
+        for key in _sku_variants(item, sup_cfg):
+            if key and key not in invoice_lookup:
+                invoice_lookup[key] = item
 
     # Build alias lookup: Neto order SKU (upper) → InvoiceItem (via alias file)
     # Raw invoice SKUs from the alias are transformed using the mapping's supplier config
     # (character substitutions + suffix) before being looked up in invoice_lookup.
+    # Because invoice_lookup now holds multiple variant keys per item, even aliases
+    # with bare (unsuffixed) invoice SKUs will resolve correctly.
     alias_lookup: dict[str, InvoiceItem] = {}
     if sku_alias_manager:
         for neto_sku, mapping in sku_alias_manager.get_all().items():
@@ -126,6 +224,10 @@ def match_orders_to_invoice(
             for raw_inv_sku in mapping["invoice_skus"]:
                 final_sku = _apply_supplier_transform(raw_inv_sku, supplier_name, suppliers or [])
                 inv = invoice_lookup.get(final_sku.upper().strip())
+                if not inv:
+                    # Also try the raw form — covers aliases whose invoice SKU matches
+                    # one of the bare-key variants now registered in invoice_lookup.
+                    inv = invoice_lookup.get(raw_inv_sku.upper().strip())
                 if inv:
                     alias_lookup[neto_sku.upper().strip()] = inv
                     break  # use the first alias that matches the current invoice

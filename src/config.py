@@ -105,6 +105,7 @@ class AppConfig:
     daily_ops_toggles: dict = field(default_factory=dict)
     sku_aliases_file: str = ""
     ebay_variation_skus_file: str = ""
+    received_items_dir: str = ""
 
 
 @dataclass
@@ -228,6 +229,10 @@ class ConfigManager:
             ebay_variation_skus_file=a.get(
                 "ebay_variation_skus_file",
                 r"\\SERVER\Project Folder\Order-Fulfillment-App\Inventory_Reports\ebay_variation_skus.csv",
+            ),
+            received_items_dir=a.get(
+                "received_items_dir",
+                r"\\SERVER\Project Folder\Order-Fulfillment-App\Inventory_Reports",
             ),
         )
 

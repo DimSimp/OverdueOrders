@@ -13,6 +13,10 @@ from src.config import NetoConfig
 # Only "Pick" status orders are relevant — staff move orders here when items are on PO
 UNDISPATCHED_STATUSES = ["Pick"]
 
+# Channels that are never "paid" in Neto (school/internal orders) — fetched by DatePlaced
+# instead of DatePaid, with no PaymentStatus filter.
+UNPAID_CHANNELS = ["Control Panel", "Quote"]
+
 # Confirmed field names for this Neto instance.
 # StickyNotes = prominent sticky notes; InternalOrderNotes = regular staff notes.
 NOTES_FIELDS = ["StickyNotes", "InternalOrderNotes", "DeliveryInstruction"]
@@ -109,6 +113,7 @@ class NetoClient:
         Fetch all paid, undispatched orders within the given date range.
         By default, eBay-channel orders are excluded (fetched via the eBay API instead).
         Set include_ebay_channel=True to include them (e.g. when eBay direct API is unavailable).
+        Also fetches Control Panel and Quote orders separately (they have no DatePaid).
         Handles pagination automatically.
         progress_callback(fetched: int, total: int) is called if provided.
         """
@@ -143,6 +148,27 @@ class NetoClient:
                 break
             page += 1
 
+        # Fetch Control Panel / Quote orders separately — they have no DatePaid
+        seen_ids = {o.order_id for o in all_orders}
+        page = 0
+        while True:
+            body = self._build_unpaid_channel_filter(date_from, date_to, page, limit)
+            data = self._post(body)
+            raw_orders = data.get("Order", [])
+            if isinstance(raw_orders, dict):
+                raw_orders = [raw_orders]
+            for raw in raw_orders:
+                order = self._parse_order(raw)
+                if order and order.order_id not in seen_ids:
+                    all_orders.append(order)
+                    seen_ids.add(order.order_id)
+            if len(raw_orders) < limit:
+                break
+            page += 1
+
+        if progress_callback:
+            progress_callback(len(all_orders), len(all_orders))
+
         return all_orders
 
     def _build_filter(
@@ -154,6 +180,22 @@ class NetoClient:
                 "PaymentStatus": "FullyPaid",
                 "DatePaidFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
                 "DatePaidTo": date_to.strftime("%Y-%m-%d 23:59:59"),
+                "OutputSelector": OUTPUT_SELECTOR,
+                "Page": page,
+                "Limit": limit,
+            }
+        }
+
+    def _build_unpaid_channel_filter(
+        self, date_from: datetime, date_to: datetime, page: int, limit: int
+    ) -> dict:
+        """Filter for channels that are never marked as paid (e.g. Control Panel, Quote)."""
+        return {
+            "Filter": {
+                "OrderStatus": UNDISPATCHED_STATUSES,
+                "SalesChannel": UNPAID_CHANNELS,
+                "DatePlacedFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
+                "DatePlacedTo": date_to.strftime("%Y-%m-%d 23:59:59"),
                 "OutputSelector": OUTPUT_SELECTOR,
                 "Page": page,
                 "Limit": limit,
@@ -347,6 +389,32 @@ class NetoClient:
                     "sku": item.get("SKU", "").strip(),
                     "name": str(item.get("Name", "")).strip(),
                     "internal_id": str(item.get("InternalID", "")).strip(),
+                }
+        return None
+
+    def get_item_location_info(self, sku: str) -> dict | None:
+        """Return {sku, name, pick_zone} for a product, or None if not found."""
+        if not sku:
+            return None
+        body = {
+            "Filter": {
+                "SKU": [sku],
+                "OutputSelector": ["SKU", "Name", "PickZone"],
+            }
+        }
+        try:
+            data = self._post_action("GetItem", body, timeout=10)
+        except NetoAPIError:
+            return None
+        items = data.get("Item", [])
+        if isinstance(items, dict):
+            items = [items]
+        for item in items:
+            if str(item.get("SKU", "")).strip().upper() == sku.strip().upper():
+                return {
+                    "sku": item.get("SKU", "").strip(),
+                    "name": str(item.get("Name", "")).strip(),
+                    "pick_zone": str(item.get("PickZone", "")).strip(),
                 }
         return None
 
