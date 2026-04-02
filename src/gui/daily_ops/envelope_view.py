@@ -9,8 +9,15 @@ import customtkinter as ctk
 
 log = logging.getLogger(__name__)
 
+from src.config import SERVER_AVAILABLE, LOCAL_DATA_DIR
 from src.neto_client import NetoOrder
 from src.ebay_client import EbayOrder
+
+_SERVER_ENVELOPES_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Envelopes"
+_ENVELOPES_DIR = (
+    _SERVER_ENVELOPES_DIR if SERVER_AVAILABLE
+    else str(LOCAL_DATA_DIR / "envelopes")
+)
 
 def _find_sumatra() -> str | None:
     """Return path to SumatraPDF.exe, or None if not found."""
@@ -489,7 +496,7 @@ class EnvelopePDFView(ctk.CTkFrame):
         self._on_complete = on_complete
         self._on_back = on_back
         self._pdf_paths: dict[str, str | None] = {"minilope": None, "devilope": None}
-        self._output_dir: str = r"\\SERVER\Project Folder\Order-Fulfillment-App\Envelopes"
+        self._output_dir: str = _ENVELOPES_DIR
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────
@@ -604,7 +611,7 @@ class EnvelopePDFView(ctk.CTkFrame):
             for oid, label in self._window.envelope_classifications.items()
             if label in ("minilope", "devilope")
         }
-        output_dir = r"\\SERVER\Project Folder\Order-Fulfillment-App\Envelopes"
+        output_dir = _ENVELOPES_DIR
         self._output_dir = output_dir
         return generate_envelope_pdfs(all_orders, classifications, output_dir)
 
@@ -642,7 +649,7 @@ class EnvelopePDFView(ctk.CTkFrame):
     # ── PDF actions ───────────────────────────────────────────────────────
 
     def _open_folder(self):
-        folder = getattr(self, "_output_dir", None) or r"\\SERVER\Project Folder\Order-Fulfillment-App\Envelopes"
+        folder = getattr(self, "_output_dir", None) or _ENVELOPES_DIR
         import subprocess
         subprocess.Popen(["explorer", folder])
 

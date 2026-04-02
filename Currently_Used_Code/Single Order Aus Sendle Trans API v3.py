@@ -2822,8 +2822,8 @@ transport = Transport(session=session)
 
 #######NEED TO UNCOMMENT BELOW IN PROD
 
-wsdl = 'http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS?wsdl'
-# wsdl = 'http://triton.alliedexpress.com.au:8080/ttws-ejb/TTWS'
+wsdl = 'https://neptune.alliedexpress.com.au:8443/ttws-ejb/TTWS?wsdl'
+# wsdl = 'https://triton.alliedexpress.com.au:8443/ttws-ejb/TTWS'
 allied_failed = ''
 
 try:
@@ -2831,7 +2831,7 @@ try:
 
     allied_client.transport.session.proxies = {
         # Utilize for all http/https connections
-        'http': 'http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS', }
+        'https': 'https://neptune.alliedexpress.com.au:8443/ttws-ejb/TTWS', }
     allied_account = allied_client.service.getAccountDefaults('755cf13abb3934695f03bd4a75cfbca7', "SCAMUS", "VIC",
                                                               "AOE")
 
@@ -6623,14 +6623,14 @@ Enter Response:''')
         history = HistoryPlugin()
         session = Session()
         transport = Transport(session=session)
-        wsdl = 'http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS?wsdl'
+        wsdl = 'https://neptune.alliedexpress.com.au:8443/ttws-ejb/TTWS?wsdl'
 
         try:
             allied_client = zeep.Client(wsdl=wsdl, transport=transport, plugins=[history])
 
             allied_client.transport.session.proxies = {
                 # Utilize for all http/https connections
-                'http': 'http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS', }
+                'https': 'https://neptune.alliedexpress.com.au:8443/ttws-ejb/TTWS', }
             allied_account = allied_client.service.getAccountDefaults('755cf13abb3934695f03bd4a75cfbca7', "SCAMUS",
                                                                       "VIC",
                                                                       "AOE")

@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from src.config import SERVER_AVAILABLE, LOCAL_DATA_DIR
 from src.data_processor import MatchedOrder
 from src.ebay_client import EbayLineItem, EbayOrder
 from src.neto_client import NetoLineItem, NetoOrder
@@ -14,7 +15,11 @@ from src.pdf_parser import InvoiceItem
 
 SNAPSHOT_VERSION = 1
 
-AFTERNOON_SESSION_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Session\Afternoon"
+_SERVER_AFTERNOON_SESSION_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Session\Afternoon"
+AFTERNOON_SESSION_DIR = (
+    _SERVER_AFTERNOON_SESSION_DIR if SERVER_AVAILABLE
+    else str(LOCAL_DATA_DIR / "sessions" / "afternoon")
+)
 AFTERNOON_SESSION_FILE = "CURRENT AFTERNOON SESSION.scar"
 AFTERNOON_OVERRIDES_FILE = "AFTERNOON OVERRIDES.json"
 

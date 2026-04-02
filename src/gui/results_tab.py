@@ -15,9 +15,14 @@ import customtkinter as ctk
 from src.data_processor import MatchedOrder, match_orders_to_invoice
 from src.exporter import export_to_xlsx
 from src.gui.order_detail_view import OrderDetailView
+from src.config import SERVER_AVAILABLE, LOCAL_DATA_DIR
 from src.pdf_parser import InvoiceItem
 
-_AFTERNOON_PICKLIST_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Picking Lists\Afternoon"
+_SERVER_AFTERNOON_PICKLIST_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Picking Lists\Afternoon"
+_AFTERNOON_PICKLIST_DIR = (
+    _SERVER_AFTERNOON_PICKLIST_DIR if SERVER_AVAILABLE
+    else str(LOCAL_DATA_DIR / "picking_lists" / "afternoon")
+)
 
 
 def _resolve_save_dir(preferred: str, fallback: str) -> str:
@@ -1371,6 +1376,7 @@ class ResultsTab(ctk.CTkFrame):
         """Open MusiposPODialog for the next item in the queue."""
         if not queue:
             messagebox.showinfo("Add to PO", "All items processed.", parent=self.winfo_toplevel())
+            self._refresh_matched_orders()
             return
 
         from collections import deque
@@ -1396,10 +1402,12 @@ class ResultsTab(ctk.CTkFrame):
                 self.after(0, lambda: self._bulk_po_next(queue))
 
         def _on_success(po_result):
-            self._bulk_po_write_note(order_id, platform, line_item.sku)
+            sku = po_result.get("resolved_sku") or line_item.sku
+            self._bulk_po_write_note(order_id, platform, sku, line_item)
 
-        def _on_note_only():
-            self._bulk_po_write_note(order_id, platform, line_item.sku)
+        def _on_note_only(resolved_sku=None):
+            sku = resolved_sku or line_item.sku
+            self._bulk_po_write_note(order_id, platform, sku, line_item)
 
         def _on_cancel():
             pass
@@ -1419,22 +1427,45 @@ class ResultsTab(ctk.CTkFrame):
         dialog.protocol("WM_DELETE_WINDOW", lambda: (dialog.destroy(), _advance()))
         dialog.bind("<Destroy>", lambda e: _advance() if e.widget is dialog else None)
 
-    def _bulk_po_write_note(self, order_id: str, platform: str, sku: str):
-        """Fire-and-forget: add '{sku} on PO' sticky note to a Neto order."""
+    def _bulk_po_write_note(self, order_id: str, platform: str, sku: str, line_item=None):
+        """Fire-and-forget: add '{sku} on PO' note to a Neto or eBay order."""
+        from datetime import date
+        dry_run = self._app.config.app.dry_run
+        note_text = f"{sku} on PO"
+
         if platform.lower() == "ebay":
+            ebay_client = self._app.ebay_client
+            if not ebay_client or line_item is None:
+                return
+            item_id = getattr(line_item, "legacy_item_id", "")
+            txn_id = getattr(line_item, "legacy_transaction_id", "")
+            if not item_id:
+                return
+
+            def _ebay_work():
+                try:
+                    ebay_client.set_private_notes(
+                        item_id=item_id,
+                        transaction_id=txn_id,
+                        note_text=note_text[:255],
+                        dry_run=dry_run,
+                    )
+                except Exception:
+                    pass
+            threading.Thread(target=_ebay_work, daemon=True).start()
             return
+
         neto_client = self._app.neto_client
         if not neto_client:
             return
-        from datetime import date
-        note = f"[{date.today().strftime('%d/%m/%Y')}] {sku} on PO"
+        dated_note = f"[{date.today().strftime('%d/%m/%Y')}] {note_text}"
 
-        def _work():
+        def _neto_work():
             try:
-                neto_client.add_sticky_note(order_id, title="Item Status", description=note)
+                neto_client.add_sticky_note(order_id, title="Item Status", description=dated_note, dry_run=dry_run)
             except Exception:
                 pass
-        threading.Thread(target=_work, daemon=True).start()
+        threading.Thread(target=_neto_work, daemon=True).start()
 
     # ── Public ────────────────────────────────────────────────────────────
 

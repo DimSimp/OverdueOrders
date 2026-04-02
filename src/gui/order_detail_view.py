@@ -17,6 +17,29 @@ from src.shipping.models import clean_last_name
 
 _PLACEHOLDER_SIZE = (50, 50)
 
+# Colour palette for order status badges
+_STATUS_COLORS: dict[str, tuple[str, str]] = {
+    "New":                ("#16a085", "white"),
+    "Pick":               ("#2980b9", "white"),
+    "Pack":               ("#8e44ad", "white"),
+    "Pending Dispatch":   ("#f39c12", "white"),
+    "Pending Pickup":     ("#2980b9", "white"),
+    "Dispatched":         ("#27ae60", "white"),
+    "On Hold":            ("#e67e22", "white"),
+    "Uncommitted":        ("gray55",  "white"),
+    "New Backorder":      ("#c0392b", "white"),
+    "Backorder Approved": ("#e67e22", "white"),
+    "Cancelled":          ("gray50",  "white"),
+    # eBay human-readable (after mapping)
+    "Awaiting Dispatch":  ("#2980b9", "white"),
+    "In Progress":        ("#8e44ad", "white"),
+}
+_EBAY_STATUS_DISPLAY: dict[str, str] = {
+    "NOT_STARTED": "Awaiting Dispatch",
+    "IN_PROGRESS":  "In Progress",
+    "FULFILLED":    "Dispatched",
+}
+
 _SHIPPING_METHODS = [
     "Allied Express",
     "Aramex",
@@ -134,6 +157,29 @@ class OrderDetailView(ctk.CTkFrame):
                 text_color="red", wraplength=700,
             ).pack(padx=20, pady=20)
 
+    # ── Status helpers ────────────────────────────────────────────────────
+
+    def _get_status_display(self) -> tuple[str, str, str]:
+        """Return (display_text, fg_color, text_color) for the status badge."""
+        if self._neto_order:
+            text = self._neto_order.status or ""
+        elif self._ebay_order:
+            text = _EBAY_STATUS_DISPLAY.get(
+                self._ebay_order.order_status, self._ebay_order.order_status or ""
+            )
+        else:
+            return "", "gray50", "white"
+        fg, tc = _STATUS_COLORS.get(text, ("gray55", "white"))
+        return text, fg, tc
+
+    def _is_terminal_status(self) -> bool:
+        """True if the order is dispatched or cancelled (no further action needed)."""
+        if self._neto_order:
+            return self._neto_order.status in ("Dispatched", "Cancelled")
+        if self._ebay_order:
+            return self._ebay_order.order_status == "FULFILLED"
+        return False
+
     # ── Header ────────────────────────────────────────────────────────────
 
     def _build_header(self, parent):
@@ -163,7 +209,16 @@ class OrderDetailView(ctk.CTkFrame):
             fg_color=("dodgerblue3", "dodgerblue4"),
             corner_radius=4,
             text_color="white",
-        ).pack(side="left", padx=(0, 12), ipadx=6, ipady=2)
+        ).pack(side="left", padx=(0, 8), ipadx=6, ipady=2)
+
+        # Status badge
+        status_text, status_fg, status_tc = self._get_status_display()
+        if status_text:
+            ctk.CTkLabel(
+                frame, text=status_text,
+                font=ctk.CTkFont(size=12),
+                fg_color=status_fg, corner_radius=4, text_color=status_tc,
+            ).pack(side="left", padx=(0, 12), ipadx=6, ipady=2)
 
         customer = ""
         date_str = ""
@@ -544,8 +599,8 @@ class OrderDetailView(ctk.CTkFrame):
         def _on_success(po_result):
             self._on_po_added(line_item, po_result, btn, status_lbl)
 
-        def _on_note_only():
-            self._on_po_note_only(line_item, btn, status_lbl)
+        def _on_note_only(resolved_sku=None):
+            self._on_po_note_only(line_item, btn, status_lbl, resolved_sku=resolved_sku)
 
         def _on_dialog_close():
             # Re-enable if dialog was closed without completing
@@ -615,7 +670,7 @@ class OrderDetailView(ctk.CTkFrame):
 
     def _on_po_added(self, line_item, po_result, btn, status_lbl):
         """Called after successful PO addition — add the order note."""
-        note_text = f"{line_item.sku} on PO"
+        note_text = f"{po_result.get('resolved_sku') or line_item.sku} on PO"
         self._add_order_note(note_text, line_item=line_item)
         suffix = " [DRY RUN]" if self._dry_run else ""
         status_lbl.configure(
@@ -624,9 +679,9 @@ class OrderDetailView(ctk.CTkFrame):
         btn.configure(text="On PO ✓")
         # Keep button disabled (greyed) — already added
 
-    def _on_po_note_only(self, line_item, btn, status_lbl):
+    def _on_po_note_only(self, line_item, btn, status_lbl, resolved_sku=None):
         """User chose note-only — add the order note and keep button inactive."""
-        note_text = f"{line_item.sku} on PO"
+        note_text = f"{resolved_sku or line_item.sku} on PO"
         self._add_order_note(note_text, line_item=line_item)
         status_lbl.configure(text="✓ Note added", text_color="green")
         btn.configure(text="On PO ✓")
@@ -1035,6 +1090,23 @@ class OrderDetailView(ctk.CTkFrame):
         self._carrier_combo.set("")  # Blank default
         self._carrier_combo.pack(side="left")
 
+        # Pre-fill tracking info if already dispatched
+        existing_tracking = ""
+        existing_carrier = ""
+        if self._neto_order:
+            existing_tracking = self._neto_order.tracking_number
+            existing_carrier = self._neto_order.tracking_carrier
+        elif self._ebay_order:
+            existing_tracking = self._ebay_order.tracking_number
+            existing_carrier = self._ebay_order.tracking_carrier
+        if existing_tracking:
+            self._tracking_entry.insert(0, existing_tracking)
+        if existing_carrier:
+            self._carrier_combo.set(existing_carrier)
+        if self._is_terminal_status():
+            self._tracking_entry.configure(state="disabled")
+            self._carrier_combo.configure(state="disabled")
+
     # ── Freight Placeholder ───────────────────────────────────────────────
 
     def _handle_book_freight(self):
@@ -1084,28 +1156,34 @@ class OrderDetailView(ctk.CTkFrame):
         bar = ctk.CTkFrame(parent, fg_color="transparent")
         bar.pack(fill="x", padx=8, pady=(8, 16))
 
-        self._send_btn = ctk.CTkButton(
-            bar, text="Mark as Sent", width=140, height=36,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color=("green3", "green4"), hover_color=("green4", "green3"),
-            command=self._mark_as_sent,
-        )
-        self._send_btn.pack(side="left", padx=(0, 12))
+        terminal = self._is_terminal_status()
 
-        # Neto local pickup orders can also be marked as "Pending Pickup"
-        is_local_pickup = (
-            self._neto_order is not None
-            and getattr(self._neto_order, "shipping_type", "") == "Local Pickup"
-        )
-        if is_local_pickup:
-            self._pickup_btn = ctk.CTkButton(
-                bar, text="Pending Pickup", width=150, height=36,
+        if not terminal:
+            self._send_btn = ctk.CTkButton(
+                bar, text="Mark as Sent", width=140, height=36,
                 font=ctk.CTkFont(size=14, weight="bold"),
-                fg_color=("#2980b9", "#1a5f8a"), hover_color=("#2471a3", "#154f73"),
-                command=self._mark_as_pending_pickup,
+                fg_color=("green3", "green4"), hover_color=("green4", "green3"),
+                command=self._mark_as_sent,
             )
-            self._pickup_btn.pack(side="left", padx=(0, 12))
+            self._send_btn.pack(side="left", padx=(0, 12))
+
+            # Neto local pickup orders can also be marked as "Pending Pickup"
+            is_local_pickup = (
+                self._neto_order is not None
+                and getattr(self._neto_order, "shipping_type", "") == "Local Pickup"
+            )
+            if is_local_pickup:
+                self._pickup_btn = ctk.CTkButton(
+                    bar, text="Pending Pickup", width=150, height=36,
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    fg_color=("#2980b9", "#1a5f8a"), hover_color=("#2471a3", "#154f73"),
+                    command=self._mark_as_pending_pickup,
+                )
+                self._pickup_btn.pack(side="left", padx=(0, 12))
+            else:
+                self._pickup_btn = None
         else:
+            self._send_btn = None
             self._pickup_btn = None
 
         if self._on_move_to_unmatched:
@@ -1198,7 +1276,8 @@ class OrderDetailView(ctk.CTkFrame):
             self._completed = True
             if self._pickup_btn:
                 self._pickup_btn.configure(state="disabled", text="PENDING PICKUP", fg_color="gray50")
-            self._send_btn.configure(state="disabled")
+            if self._send_btn:
+                self._send_btn.configure(state="disabled")
             if self._dry_run:
                 self._status_label.configure(text="[DRY RUN] Marked as Pending Pickup", text_color="orange")
             else:
@@ -1225,7 +1304,8 @@ class OrderDetailView(ctk.CTkFrame):
         self._status_label.configure(
             text="⚠ This order has already been completed", text_color="orange"
         )
-        self._send_btn.configure(state="disabled")
+        if self._send_btn:
+            self._send_btn.configure(state="disabled")
 
     # ── Helpers ───────────────────────────────────────────────────────────
 

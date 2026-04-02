@@ -10,8 +10,10 @@ from src.shipping.models import BookingResult, Quote, ShipmentRequest, next_busi
 
 log = logging.getLogger("courier.allied")
 
-WSDL_URL = "http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS?wsdl"
-PROXY_URL = "http://neptune.alliedexpress.com.au:8080/ttws-ejb/TTWS"
+# NOTE: Switched from http:8080 → https:8443 on 2026-03-31 per Allied Express notice
+# enforcing HTTPS from 27 Apr 2026. Port 8443 confirmed via coworker's working code.
+WSDL_URL = "https://neptune.alliedexpress.com.au:8443/ttws-ejb/TTWS?wsdl"
+PROXY_URL = "https://neptune.alliedexpress.com.au:8443/ttws-ejb/TTWS"
 
 # Markup: 26.9% margin + 10% GST (from legacy code)
 MARKUP_FACTOR = 1.269 * 1.1
@@ -42,15 +44,24 @@ class AlliedCourier(BaseCourier):
 
     def _create_client(self, with_history: bool = False):
         """Create a zeep SOAP client.  Returns (client, history_plugin | None)."""
+        import urllib3
         import zeep
         from zeep.transports import Transport
         from zeep.plugins import HistoryPlugin
 
+        # Allied Express uses a certificate chain that Python cannot verify locally.
+        # SSL verification is disabled for this client only; the connection is still
+        # encrypted over HTTPS. Suppress the resulting urllib3 warning.
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
         history = HistoryPlugin() if with_history else None
         plugins = [history] if history else []
         transport = Transport(timeout=15, operation_timeout=15)
+        transport.session.verify = False
         client = zeep.Client(wsdl=WSDL_URL, transport=transport, plugins=plugins)
-        client.transport.session.proxies = {"http": PROXY_URL}
+        # The WSDL specifies an internal Allied host (aex.aeportal:8080) as the service
+        # endpoint. Override it to use the public HTTPS address instead.
+        client.service._binding_options["address"] = PROXY_URL
         return client, history
 
     def _build_job(self, request: ShipmentRequest, account):

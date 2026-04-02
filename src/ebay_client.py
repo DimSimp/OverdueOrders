@@ -73,6 +73,9 @@ class EbayOrder:
     shipping_cost: float = 0.0
     shipping_method: str = ""
     shipping_type: str = ""  # "Express", "Regular", "Local Pickup", or ""
+    # Tracking (populated for fulfilled orders)
+    tracking_number: str = ""
+    tracking_carrier: str = ""
 
 
 class EbayAuthError(Exception):
@@ -312,23 +315,33 @@ class EbayClient:
         return orders
 
     def get_orders_by_ids(self, order_ids: list[str]) -> list[EbayOrder]:
-        """Fetch specific orders by ID. Returns only paid, unfulfilled orders."""
+        """Fetch specific orders by ID. Returns only paid, unfulfilled orders.
+
+        eBay's Fulfillment API accepts at most 50 order IDs per request, so
+        larger lists are automatically split into batches.
+        """
         if not order_ids:
             return []
         token = self._ensure_valid_token()
-        resp = self._session.get(
-            f"{self._api_base}/sell/fulfillment/v1/order",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
-                "Content-Type": "application/json",
-            },
-            params={"orderIds": ",".join(order_ids)},
-            timeout=30,
-        )
-        self._raise_for_ebay_error(resp)
-        data = resp.json()
-        raw_orders = data.get("orders", [])
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
+            "Content-Type": "application/json",
+        }
+
+        _BATCH_SIZE = 50
+        raw_orders: list = []
+        for i in range(0, len(order_ids), _BATCH_SIZE):
+            batch = order_ids[i: i + _BATCH_SIZE]
+            resp = self._session.get(
+                f"{self._api_base}/sell/fulfillment/v1/order",
+                headers=headers,
+                params={"orderIds": ",".join(batch)},
+                timeout=30,
+            )
+            self._raise_for_ebay_error(resp)
+            raw_orders.extend(resp.json().get("orders", []))
+
         filtered = [
             o for o in raw_orders
             if o.get("orderPaymentStatus") == "PAID"
@@ -341,6 +354,95 @@ class EbayClient:
             date_from = datetime.now() - timedelta(days=60)
             date_to = datetime.now()
             self._enrich_with_private_notes(orders, date_from, date_to)
+        self._enrich_variation_skus(orders)
+        return orders
+
+    def search_orders(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        fulfillment_statuses: list[str] | None = None,
+        enrich_notes: bool = False,
+        progress_callback=None,
+    ) -> list[EbayOrder]:
+        """
+        Fetch eBay orders by creation date range and optional fulfillment status filter.
+        No payment status filter — all payment states are returned.
+        fulfillment_statuses: e.g. ["NOT_STARTED","IN_PROGRESS"] or ["FULFILLED"].
+          Pass None to omit the status filter entirely.
+        enrich_notes: if True, fetches PrivateNotes via Trading API (slow). False by default
+          for search — notes still appear when opening the full order detail view.
+        """
+        token = self._ensure_valid_token()
+        from_str = _to_ebay_datetime(date_from)
+        to_str = _to_ebay_datetime(date_to)
+        date_filter = f"creationdate:[{from_str}..{to_str}]"
+        if fulfillment_statuses:
+            status_str = "|".join(fulfillment_statuses)
+            combined_filter = f"{date_filter},orderfulfillmentstatus:{{{status_str}}}"
+        else:
+            combined_filter = date_filter
+
+        all_raw: list[dict] = []
+        offset = 0
+        limit = 200
+        total = None
+
+        while True:
+            resp = self._session.get(
+                f"{self._api_base}/sell/fulfillment/v1/order",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
+                    "Content-Type": "application/json",
+                },
+                params={
+                    "filter": combined_filter,
+                    "limit": limit,
+                    "offset": offset,
+                },
+                timeout=30,
+            )
+            self._raise_for_ebay_error(resp)
+            data = resp.json()
+
+            if total is None:
+                total = data.get("total", 0)
+
+            batch = data.get("orders", [])
+            all_raw.extend(batch)
+
+            if progress_callback:
+                progress_callback(len(all_raw), total or len(all_raw))
+
+            if not batch or len(all_raw) >= (total or 0):
+                break
+            offset += limit
+
+        orders = [self._parse_order(o) for o in all_raw]
+        if enrich_notes and self._config.dev_id and orders:
+            self._enrich_with_private_notes(orders, date_from, date_to)
+        self._enrich_variation_skus(orders)
+        log.debug("eBay search_orders: returning %d orders", len(orders))
+        return orders
+
+    def get_order_by_exact_id(self, order_id: str) -> list[EbayOrder]:
+        """Fetch a single eBay order by exact order ID. Returns empty list if not found."""
+        token = self._ensure_valid_token()
+        resp = self._session.get(
+            f"{self._api_base}/sell/fulfillment/v1/order/{order_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": EBAY_AU_MARKETPLACE_ID,
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        if resp.status_code == 404:
+            return []
+        self._raise_for_ebay_error(resp)
+        data = resp.json()
+        orders = [self._parse_order(data)]
         self._enrich_variation_skus(orders)
         return orders
 
@@ -1217,6 +1319,15 @@ class EbayClient:
 
         shipping_type = _classify_ebay_shipping(shipping_method, instructions)
 
+        # Tracking (populated once a shipping fulfillment has been created)
+        fulfillments = raw.get("fulfillments") or []
+        tracking_number = ""
+        tracking_carrier = ""
+        if fulfillments:
+            first_f = fulfillments[0]
+            tracking_number = str(first_f.get("shipmentTrackingNumber") or "").strip()
+            tracking_carrier = str(first_f.get("shippingCarrierCode") or "").strip()
+
         return EbayOrder(
             order_id=str(raw.get("orderId", "")),
             buyer_name=buyer_name,
@@ -1237,6 +1348,8 @@ class EbayClient:
             shipping_cost=shipping_cost,
             shipping_method=shipping_method,
             shipping_type=shipping_type,
+            tracking_number=tracking_number,
+            tracking_carrier=tracking_carrier,
         )
 
 

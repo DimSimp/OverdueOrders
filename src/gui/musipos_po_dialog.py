@@ -67,6 +67,7 @@ class MusiposPODialog(ctk.CTkToplevel):
         self._manual_item: dict | None = None       # result from manual search
         self._disambiguate_items: list[dict] = []   # multiple matches pending selection
         self._disambiguate_source: str = "auto"     # "auto" or "manual"
+        self._used_kit_alias: bool = False          # True when user chose a specific kit component
         self._qty_var = ctk.StringVar(value=str(self._order_qty))
         self._supplier_var = ctk.StringVar()
         self._manual_sku_var = ctk.StringVar()
@@ -462,6 +463,7 @@ class MusiposPODialog(ctk.CTkToplevel):
 
     def _try_alias(self, alias_skus: list):
         """Re-resolve using supplier IID aliases from sku_mappings.csv."""
+        self._used_kit_alias = True
         for w in self._content.winfo_children():
             w.destroy()
         ctk.CTkLabel(self._content, text="Looking up SKU alias…",
@@ -540,6 +542,8 @@ class MusiposPODialog(ctk.CTkToplevel):
             self._transition(_ERROR)
             return
         self._po_result = result
+        if self._used_kit_alias and self._item:
+            result["resolved_sku"] = self._item.get("supplier_iid") or self._item["itm_iid"]
         if self._on_success:
             try:
                 self._on_success(result)
@@ -591,7 +595,10 @@ class MusiposPODialog(ctk.CTkToplevel):
         """User declined PO but still wants an order note added."""
         if self._on_note_only:
             try:
-                self._on_note_only()
+                resolved_sku = None
+                if self._used_kit_alias and self._item:
+                    resolved_sku = self._item.get("supplier_iid") or self._item["itm_iid"]
+                self._on_note_only(resolved_sku)
             except Exception:
                 pass
         self.destroy()

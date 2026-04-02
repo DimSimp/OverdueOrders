@@ -26,6 +26,18 @@ else:
 
 EXAMPLE_PATH = _LOCAL_BASE / "config.example.json"
 
+# ── Server availability ───────────────────────────────────────────────────────
+# Checked once at import time. Import SERVER_AVAILABLE and LOCAL_DATA_DIR in
+# other modules to resolve server vs. local fallback paths.
+_NETWORK_ROOT = Path(r"\\SERVER\Project Folder\Order-Fulfillment-App")
+try:
+    SERVER_AVAILABLE = _NETWORK_ROOT.exists()
+except OSError:
+    SERVER_AVAILABLE = False
+
+# Local fallback base — data/ folder under the project root.
+LOCAL_DATA_DIR = _LOCAL_BASE / "data"
+
 
 @dataclass
 class SupplierConfig:
@@ -103,6 +115,8 @@ class AppConfig:
     sku_corrections_file: str = "sku_corrections.csv"
     note_filter_phrases: list = field(default_factory=lambda: ["on po"])
     daily_ops_toggles: dict = field(default_factory=dict)
+    all_orders_toggles: dict = field(default_factory=dict)
+    search_order_toggles: dict = field(default_factory=dict)
     sku_aliases_file: str = ""
     ebay_variation_skus_file: str = ""
     received_items_dir: str = ""
@@ -222,6 +236,8 @@ class ConfigManager:
             sku_corrections_file=a.get("sku_corrections_file", "sku_corrections.csv"),
             note_filter_phrases=_phrases,
             daily_ops_toggles=a.get("daily_ops_toggles", {}),
+            all_orders_toggles=a.get("all_orders_toggles", {}),
+            search_order_toggles=a.get("search_order_toggles", {}),
             sku_aliases_file=a.get(
                 "sku_aliases_file",
                 r"\\SERVER\Project Folder\Order-Fulfillment-App\Inventory_Reports\sku_mappings.csv",

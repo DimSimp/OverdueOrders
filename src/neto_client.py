@@ -34,6 +34,7 @@ OUTPUT_SELECTOR = [
     "InternalOrderNotes",
     "DeliveryInstruction",
     "ShipAddress",      # Returns all ShipFirstName/LastName/Company/StreetLine1/2/City/State/PostCode/Country/Phone
+    "ShipTracking",     # Tracking number + carrier for dispatched orders
     "GrandTotal",
     "ShippingTotal",
     "ShippingOption",
@@ -91,6 +92,9 @@ class NetoOrder:
     shipping_total: float = 0.0
     shipping_method: str = ""
     shipping_type: str = ""  # "Express", "Regular", "Local Pickup", or ""
+    # Tracking (populated for dispatched orders)
+    tracking_number: str = ""
+    tracking_carrier: str = ""
 
 
 class NetoAPIError(Exception):
@@ -246,6 +250,82 @@ class NetoClient:
             if order and order.status in UNDISPATCHED_STATUSES:
                 orders.append(order)
         return orders
+
+    def get_order_by_exact_id(self, order_id: str) -> list[NetoOrder]:
+        """Fetch a single Neto order by exact OrderID with no status or date filter."""
+        body = {
+            "Filter": {
+                "OrderID": order_id,
+                "OutputSelector": OUTPUT_SELECTOR,
+            }
+        }
+        data = self._post(body)
+        raw_orders = data.get("Order", [])
+        if isinstance(raw_orders, dict):
+            raw_orders = [raw_orders]
+        orders = []
+        for raw in raw_orders:
+            order = self._parse_order(raw)
+            if order:
+                orders.append(order)
+        return orders
+
+    def search_orders(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        statuses: list[str],
+        progress_callback=None,
+    ) -> list[NetoOrder]:
+        """
+        Fetch orders by date placed + status list.  No PaymentStatus filter so all
+        payment states (paid, unpaid, etc.) are included.
+        Channel filtering should be applied by the caller after this returns.
+        """
+        all_orders: list[NetoOrder] = []
+        seen_ids: set[str] = set()
+        page = 0
+        limit = 200
+        total = None
+
+        while True:
+            body = {
+                "Filter": {
+                    "OrderStatus": statuses,
+                    "DatePlacedFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
+                    "DatePlacedTo": date_to.strftime("%Y-%m-%d 23:59:59"),
+                    "OutputSelector": OUTPUT_SELECTOR,
+                    "Page": page,
+                    "Limit": limit,
+                }
+            }
+            data = self._post(body)
+            raw_orders = data.get("Order", [])
+            if isinstance(raw_orders, dict):
+                raw_orders = [raw_orders]
+
+            if total is None:
+                total = int(data.get("CurrentPage", {}).get("TotalResults", len(raw_orders)))
+                if total == 0 and raw_orders:
+                    total = len(raw_orders)
+
+            for raw in raw_orders:
+                order = self._parse_order(raw)
+                if order and order.order_id not in seen_ids:
+                    all_orders.append(order)
+                    seen_ids.add(order.order_id)
+
+            if progress_callback:
+                progress_callback(len(all_orders), total or len(all_orders))
+
+            if len(raw_orders) < limit:
+                break
+            page += 1
+
+        if progress_callback:
+            progress_callback(len(all_orders), len(all_orders))
+
+        return all_orders
 
     def get_order_status(self, order_id: str) -> str:
         """Lightweight call to check current order status."""
@@ -737,6 +817,17 @@ class NetoClient:
         shipping_method = str(raw.get("ShippingOption") or "").strip()
         shipping_type = _classify_shipping(shipping_method)
 
+        # Tracking (only present for dispatched orders)
+        ship_tracking = raw.get("ShipTracking") or []
+        if isinstance(ship_tracking, dict):
+            ship_tracking = [ship_tracking]
+        tracking_number = ""
+        tracking_carrier = ""
+        if ship_tracking:
+            first_tracking = ship_tracking[0]
+            tracking_number = str(first_tracking.get("TrackingCode") or "").strip()
+            tracking_carrier = str(first_tracking.get("ShipperName") or "").strip()
+
         return NetoOrder(
             order_id=str(order_id),
             customer_name=customer_name,
@@ -765,6 +856,8 @@ class NetoClient:
             shipping_total=shipping_total,
             shipping_method=shipping_method,
             shipping_type=shipping_type,
+            tracking_number=tracking_number,
+            tracking_carrier=tracking_carrier,
         )
 
 

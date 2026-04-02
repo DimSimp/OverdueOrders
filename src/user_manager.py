@@ -26,8 +26,10 @@ log = logging.getLogger(__name__)
 # Session is considered stale if last_heartbeat is older than this
 _STALE_MINUTES = 3
 
-# Network config path for users.json
-USERS_FILE = Path(r"\\SERVER\Project Folder\Order-Fulfillment-App\Config\users.json")
+from src.config import SERVER_AVAILABLE, LOCAL_DATA_DIR  # noqa: E402
+
+_SERVER_USERS_FILE = Path(r"\\SERVER\Project Folder\Order-Fulfillment-App\Config\users.json")
+USERS_FILE = _SERVER_USERS_FILE if SERVER_AVAILABLE else LOCAL_DATA_DIR / "users.json"
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────

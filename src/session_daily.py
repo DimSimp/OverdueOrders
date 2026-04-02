@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from src.config import SERVER_AVAILABLE, LOCAL_DATA_DIR
 from src.session import (
     _serialize_neto_order,
     _serialize_ebay_order,
@@ -17,7 +18,11 @@ if TYPE_CHECKING:
     from src.ebay_client import EbayOrder
 
 
-DAILY_SESSION_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Session\Daily"
+_SERVER_DAILY_SESSION_DIR = r"\\SERVER\Project Folder\Order-Fulfillment-App\Session\Daily"
+DAILY_SESSION_DIR = (
+    _SERVER_DAILY_SESSION_DIR if SERVER_AVAILABLE
+    else str(LOCAL_DATA_DIR / "sessions" / "daily")
+)
 DAILY_SESSION_FILE = "CURRENT DAILY SESSION.scar"
 DAILY_OVERRIDES_FILE = "DAILY OVERRIDES.json"
 DAILY_SESSION_VERSION = 1

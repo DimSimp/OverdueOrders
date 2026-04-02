@@ -1,11 +1,11 @@
 BOTH OPERATIONS
 - add fallback local destination folders for when developing app away from scarlett server
 - When using app to put item on PO, use the SKU being ordered in the note left
-- if last name is "NOLASTNAME", make field blank
 - have notes save/refresh when removing order from list, going back, or marking as sent. This is just in case a user types the message without saving it.
 - show a confirmation that note is updating/has been updated
 - export picking list based on visible items in tab (useful for creating user-specific pick lists)
 - kick users from an active session if a new one is started
+- Add a multi-select method by holding shift while selecting orders to select a range. This will speed up selecting orders for bulk processing.
 
 AFTERNOON OPERATIONS
 - fix Bonds couriers label booking
@@ -13,9 +13,7 @@ AFTERNOON OPERATIONS
 
 DAILY OPERATIONS
 - need to add a way to search APIC if item is not found in musipos inventory, ask the user if they want to import it into inventory, and use the SKU to order.
-- add method to update SKU location
 - refresh order when opening it
-- make picking sheet have alternating background colours for each row for easier readability
 - make button colours distinct when preparing picking list
 
 SETTINGS menu

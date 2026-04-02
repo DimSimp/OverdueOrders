@@ -15,9 +15,12 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-ASSIGNMENTS_FILE = Path(
+from src.config import SERVER_AVAILABLE, LOCAL_DATA_DIR  # noqa: E402
+
+_SERVER_ASSIGNMENTS_FILE = Path(
     r"\\SERVER\Project Folder\Order-Fulfillment-App\Config\order_assignments.json"
 )
+ASSIGNMENTS_FILE = _SERVER_ASSIGNMENTS_FILE if SERVER_AVAILABLE else LOCAL_DATA_DIR / "assignments.json"
 
 
 class AssignmentManager:

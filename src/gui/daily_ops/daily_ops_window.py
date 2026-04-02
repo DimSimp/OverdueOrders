@@ -59,6 +59,13 @@ class DailyOpsWindow(ctk.CTkToplevel):
         # ── Shared state set by fetch step ──────────────────────────────
         self.neto_orders: list = []
         self.ebay_orders: list = []
+        # ── Shared state set by Show All Orders fetch step ───────────────
+        self.all_orders_neto_orders: list = []
+        self.all_orders_ebay_orders: list = []
+        # ── Shared state set by Search for Order step ────────────────────
+        self.search_neto_orders: list = []
+        self.search_ebay_orders: list = []
+        self.search_options: dict = {}
         # Populated at end of Step 2: {sku: {postage_type, shipping_category}} for all SKUs
         self.sku_attr_map: dict = {}
         # Set after envelope classification (Phase 2b)
@@ -194,10 +201,8 @@ class DailyOpsWindow(ctk.CTkToplevel):
                 self._content,
                 on_picking_list=self._show_options,
                 on_load_session=self._load_daily_session,
-                on_search_order=lambda: self._show_placeholder(
-                    "Search for Order", "", "(Coming soon)"),
-                on_show_orders=lambda: self._show_placeholder(
-                    "Show All Orders", "", "(Coming soon)"),
+                on_search_order=self._show_search_options,
+                on_show_orders=self._show_all_orders_options,
                 on_sku_aliases=self._open_sku_aliases,
             )
         self.set_header("Daily Operations")
@@ -357,6 +362,84 @@ class DailyOpsWindow(ctk.CTkToplevel):
             initial_removed_ids=initial_removed_ids,
             initial_ungrouped_ids=initial_ungrouped_ids,
         )
+
+    # ── Show All Orders workflow ─────────────────────────────────────────
+
+    def _show_all_orders_options(self):
+        if "all_orders_options" not in self._step_frames:
+            from src.gui.daily_ops.all_orders_options_view import AllOrdersOptionsView
+            self._step_frames["all_orders_options"] = AllOrdersOptionsView(
+                self._content,
+                window=self,
+                on_fetch=self._start_all_orders_fetch,
+                on_back=self._show_menu,
+            )
+        self.set_header("Daily Operations  —  Show All Orders")
+        self._show_step(self._step_frames["all_orders_options"], "Step 1 of 2")
+
+    def _start_all_orders_fetch(self, options: dict):
+        if "all_orders_fetch" not in self._step_frames:
+            from src.gui.daily_ops.all_orders_fetch_view import AllOrdersFetchView
+            self._step_frames["all_orders_fetch"] = AllOrdersFetchView(
+                self._content,
+                window=self,
+                on_complete=self._on_all_orders_fetch_complete,
+                on_back=self._show_all_orders_options,
+            )
+        self.set_header("Daily Operations  —  Fetching All Orders")
+        self._show_step(self._step_frames["all_orders_fetch"], "Step 2 of 2")
+        self._step_frames["all_orders_fetch"].start_fetch(options)
+
+    def _on_all_orders_fetch_complete(self):
+        # Destroy the cached results frame so it rebuilds with fresh order data
+        if "all_orders_results" in self._step_frames:
+            self._step_frames.pop("all_orders_results").destroy()
+        self._show_all_orders_results()
+
+    def _show_all_orders_results(self):
+        if "all_orders_results" not in self._step_frames:
+            from src.gui.daily_ops.all_orders_results_view import AllOrdersResultsView
+            self._step_frames["all_orders_results"] = AllOrdersResultsView(
+                self._content,
+                window=self,
+                on_back=self._show_all_orders_options,
+            )
+        self.set_header("Daily Operations  —  All Orders")
+        self._show_step(self._step_frames["all_orders_results"], "")
+        self._step_frames["all_orders_results"].show()
+
+    # ── Search for Order workflow ────────────────────────────────────────
+
+    def _show_search_options(self):
+        if "search_options" not in self._step_frames:
+            from src.gui.daily_ops.search_options_view import SearchOptionsView
+            self._step_frames["search_options"] = SearchOptionsView(
+                self._content,
+                window=self,
+                on_results=self._on_search_complete,
+                on_back=self._show_menu,
+            )
+        self.set_header("Daily Operations  —  Search for Order")
+        self._show_step(self._step_frames["search_options"], "")
+
+    def _on_search_complete(self):
+        # Destroy cached results so it rebuilds with fresh data
+        if "search_results" in self._step_frames:
+            self._step_frames.pop("search_results").destroy()
+        self._show_search_results()
+
+    def _show_search_results(self):
+        if "search_results" not in self._step_frames:
+            from src.gui.daily_ops.search_results_view import SearchResultsView
+            self._step_frames["search_results"] = SearchResultsView(
+                self._content,
+                window=self,
+                search_options=self.search_options,
+                on_back=self._show_search_options,
+            )
+        self.set_header("Daily Operations  —  Search Results")
+        self._show_step(self._step_frames["search_results"], "")
+        self._step_frames["search_results"].show()
 
     # ── Placeholder for future steps ────────────────────────────────────
 
