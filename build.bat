@@ -39,21 +39,6 @@ if exist "data\shipping\label_settings.json" (
 )
 
 echo.
-echo === Waiting for file locks to release ===
-timeout /t 5 /nobreak >nul
-
-echo.
-echo === Creating release zip ===
-set ZIPNAME=Scarlett AIO v%VERSION%.zip
-if exist "%ZIPNAME%" del "%ZIPNAME%"
-powershell -Command "Compress-Archive -Path 'dist\Scarlett AIO' -DestinationPath '%ZIPNAME%' -Force"
-if errorlevel 1 (
-    echo [WARNING] Zip creation failed -- distribute dist\Scarlett AIO\ manually.
-) else (
-    echo Created: %ZIPNAME%
-)
-
-echo.
 echo === Deploying to server ===
 set DEPLOY_PATH=\\SERVER\Project Folder\Order-Fulfillment-App\dist\Scarlett AIO
 robocopy "dist\Scarlett AIO" "%DEPLOY_PATH%" /MIR /XF config.json /R:2 /W:3 >nul
@@ -66,12 +51,11 @@ if errorlevel 8 (
 echo.
 echo === Build complete ===
 echo   Exe folder : dist\Scarlett AIO\
-echo   Release zip: %ZIPNAME%
 echo.
 echo Next steps:
 echo   1. Go to GitHub ^> Releases ^> Draft a new release
 echo   2. Tag: v%VERSION%
-echo   3. Attach "%ZIPNAME%" as a release asset
+echo   3. Zip dist\Scarlett AIO\ manually and attach as a release asset
 echo   4. Publish the release
 echo.
 pause

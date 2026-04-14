@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
 import requests
@@ -276,56 +277,211 @@ class NetoClient:
         date_to: datetime,
         statuses: list[str],
         progress_callback=None,
+        sku: str = "",
+        title: str = "",
+        customer_name: str = "",
     ) -> list[NetoOrder]:
         """
         Fetch orders by date placed + status list.  No PaymentStatus filter so all
         payment states (paid, unpaid, etc.) are included.
         Channel filtering should be applied by the caller after this returns.
+
+        When any of sku/title/customer_name is provided, a two-pass parallel strategy
+        is used: a lightweight scan collects matching order IDs, then a single targeted
+        fetch returns full order data.  When no filter terms are given, all pages are
+        fetched in parallel with the full OUTPUT_SELECTOR.
         """
-        all_orders: list[NetoOrder] = []
-        seen_ids: set[str] = set()
-        page = 0
-        limit = 200
-        total = None
+        if sku or title or customer_name:
+            return self._search_orders_filtered(
+                sku, title, customer_name, date_from, date_to, statuses, progress_callback
+            )
+        return self._search_orders_parallel(date_from, date_to, statuses, progress_callback)
 
-        while True:
-            body = {
-                "Filter": {
-                    "OrderStatus": statuses,
-                    "DatePlacedFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
-                    "DatePlacedTo": date_to.strftime("%Y-%m-%d 23:59:59"),
-                    "OutputSelector": OUTPUT_SELECTOR,
-                    "Page": page,
-                    "Limit": limit,
-                }
+    # Lightweight selector for the scan pass — enough to filter by SKU, title, and customer name.
+    _SCAN_SELECTOR = [
+        "OrderID", "SalesChannel", "Username", "ShipAddress",
+        "OrderLine", "OrderLine.ProductName", "OrderLine.Name",
+    ]
+    # Max concurrent page requests during parallel fetching.
+    _SCAN_WORKERS = 8
+
+    def _fetch_page(
+        self,
+        page: int,
+        statuses: list[str],
+        date_from: datetime,
+        date_to: datetime,
+        limit: int,
+        selector: list[str],
+    ) -> list[dict]:
+        """Fetch one page with the given selector. Safe to call from multiple threads."""
+        body = {
+            "Filter": {
+                "OrderStatus": statuses,
+                "DatePlacedFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
+                "DatePlacedTo": date_to.strftime("%Y-%m-%d 23:59:59"),
+                "OutputSelector": selector,
+                "Page": page,
+                "Limit": limit,
             }
-            data = self._post(body)
-            raw_orders = data.get("Order", [])
-            if isinstance(raw_orders, dict):
-                raw_orders = [raw_orders]
+        }
+        data = self._post(body)
+        raw = data.get("Order", [])
+        if isinstance(raw, dict):
+            raw = [raw]
+        return raw
 
-            if total is None:
-                total = int(data.get("CurrentPage", {}).get("TotalResults", len(raw_orders)))
-                if total == 0 and raw_orders:
-                    total = len(raw_orders)
+    @staticmethod
+    def _scan_matches_raw(raw: dict, sku_lower: str, title_lower: str, name_lower: str) -> bool:
+        """Return True if a raw scan-phase order dict satisfies all provided filter terms."""
+        if name_lower:
+            ship_first = (raw.get("ShipFirstName") or "").lower()
+            ship_last = (raw.get("ShipLastName") or "").lower()
+            ship_name = f"{ship_first} {ship_last}".strip()
+            username = (raw.get("Username") or "").lower()
+            customer = ship_name or username
+            if name_lower not in customer:
+                return False
 
-            for raw in raw_orders:
-                order = self._parse_order(raw)
-                if order and order.order_id not in seen_ids:
-                    all_orders.append(order)
-                    seen_ids.add(order.order_id)
+        if sku_lower or title_lower:
+            lines = raw.get("OrderLine", [])
+            if isinstance(lines, dict):
+                lines = [lines]
+            if sku_lower:
+                if not any(sku_lower in (line.get("SKU") or "").lower() for line in lines):
+                    return False
+            if title_lower:
+                def _line_title(line: dict) -> str:
+                    return (
+                        line.get("ProductName") or line.get("Name")
+                        or line.get("Title") or line.get("ItemDescription") or ""
+                    )
+                if not any(title_lower in _line_title(line).lower() for line in lines):
+                    return False
 
-            if progress_callback:
-                progress_callback(len(all_orders), total or len(all_orders))
+        return True
 
-            if len(raw_orders) < limit:
-                break
-            page += 1
-
+    def _run_parallel_pages(
+        self,
+        statuses: list[str],
+        date_from: datetime,
+        date_to: datetime,
+        limit: int,
+        selector: list[str],
+        progress_callback=None,
+    ) -> list[dict]:
+        """Fetch all pages in parallel. Page 0 first; then rolling batches until a partial page."""
+        first_page = self._fetch_page(0, statuses, date_from, date_to, limit, selector)
+        all_raw: list[dict] = list(first_page)
+        fetched = len(first_page)
         if progress_callback:
-            progress_callback(len(all_orders), len(all_orders))
+            progress_callback(fetched, fetched)
 
-        return all_orders
+        if len(first_page) == limit:
+            page = 1
+            with ThreadPoolExecutor(max_workers=self._SCAN_WORKERS) as pool:
+                more = True
+                while more:
+                    batch_futures = {
+                        pool.submit(
+                            self._fetch_page, p, statuses, date_from, date_to, limit, selector
+                        ): p
+                        for p in range(page, page + self._SCAN_WORKERS)
+                    }
+                    for fut in as_completed(batch_futures):
+                        page_orders = fut.result()
+                        all_raw.extend(page_orders)
+                        fetched += len(page_orders)
+                        if progress_callback:
+                            progress_callback(fetched, fetched)
+                        if len(page_orders) < limit:
+                            more = False
+                    page += self._SCAN_WORKERS
+
+        return all_raw
+
+    def _search_orders_parallel(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        statuses: list[str],
+        progress_callback=None,
+    ) -> list[NetoOrder]:
+        """Fetch all orders in the date range using parallel full-selector fetching."""
+        limit = 200
+        all_raw = self._run_parallel_pages(
+            statuses, date_from, date_to, limit, OUTPUT_SELECTOR, progress_callback
+        )
+        seen_ids: set[str] = set()
+        orders = []
+        for raw in all_raw:
+            order = self._parse_order(raw)
+            if order and order.order_id not in seen_ids:
+                orders.append(order)
+                seen_ids.add(order.order_id)
+        return orders
+
+    def _search_orders_filtered(
+        self,
+        sku: str,
+        title: str,
+        customer_name: str,
+        date_from: datetime,
+        date_to: datetime,
+        statuses: list[str],
+        progress_callback=None,
+    ) -> list[NetoOrder]:
+        """
+        Two-pass filtered search with parallel page fetching.
+
+        Pass 1: fetch all scan pages concurrently using a lightweight _SCAN_SELECTOR.
+                Page 0 is fetched first; if full (200 results), remaining pages are
+                fetched in rolling batches of _SCAN_WORKERS until a partial page is seen.
+                We do NOT rely on TotalResults — the partial-page signal is the only
+                reliable termination condition.
+
+        Pass 2: single targeted GetOrder for matched IDs with the full OUTPUT_SELECTOR.
+        """
+        limit = 200
+        sku_lower = sku.lower()
+        title_lower = title.lower()
+        name_lower = customer_name.lower()
+
+        all_raw = self._run_parallel_pages(
+            statuses, date_from, date_to, limit, self._SCAN_SELECTOR, progress_callback
+        )
+
+        # Identify matching order IDs.
+        seen_ids: set[str] = set()
+        matching_ids: list[str] = []
+        for raw in all_raw:
+            oid = raw.get("OrderID", "")
+            if not oid or oid in seen_ids:
+                continue
+            seen_ids.add(oid)
+            if self._scan_matches_raw(raw, sku_lower, title_lower, name_lower):
+                matching_ids.append(oid)
+
+        if not matching_ids:
+            return []
+
+        # Pass 2: full details for matched orders.
+        body = {
+            "Filter": {
+                "OrderID": matching_ids,
+                "OutputSelector": OUTPUT_SELECTOR,
+            }
+        }
+        data = self._post(body)
+        raw_orders = data.get("Order", [])
+        if isinstance(raw_orders, dict):
+            raw_orders = [raw_orders]
+        orders = []
+        for raw in raw_orders:
+            order = self._parse_order(raw)
+            if order:
+                orders.append(order)
+        return orders
 
     def get_order_status(self, order_id: str) -> str:
         """Lightweight call to check current order status."""

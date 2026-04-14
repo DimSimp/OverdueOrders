@@ -411,7 +411,8 @@ class App(ctk.CTk):
 
     def _show_new_session(self):
         from src.gui.aft_new_session_view import AftNewSessionView
-        if not hasattr(self, "_new_session_view"):
+        existing = getattr(self, "_new_session_view", None)
+        if existing is None or not existing.winfo_exists():
             self._new_session_view = AftNewSessionView(
                 self._step_container,
                 app=self,

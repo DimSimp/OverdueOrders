@@ -477,9 +477,13 @@ class SearchOptionsView(ctk.CTkFrame):
             if not (neto_statuses and any_neto_platform):
                 return
             try:
+                terms = options.get("search_terms", {})
                 raw = self._window.neto_client.search_orders(
                     options["date_from"], options["date_to"],
                     statuses=neto_statuses,
+                    sku=terms.get("sku", "").strip(),
+                    title=terms.get("title", "").strip(),
+                    customer_name=terms.get("name", "").strip(),
                 )
                 neto_orders.extend(_filter_neto_by_channel(raw, options))
                 log.debug("Search: Neto returned %d → %d after channel filter",

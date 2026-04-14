@@ -91,6 +91,7 @@ class OrderTreeview(ctk.CTkFrame):
         self._selectable = selectable
         self._use_tree_as_check = False  # set in _build_tree; True when #0 becomes checkbox
         self._checked_order_ids: set[tuple[str, str]] = set()
+        self._last_check_anchor: str | None = None  # iid of last plain checkbox click
         self._on_selection_change = on_selection_change
         self._group_meta: dict[str, dict] = {}  # iid → {order_id, platform}
         self._all_groups: list[dict] = []
@@ -688,12 +689,17 @@ class OrderTreeview(ctk.CTkFrame):
             return
         if self._tree.identify_element(event.x, event.y) == "Treeitem.indicator":
             return
-        # Check column click → toggle checkbox, suppress row highlight
+        # Check column click → toggle checkbox (with optional shift-range), suppress row highlight
         if self._is_check_col(event.x):
             parent = self._tree.parent(iid)
             group_root = parent if parent else iid
             if group_root in self._group_meta:
-                self._toggle_check(group_root)
+                shift_held = bool(event.state & 0x0001)
+                if shift_held and self._last_check_anchor and self._last_check_anchor in self._group_meta:
+                    self._range_check(self._last_check_anchor, group_root)
+                else:
+                    self._toggle_check(group_root)
+                    self._last_check_anchor = group_root
             return
         parent = self._tree.parent(iid)
         group_root = parent if parent else iid
@@ -822,8 +828,41 @@ class OrderTreeview(ctk.CTkFrame):
         if self._on_selection_change:
             self._on_selection_change()
 
+    def _range_check(self, from_iid: str, to_iid: str):
+        """Check/uncheck all parent rows between from_iid and to_iid (inclusive).
+
+        The new state matches the post-toggle state of to_iid: if to_iid is
+        currently unchecked it (and all rows in range) will be checked, and
+        vice versa.  Falls back to a plain toggle if either iid is not found.
+        """
+        visible = [iid for iid in self._tree.get_children() if iid in self._group_meta]
+        try:
+            a = visible.index(from_iid)
+            b = visible.index(to_iid)
+        except ValueError:
+            self._toggle_check(to_iid)
+            self._last_check_anchor = to_iid
+            return
+        to_meta = self._group_meta[to_iid]
+        to_key = (to_meta["platform"], to_meta["order_id"])
+        new_checked = to_key not in self._checked_order_ids  # opposite of current state
+        lo, hi = min(a, b), max(a, b)
+        for piid in visible[lo : hi + 1]:
+            meta = self._group_meta[piid]
+            key = (meta["platform"], meta["order_id"])
+            if new_checked:
+                self._checked_order_ids.add(key)
+                self._set_check_glyph(piid, "☑")
+            else:
+                self._checked_order_ids.discard(key)
+                self._set_check_glyph(piid, "☐")
+        self._update_check_header()
+        if self._on_selection_change:
+            self._on_selection_change()
+
     def _toggle_all_checks(self):
         """Select all visible parents if not all checked; otherwise deselect all."""
+        self._last_check_anchor = None
         visible = [iid for iid in self._tree.get_children() if iid in self._group_meta]
         if not visible:
             return
@@ -871,6 +910,7 @@ class OrderTreeview(ctk.CTkFrame):
     def clear_checks(self):
         """Deselect all rows and fire the selection-change callback."""
         self._checked_order_ids.clear()
+        self._last_check_anchor = None
         for piid in self._tree.get_children():
             if piid in self._group_meta:
                 self._set_check_glyph(piid, "☐")

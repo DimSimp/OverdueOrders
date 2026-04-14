@@ -154,6 +154,7 @@ List of all invoices received from this supplier, most recent first.
 - Status values: `Unpaid`, `Paid`, `Overdue`
 - Click an invoice row → opens Invoice detail view (see plan 04)
 - "Import Invoice" button → triggers the AI invoice import flow (see below)
+- **"Receive Without PO"** button → creates an ad-hoc PO and opens the Receive Invoice window directly (see [04_purchasing_receiving.md](04_purchasing_receiving.md))
 - Filter by status (Unpaid / Overdue surface at the top automatically)
 
 ---

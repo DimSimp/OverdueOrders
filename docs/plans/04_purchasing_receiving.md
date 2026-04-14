@@ -112,18 +112,21 @@ Manages the full lifecycle of purchase orders — from quick item-level ordering
 Covered in [03_supplier_management.md](03_supplier_management.md). The tab displays:
 
 ```
-┌─────────┬────────────┬──────────┬───────┬──────────────┐
-│  PO #   │  PO Date   │  Status  │  QTY  │ Back Ordered │
-├─────────┼────────────┼──────────┼───────┼──────────────┤
-│  4065   │ 2026-03-28 │ Complete │  18   │      2       │
-│  4066   │ 2026-04-01 │ Sent     │   6   │      —       │
-│  4067   │ —          │ Open     │   3   │      —       │
-└─────────┴────────────┴──────────┴───────┴──────────────┘
+┌─────────┬────────────┬──────────┬─────────┬──────────┬──────────────┐
+│  PO #   │  PO Date   │  Status  │ Ordered │ Received │ Back Ordered │
+├─────────┼────────────┼──────────┼─────────┼──────────┼──────────────┤
+│  4065   │ 2026-03-28 │ Complete │   45    │  45/45   │      0       │
+│  4066   │ 2026-03-30 │ Complete │   40    │  32/40   │      8       │
+│  4067   │ 2026-04-01 │ Sent     │    6    │    —     │      —       │
+│  4068   │ —          │ Open     │    3    │    —     │      —       │
+└─────────┴────────────┴──────────┴─────────┴──────────┴──────────────┘
 ```
 
 - **PO Date** = `finalised_at` date (blank while Open)
-- **QTY** = total `qty_ordered` across all lines
-- **Back Ordered** = total `qty_backordered` across all received lines
+- **Ordered** = total `qty_ordered` across all lines
+- **Received** = `total_qty_received / total_qty_ordered` — shown as `x/y`; blank until invoice received
+- **Back Ordered** = total `qty_backordered` across all lines; blank until invoice received
+- A PO always moves to `Complete` when an invoice is received, regardless of whether it was fully fulfilled — the Received column shows the actual result (e.g. `32/40`)
 - Right-click a row → context menu (see below)
 - The Open PO row is always at the top and highlighted
 
@@ -242,11 +245,27 @@ Triggered by right-clicking a `Sent` PO → "Auto-Receive".
 
 Generated when a PO is finalised. Stored locally as `data/pos/{supplier_id}_{po_number}.pdf`.
 
-Contents:
-- **Header**: Scarlett Music logo/name, address, date, PO number
-- **Supplier block**: supplier name, address, account number
-- **Line items table**: SKU, Title, QTY Ordered, RRP
-- **Footer**: total qty, notes
+```
+┌─────────────────────────────────────────────────────────┐
+│  SCARLETT MUSIC                                         │
+│  [Address]  |  [Phone]  |  [Email]  |  ABN: [ABN]      │
+│                                        PO #: 4067       │
+│                                        Date: 2026-04-01 │
+├─────────────────────────────────────────────────────────┤
+│  To: [Supplier Name]                                    │
+│  Account No: [Our account number with this supplier]    │
+├──────────────┬───────┬──────────────────────┬──────────┤
+│     SKU      │  QTY  │     Description      │  Brand   │
+├──────────────┼───────┼──────────────────────┼──────────┤
+│  ...         │  ...  │  ...                 │  ...     │
+├──────────────┴───────┴──────────────────────┴──────────┤
+│                                  Total QTY: 12          │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Fields included**: Store name, address, phone, email, ABN; supplier name; our account number with this supplier; PO number; date; line items (SKU, QTY, Description, Brand); total QTY at footer.
+
+**Prices are deliberately excluded** — the supplier sets their own prices and will include them on the invoice they send back. Prices at the time of ordering are not relevant to the PO.
 
 ---
 
@@ -269,6 +288,49 @@ Total outstanding: $1,285.10
 - "Mark Paid" button per row (admin/manager only) → sets `invoices.status = paid`
 - Filter: All / Unpaid / Overdue / Paid
 - Can be exported to CSV for accounting purposes
+
+**Overdue auto-flag**: A daily background task runs on app startup and checks all `unpaid` invoices. Any where `due_date < today` are automatically set to `overdue`. On app startup, if any overdue invoices exist, a toggleable popup notifies the user: *"You have X overdue invoice(s) totalling $Y. View now?"*. The popup can be disabled per-user in settings.
+
+---
+
+### Receiving Without a Matching PO
+
+Occasionally stock arrives without a corresponding PO — a backorder from a long-completed PO, an unsolicited sample, or a standing order placed outside the app. In this case:
+
+1. Staff navigates to the supplier in the Suppliers module
+2. Right-click in the PO list → **"Receive Without PO"**
+3. A new PO is automatically created with the next sequential number
+4. The Receive Invoice window opens against this new PO (no pre-filled line items — staff enters everything manually or uses AI)
+5. On confirm, the PO status is immediately set to `Complete` (it skips `Open`, `Pending`, `Sent` entirely)
+6. The auto-generated PO is marked with `entry_method = 'ad_hoc'` on the invoice record for reporting purposes
+
+> **Also noted in**: [03_supplier_management.md](03_supplier_management.md) — the "Receive Without PO" option appears in the supplier card PO tab context menu.
+
+---
+
+### Credit Notes
+
+Suppliers occasionally issue credit notes — for returned goods, pricing errors, or short deliveries billed incorrectly. Credits must be tracked to offset outstanding bills.
+
+**`credit_notes` table:**
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | uuid PK | |
+| `credit_note_number` | text NOT NULL | Supplier-issued reference |
+| `supplier_id` | text FK → `suppliers.id` | |
+| `invoice_id` | uuid FK → `invoices.id` | Original invoice being credited (nullable) |
+| `credit_date` | date | |
+| `amount_inc_gst` | numeric(10,2) | Credit value |
+| `reason` | text | e.g. `Return`, `Pricing Error`, `Short Delivery` |
+| `status` | text DEFAULT `outstanding` | `outstanding`, `applied` |
+| `notes` | text | |
+| `received_at` | timestamptz DEFAULT now() | |
+| `received_by` | text | |
+
+**UI**: Credit notes appear in a sub-tab within the supplier Invoices tab. They are also surfaced in the Accounts Payable view as negative amounts, reducing the total outstanding for that supplier.
+
+**Stock reversal**: If a credit relates to returned goods, a corresponding `stock_movements` record of type `return` is written and `qty_on_hand` is decremented. If it is a pricing correction only, no stock movement is made.
 
 ---
 
@@ -335,16 +397,32 @@ Total outstanding: $1,285.10
 - [ ] Append received product lines to `daily_reports/received_YYYY-MM-DD.csv` on invoice commit
 - [ ] Format: `supplier_id, supplier_invoice_no, po_no, sku, qty_received, unit_cost, description`
 
+### Overdue Invoice Flagging
+- [ ] Daily background task on app startup: set `invoices.status = overdue` for unpaid invoices past due date
+- [ ] Startup popup: count + total of overdue invoices with "View Now" button
+- [ ] User setting to toggle the startup popup on/off
+
+### Receiving Without a PO
+- [ ] "Receive Without PO" option in supplier card PO tab context menu
+- [ ] Auto-create PO with next sequential number, `entry_method = 'ad_hoc'`
+- [ ] Open Receive Invoice window with no pre-filled lines
+- [ ] On confirm: PO immediately set to `Complete`
+
+### Credit Notes
+- [ ] Create `credit_notes` table in Supabase
+- [ ] `create_credit_note(supplier_id, data)` in `invoice_client.py`
+- [ ] Credit notes sub-tab in supplier Invoices tab
+- [ ] Surface credits as negative amounts in Accounts Payable view
+- [ ] Stock reversal path: if return-related, write `stock_movements` record of type `return` and decrement `qty_on_hand`
+
 ---
 
 ## Open Questions / Future Considerations
 
-- **Partial deliveries**: A supplier may partially fulfil a PO (some items sent now, rest later). In this case the PO should probably remain `Sent` (not `Complete`) until all lines are fully received or explicitly closed. Logic needed: if `qty_received + qty_backordered = qty_ordered` for all lines → auto-complete; otherwise warn staff and offer to mark complete anyway.
-- **PO PDF template**: Design of the PDF template (branding, layout) TBD — can be a simple ReportLab or WeasyPrint template.
-- **Overdue auto-flag**: A daily background check could set `invoices.status = overdue` for any unpaid invoices past their due date, rather than relying on display-time calculation.
-- **Receiving without a PO**: Occasionally stock may arrive without a matching PO (e.g. unsolicited sample, backorder from an old PO). An "ad hoc receive" path may be needed — deferred.
-- **Credit notes**: Suppliers occasionally issue credits (returned goods, pricing errors). These need to create negative invoice records and reverse stock movements — deferred.
+- **Scarlett Music store details for PO PDF**: Phone number, email address, and full address needed to populate the PO header. These should be stored in app settings (config) rather than hardcoded.
+- **PDF library choice**: ReportLab is the most capable option for Python PDF generation; WeasyPrint (HTML → PDF) may be easier to template. Decision deferred until build phase.
+- **Partial backorder follow-up**: If a PO completes with `32/40` (8 backordered), there is currently no automated mechanism to expect and receive those 8 remaining units later. A future "backorder tracking" feature could create a new PO line entry for backordered items automatically. Deferred.
 
 ---
 
-*Last updated: 2026-04-02*
+*Last updated: 2026-04-02 — resolved partial delivery, PO PDF fields, overdue flagging, ad-hoc receive, credit notes*
