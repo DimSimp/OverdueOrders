@@ -20,10 +20,30 @@ _ENVELOPES_DIR = (
 )
 
 def _find_sumatra() -> str | None:
-    """Return path to SumatraPDF.exe, or None if not found."""
+    """Return path to SumatraPDF.exe, or None if not found.
+
+    Search order:
+      1. PATH (installed system-wide)
+      2. App folder — staff can place SumatraPDF.exe (or a versioned copy such
+         as SumatraPDF-3.6.1-64.exe) alongside the app exe as a self-service fix.
+      3. Common user/system install locations.
+    """
     import shutil
+    import sys
+    from pathlib import Path
+
+    if getattr(sys, "frozen", False):
+        _app_dir = Path(sys.executable).parent
+    else:
+        _app_dir = Path(__file__).parent.parent.parent
+
+    # App-folder matches: covers plain "SumatraPDF.exe" and versioned names
+    # like "SumatraPDF-3.6.1-64.exe".
+    app_dir_matches = [str(p) for p in sorted(_app_dir.glob("SumatraPDF*.exe"))]
+
     candidates = [
         shutil.which("SumatraPDF"),
+        *app_dir_matches,
         r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
         os.path.expanduser(r"~\AppData\Local\SumatraPDF\SumatraPDF.exe"),
@@ -678,6 +698,20 @@ class EnvelopePDFView(ctk.CTkFrame):
                 path,
             ])
         else:
-            # Fallback: open print dialog via default viewer
-            log.warning("SumatraPDF not found — falling back to shell print dialog")
-            subprocess.Popen(["start", "/print", path], shell=True)
+            # SumatraPDF is required to control paper size (A5) when printing.
+            # Without it the default PDF reader will use its own settings and
+            # the postcode may fall outside the printable area.
+            log.warning("SumatraPDF not found — opening PDF for manual printing")
+            import tkinter.messagebox as mb
+            mb.showwarning(
+                "SumatraPDF not found",
+                "SumatraPDF is required to print envelopes correctly.\n\n"
+                "Without it, the postcode may not appear on the printed envelope "
+                "because the default PDF reader may use the wrong paper size.\n\n"
+                "To fix (choose one):\n"
+                "  \u2022  Install SumatraPDF from sumatrapdfreader.org\n"
+                "  \u2022  Place SumatraPDF.exe in the app folder\n\n"
+                "The PDF will now open so you can print manually \u2014 "
+                "make sure to set the paper size to A5.",
+            )
+            subprocess.Popen(["start", "", path], shell=True)

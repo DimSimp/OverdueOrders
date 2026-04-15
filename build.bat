@@ -15,7 +15,7 @@ if errorlevel 1 (
 
 echo.
 echo === Building Scarlett AIO ===
-%PYINSTALLER% --clean ScarlettAIO.spec
+%PYINSTALLER% --clean --noconfirm ScarlettAIO.spec
 if errorlevel 1 (
     echo [ERROR] Build failed. Check the output above for details.
     pause
