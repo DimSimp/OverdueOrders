@@ -113,41 +113,7 @@ class OrderTreeview(ctk.CTkFrame):
         self._postage_filters: dict[str, BooleanVar] = {}
         # Click guard — blocks spurious release events after view transitions
         self._click_blocked_until: float = 0.0
-        self._apply_style()
         self._build_tree()
-
-    # ── Styling ───────────────────────────────────────────────────────────
-
-    def _apply_style(self):
-        dark = ctk.get_appearance_mode() == "Dark"
-        style = ttk.Style()
-        # Switch to "clam" theme so fieldbackground is respected on Windows.
-        # The default "vista" theme ignores fieldbackground, leaving the
-        # treeview interior white regardless of what we configure.
-        style.theme_use("clam")
-        style.configure(
-            "Orders.Treeview",
-            background="#2b2b2b" if dark else "#f5f5f5",
-            foreground="#ffffff" if dark else "#1a1a1a",
-            fieldbackground="#2b2b2b" if dark else "#f5f5f5",
-            rowheight=28,
-            font=("", 12),
-            borderwidth=0,
-        )
-        style.configure(
-            "Orders.Treeview.Heading",
-            background="#1f1f1f" if dark else "#d8d8d8",
-            foreground="#cccccc" if dark else "#333333",
-            font=("", 12, "bold"),
-            relief="flat",
-        )
-        # Match the native selection colour to our group-hover colour so the
-        # clicked row doesn't appear brighter than the rest of the group.
-        style.map(
-            "Orders.Treeview",
-            background=[("selected", "#3d5a80" if dark else "#cde0f5")],
-            foreground=[("selected", "#ffffff" if dark else "#1a1a1a")],
-        )
 
     def _configure_tags(self):
         dark = ctk.get_appearance_mode() == "Dark"

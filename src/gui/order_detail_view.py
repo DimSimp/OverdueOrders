@@ -182,15 +182,43 @@ class OrderDetailView(ctk.CTkFrame):
 
     # ── Header ────────────────────────────────────────────────────────────
 
+    def _get_order_url(self) -> str | None:
+        """Return the platform URL for this order, or None if unknown."""
+        if self._neto_order is not None:
+            return (
+                f"https://www.scarlettmusic.com.au/_cpanel/order/vieworder"
+                f"?id={self._order_id}"
+            )
+        if self._ebay_order is not None:
+            return (
+                f"https://www.ebay.com.au/mesh/ord/details"
+                f"?mode=SH&orderid={self._order_id}&source=Orders"
+            )
+        return None
+
     def _build_header(self, parent):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="x", padx=8, pady=(12, 4))
 
-        ctk.CTkLabel(
-            frame,
-            text=f"Order {self._order_id}",
-            font=ctk.CTkFont(size=18, weight="bold"),
-        ).pack(side="left", padx=(0, 6))
+        url = self._get_order_url()
+        if url:
+            ctk.CTkButton(
+                frame,
+                text=f"Order {self._order_id}",
+                font=ctk.CTkFont(size=18, weight="bold", underline=True),
+                fg_color="transparent",
+                text_color=("dodgerblue3", "dodgerblue"),
+                hover_color=("gray85", "gray20"),
+                cursor="hand2",
+                command=lambda u=url: webbrowser.open(u),
+                anchor="w",
+            ).pack(side="left", padx=(0, 6))
+        else:
+            ctk.CTkLabel(
+                frame,
+                text=f"Order {self._order_id}",
+                font=ctk.CTkFont(size=18, weight="bold"),
+            ).pack(side="left", padx=(0, 6))
 
         # Copy order number button
         _id_copy_btn = ctk.CTkButton(
@@ -1189,7 +1217,7 @@ class OrderDetailView(ctk.CTkFrame):
         if self._on_move_to_unmatched:
             ctk.CTkButton(
                 bar, text=self._move_to_unmatched_label, width=150, height=36,
-                fg_color="gray50", hover_color="gray40",
+                fg_color="#C0392B", hover_color="#922B21",
                 command=self._do_move_to_unmatched,
             ).pack(side="left", padx=(0, 12))
 

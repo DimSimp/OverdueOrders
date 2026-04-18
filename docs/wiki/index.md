@@ -129,9 +129,10 @@ See [module_pos.md — Development Access](module_pos.md#development-access).
 ### Phase 1 — Foundation
 Supabase infrastructure, initial data.
 
-- [ ] Supabase project setup
-- [ ] Create all Phase 1 tables (see [database_schema.md](database_schema.md))
-- [ ] `users` table + migrate from JSON
+- [x] Supabase project setup — project `scarlett-aio` created (ap-southeast-2); credentials in `config.json`
+- [x] Create all Phase 1 tables — `docs/sql/01_create_tables.sql` run and verified; also includes Phase 3 POS core tables
+- [x] `supabase-py` added to `requirements.txt`; `src/supabase_client.py` created (lazy singleton)
+- [~] `users` table migration — **deferred indefinitely**. Existing JSON-based auth (`src/user_manager.py`) is kept as-is. POS records staff as `performed_by text` (username string), same pattern as `stock_movements`. `transactions.staff_id` left nullable.
 - [ ] Inventory system UI (Plan 01)
 - [ ] Supplier management UI (Plan 03) — schema needed before inventory
 - [ ] Musipos import wizard (Plan 09) — populates initial data
@@ -146,11 +147,14 @@ Keep existing dispatch workflow alive while adding stock sync.
 ### Phase 3 — POS Core
 The in-store transaction system.
 
-- [ ] Customer management (Plan 05) + `discounts` table
-- [ ] POS/Till (Plan 02) — tab-based full-screen window
-- [ ] `transactions` + `transaction_lines` + `repairs` + `deposits` tables
-- [ ] Receipt PDF generation
-- [ ] POS button added to home screen (`pos_dev_user` gated); home screen updated to order: POS → Daily → Afternoon
+- [x] `discounts` table — created and seeded with 10/20/30/40/50% system presets
+- [x] `transactions` + `transaction_lines` tables — created (repairs + deposits deferred)
+- [x] POS button added to home screen (`pos_dev_user` gated); home screen updated to order: POS → Daily → Afternoon
+- [~] POS/Till (Plan 02) — `PosWindow` + `TillTab` (`src/gui/pos/`). Cart fully functional: SKU/barcode lookup → Supabase `items` (exact + case-insensitive; 1 match → add to cart, 0/many → inventory fuzzy search); spinner animation on Add button during lookup; rescan increments qty; inline editing of Qty/Unit Price/Disc %/Line Total (single-click overlay); bidirectional Line Total ↔ Disc % back-calculation; cart-level TOTAL override; Margin column (green > 10% / orange = 10% / red < 10%) per line + Cart Margin summary; out-of-stock modal (Allow/Remove); serialised item warning. Right-click context menu on cart rows: Show in Inventory (auto-selects item in inventory detail panel), Remove from Cart. Cross-tab wiring: Inventory tab → Add to Cart; "Show in Inventory" → auto-selects via `_auto_select` flag in `InventoryTab.search_and_focus()`. Centralised `ttk.Style` in `src/gui/styles.py`. **Right panel layout** (bottom-anchored): customer placeholder area → cart breakdown (discount input, subtotal/discount/margin/total) → Payment Method section → remaining/confirm. **Payment flow complete**: always-visible 3-column inline panel (EFT | Cash | Online); EFT capped at 3 rows; Cash shows live Change hint; live "Remaining / Change due / Paid in full" status label. `confirm_standard_sale()` in `src/pos/transaction_client.py` writes `transactions` + `transaction_lines`, atomically decrements `qty_on_hand` via `adjust_item_qty` RPC, writes `sale_instore` stock movements. Transaction numbers auto-assigned by `BEFORE INSERT` trigger (`T-2026-NNNN`, concurrent-safe). Dev data reset: `docs/sql/reset_dev_transactions.sql`. **Park & Recall**: `park_transaction()` snapshots cart → `parked` row with `cart_snapshot JSONB`; `RecallDialog` (700×460) lists parked transactions with Delete button; recalling a transaction auto-deletes it from parked list; completes as a new standard sale. **Receipt PDF**: `src/pos/receipt_generator.py` (reportlab, 80mm thermal, Code128 barcode, PyMuPDF content trim); post-sale `_ReceiptDialog` prompt; reprint available from Daily Sales. **Daily Sales dialog**: `DailySalesDialog` non-modal window; collapsible tx rows with line-item detail + TOTAL footer; day summary panel; expand/collapse all (#0 heading); sort by date (detail heading ▼/▲); divider rows between expanded transactions (TreeviewOpen/Close); Reprint Receipt button + right-click menu. **Next**: Customer profile integration.
+- [x] Inventory tab — `InventoryTab` live in POS window (`src/gui/inventory/`). Search/filter/paginate grid; full detail panel on row select. Musipos CSV importer (`src/inventory/importer.py`) with cp1252 encoding, date/price parsing, cross-supplier SKU deduplication; bulk upserted 105K+ items to Supabase with 0 errors.
+- [ ] Customer management UI (Plan 05)
+- [ ] `repairs` + `deposits` tables
+- [x] Receipt PDF generation — `src/pos/receipt_generator.py`; see POS/Till entry above.
 
 ### Phase 4 — Operations
 Purchasing, special orders, notifications.
@@ -237,4 +241,4 @@ plans.
 
 ---
 
-*Last updated: 2026-04-15*
+*Last updated: 2026-04-18 — Park & Recall system (park_transaction, RecallDialog with Delete, auto-delete on recall); receipt PDF (reportlab, 80mm thermal, barcode, PyMuPDF trim); Daily Sales dialog (collapsible tx rows, line-item detail, day summary panel, expand/collapse all, sort by date, divider rows, Reprint Receipt). Next: customer profile integration.*

@@ -8,6 +8,7 @@ import customtkinter as ctk
 
 from src.config import ConfigManager
 from src.ebay_client import EbayClient
+from src.gui.styles import apply_styles
 from src.neto_client import NetoClient
 from src.version import __version__
 
@@ -18,6 +19,7 @@ _APP_ICON = os.path.join(_ROOT, "AIO.ico")
 class App(ctk.CTk):
     def __init__(self, config: ConfigManager, startup_session: str | None = None):
         super().__init__()
+        apply_styles()
         self.config = config
         self._startup_session = startup_session
 
@@ -52,6 +54,11 @@ class App(ctk.CTk):
         _mc = config.musipos
         self.musipos_client = MusiposClient(_mc) if (_mc and _mc.enabled) else None
 
+        # Supabase — initialize if credentials are present in config
+        if config.supabase:
+            from src.supabase_client import init_client as _supa_init
+            _supa_init(config.supabase.url, config.supabase.key)
+
         # User system
         from src.user_manager import UserManager
         from src.assignment_manager import AssignmentManager
@@ -76,8 +83,7 @@ class App(ctk.CTk):
     # ── Window size helpers ────────────────────────────────────────────────
 
     def _setup_home_window(self):
-        self.geometry("500x430")
-        self.resizable(False, False)
+        self.resizable(True, True)
 
     def _setup_afternoon_window(self):
         self.title("Scarlett Music — Overdue Orders Matcher")
@@ -170,8 +176,20 @@ class App(ctk.CTk):
             on_settings=self._open_settings,
             on_switch_user=self.switch_user,
             current_user=self._current_user,
+            on_pos=self._enter_pos_mode,
+            pos_dev_user=self.config.pos_dev_user,
         )
         self._home_frame.pack(fill="both", expand=True)
+        self.after(10, lambda: self.geometry(f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"))
+
+    def _enter_pos_mode(self):
+        from src.gui.pos.pos_window import PosWindow
+        PosWindow(
+            self,
+            config=self.config,
+            current_user=self._current_user,
+            on_switch_user=self.switch_user,
+        )
 
     def _open_settings(self):
         from src.gui.settings_window import SettingsWindow

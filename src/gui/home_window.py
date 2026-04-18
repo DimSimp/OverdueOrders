@@ -16,13 +16,16 @@ class HomeFrame(ctk.CTkFrame):
     Shows mode-selection buttons before the user enters a workflow.
     """
 
-    def __init__(self, master, on_afternoon, on_daily, on_settings=None, on_switch_user=None, current_user=None, **kwargs):
+    def __init__(self, master, on_afternoon, on_daily, on_settings=None, on_switch_user=None,
+                 current_user=None, on_pos=None, pos_dev_user=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_afternoon = on_afternoon
         self._on_daily = on_daily
         self._on_settings = on_settings
         self._on_switch_user = on_switch_user
         self._current_user = current_user
+        self._on_pos = on_pos
+        self._pos_dev_user = pos_dev_user
         self._build_ui()
 
     def _open_dev_console(self):
@@ -85,6 +88,30 @@ class HomeFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=13),
             text_color=("gray40", "gray70"),
         ).pack(pady=(0, 20))
+
+        # POS button — only shown for pos_dev_user (or all users when pos_dev_user is None)
+        _show_pos = (
+            self._current_user is not None
+            and self._on_pos is not None
+            and (
+                self._pos_dev_user is None
+                or self._current_user.get("username") == self._pos_dev_user
+            )
+        )
+        if _show_pos:
+            ctk.CTkButton(
+                center,
+                text="POS / Till",
+                font=ctk.CTkFont(size=16, weight="bold"),
+                height=64,
+                command=self._on_pos,
+            ).pack(fill="x", pady=(0, 6))
+            ctk.CTkLabel(
+                center,
+                text="In-store sales, quotes, invoices, repairs, deposits",
+                font=ctk.CTkFont(size=11),
+                text_color=("gray50", "gray60"),
+            ).pack(pady=(0, 16))
 
         # Daily Operations button
         daily_btn = ctk.CTkButton(

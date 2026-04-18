@@ -562,7 +562,7 @@ class EnvelopePDFView(ctk.CTkFrame):
             print_btn = ctk.CTkButton(
                 row, text=f"Print {display}",
                 width=140, height=32, state="disabled",
-                fg_color=("gray70", "gray30"), hover_color=("gray60", "gray25"),
+                fg_color=("green3", "green4"), hover_color=("green4", "green3"),
                 command=lambda lbl=label: self._print_pdf(lbl),
             )
             print_btn.pack(side="left", padx=(0, 0))

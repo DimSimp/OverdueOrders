@@ -113,6 +113,11 @@
       "validation_marker": "D'Addario"
     }
   ],
+  "supabase": {
+    "url": "https://your-project-ref.supabase.co",
+    "key": "your-anon-public-key-here"
+  },
+  "pos_dev_user": "your-dev-username-here",
   "openai": {
     "api_key": "your-openai-api-key-here",
     "model": "gpt-4o"

@@ -73,15 +73,45 @@ Refund:          [load original transaction OR enter manually] → [confirm] →
 
 ---
 
+## Right Panel Layout
+
+The right panel (≈30% width) displays all cart summary and payment UI, bottom-anchored so content
+sits just above the Confirm Sale button:
+
+```
+[customer details area — placeholder for Plan 05]
+══════════════════════════════════  ← section divider
+Cart discount %: [___] [Apply]
+Subtotal          $X.XX
+Discount             —
+Cart Margin          —
+──────────────────────────────────
+TOTAL             $X.XX
+══════════════════════════════════  ← section divider
+Payment Method
+EFT      |  Cash      |  Online
+[  ]+     |  [      ]  |  [      ]
+          |  Change $X |
+──────────────────────────────────
+Remaining $X.XX  /  Paid in full ✓
+[        Confirm Sale        ]
+```
+
+---
+
 ## Payment Methods
+
+Payment is entered via an **always-visible 3-column inline panel** (EFT | Cash | Online) — no modals.
 
 | Method | Behaviour |
 |--------|-----------|
-| Cash | Modal for cash tendered → calculates Change Given |
-| EFT | Multiple entries tracked individually in `payment_eft` JSONB array |
-| Online | Records pre-paid online order pickup; prompts to release `qty_allocated_online` |
+| Cash | Inline entry field; live "Change $X.XX" hint shown below as soon as cash exceeds amount due |
+| EFT | Inline entry; `[+]` button adds rows below the last entry; `[−]` removes extras (min 1, max 3 rows); stored as `payment_eft` JSONB array |
+| Online | Inline entry; records pre-paid amount; future: prompts to release `qty_allocated_online` |
 
-Split payments: cash + EFT simultaneously. "Amount Remaining" display updates live.
+Any combination of methods can be used simultaneously (split payment). A live status label below the
+panel shows **Remaining $X.XX** (red), **Change due $X.XX** (green), or **Paid in full ✓** (green)
+as amounts are typed. Confirm Sale is blocked until the full amount is covered.
 
 ---
 
@@ -98,8 +128,61 @@ Customer's `discount_id` auto-applied when customer is loaded onto the transacti
 
 ## Parked Transactions
 
-`sale_status = 'parked'` with `cart_snapshot JSONB` preserves full cart state. Multiple parks
-allowed. Recalled via dropdown in top bar.
+`sale_status = 'parked'` with `cart_snapshot JSONB` preserves full cart state. The trigger
+auto-assigns a `transaction_number` (`T-YYYY-NNNN`) when a row is parked.
+
+**Park flow**: Staff click **Park** in the top bar → confirm dialog → `park_transaction()` INSERTs
+a `transactions` row with `sale_status='parked'`, `cart_snapshot={cart_items, cart_disc_pct,
+customer_name, sale_type}` — no `transaction_lines` or stock movements. Cart is then cleared.
+
+**Recall flow**: Staff click **Recall** → `RecallDialog` (700×460 modal) loads all parked rows via
+`get_parked_transactions()`. The list shows date parked, transaction number, customer name, and
+total. Double-click or "Select for POS" restores the cart from `cart_snapshot` and **immediately
+deletes the parked DB row** (fire-and-forget background thread). The recalled sale then completes
+as a new standard transaction via `confirm_standard_sale()`.
+
+**Delete**: The recall modal also has a red **Delete** button to permanently remove a parked
+transaction without recalling it.
+
+**Files**: `src/pos/transaction_client.py` — `park_transaction`, `delete_parked_transaction`,
+`get_parked_transactions`; `src/gui/pos/recall_dialog.py` — `RecallDialog`.
+
+---
+
+## Daily Sales
+
+A non-modal **Daily Sales** window (`DailySalesDialog`, `src/gui/pos/daily_sales_dialog.py`)
+is accessible via the **Sales** button in the Till top bar. It lists all completed transactions
+for today (Melbourne time).
+
+**Layout**:
+- Each transaction appears as a **collapsible parent row** (TX #, date/time, customer, user,
+  payment methods, total). Expanding it reveals per-line child rows (SKU, description, qty, RRP,
+  disc $, line total, cost, margin $, margin %) and a green **TOTAL** footer row.
+- A fixed **Day Summary** panel at the bottom aggregates: transactions count, items sold, total
+  RRP, total discount, revenue, cost, margin $, margin %, and Cash/EFT/Online payment breakdown.
+
+**Interactions**:
+- Click the **#0** (arrow) column header → expand / collapse all transactions at once.
+- Click the **Date & Time** column header → toggle sort order (▼ newest-first / ▲ oldest-first).
+- Expanding a transaction inserts a subtle **divider row** (`#2a2a2a` stripe) after it via
+  `<<TreeviewOpen>>` / `<<TreeviewClose>>` events; dividers are removed when collapsed.
+- Click any row → enables **Reprint Receipt** button in the header.
+- Right-click any row → context menu with **Reprint Receipt**.
+- **Refresh** button re-fetches from Supabase without closing the window.
+
+**Reprint**: reconstructs `cart_items` from stored `transaction_lines`, calls `generate_receipt()`
+then `print_pdf()` on a background thread.
+
+---
+
+## Cart UX Details
+
+- **SKU/Barcode entry**: "Add" button animates as a rotating spinner (`◐◓◑◒`) during lookup; disabled until result returns. On 1 match → adds to cart; on 0 or multiple → switches to Inventory tab with search pre-filled.
+- **Right-click context menu** on any cart row: **Show in Inventory** (switches tab, searches by SKU, and auto-selects the item so its detail panel opens); **Remove from Cart**.
+- **Inline cell editing**: single-click on Qty, Unit Price, Disc %, or Line Total opens an overlay entry; editing Line Total back-calculates Disc %.
+- **Cart TOTAL override**: click the TOTAL figure to type a new total directly; Disc % is back-calculated.
+- **Margin column**: per-line gross margin shown in green (>10%), orange (=10%), or red (<10%). Cart Margin summary shown in breakdown panel (staff-visible only; never printed on receipts).
 
 ---
 
@@ -122,14 +205,22 @@ allowed. Recalled via dropdown in top bar.
 
 ## Receipt
 
-Printed via reportlab. Contains:
-- Store name, address, phone
+**Implemented** — `src/pos/receipt_generator.py`. Generated via reportlab as an 80mm thermal PDF.
+Content trimmed to actual height using PyMuPDF (`_trim_to_content`) to avoid blank paper feed.
+
+Contains:
+- Store name, address, phone, ABN (from `config.shipping.sender`)
 - Transaction number (e.g. `T-2026-0001`) + Code 128 barcode (for refund scanning)
-- Customer details (if attached)
-- Line items: SKU, description, qty, unit price, discount, total — **no margin column**
-- Payment method breakdown + change given
-- Notes (if "Print on receipt" toggled)
+- Date/time (Melbourne local), staff name
+- Line items: SKU, description (truncated to 18 chars), qty, unit price, line total
+- Per-line discount sub-rows (italic, grey) if `disc_pct > 0`
+- Subtotal, item discounts, cart discount, **TOTAL** (large bold)
+- Payment breakdown: cash (+ tendered / change), EFT (multiple entries), online
 - GST included line
+
+Printed via `src/printer_utils.print_pdf()` using the configured `receipt_printer` device.
+Post-sale: `_ReceiptDialog` (CTkToplevel in `till_tab.py`) prompts staff to print.
+Reprint: available from the Daily Sales dialog for any past transaction.
 
 ---
 

@@ -26,6 +26,9 @@ else:
 
 EXAMPLE_PATH = _LOCAL_BASE / "config.example.json"
 
+# Device-specific settings — always local to this machine, never on the network share.
+_LOCAL_CONFIG_PATH = _LOCAL_BASE / "config_local.json"
+
 # ── Server availability ───────────────────────────────────────────────────────
 # Checked once at import time. Import SERVER_AVAILABLE and LOCAL_DATA_DIR in
 # other modules to resolve server vs. local fallback paths.
@@ -123,6 +126,12 @@ class AppConfig:
 
 
 @dataclass
+class SupabaseConfig:
+    url: str
+    key: str
+
+
+@dataclass
 class MusiposConfig:
     server: str               # e.g. "SERVER\\MUSIPOSSQLSRV08"
     database: str             # "musipos"
@@ -135,6 +144,12 @@ class MusiposConfig:
     default_user_id: str = "MAN"
     computer_id: str = "19"
     warehouse_id: str = "00001"
+
+
+@dataclass
+class DeviceConfig:
+    receipt_printer: str = ""   # display name of thermal receipt printer
+    a4_printer: str = ""        # display name of A4 printer
 
 
 @dataclass
@@ -161,6 +176,7 @@ class ShippingConfig:
 class ConfigManager:
     def __init__(self):
         self._raw: dict = {}
+        self._local_raw: dict = {}
         self.neto: NetoConfig = None
         self.ebay: EbayConfig = None
         self.suppliers: list[SupplierConfig] = []
@@ -169,6 +185,9 @@ class ConfigManager:
         self.ftp: Optional[FTPConfig] = None
         self.shipping: Optional[ShippingConfig] = None
         self.musipos: Optional[MusiposConfig] = None
+        self.supabase: Optional[SupabaseConfig] = None
+        self.pos_dev_user: Optional[str] = None
+        self.device: DeviceConfig = DeviceConfig()
 
     def load(self) -> None:
         if not CONFIG_PATH.exists():
@@ -176,6 +195,27 @@ class ConfigManager:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             self._raw = json.load(f)
         self._parse()
+        self.load_local()
+
+    def load_local(self) -> None:
+        """Load device-specific settings from config_local.json (silently if absent)."""
+        if _LOCAL_CONFIG_PATH.exists():
+            with open(_LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
+                self._local_raw = json.load(f)
+        d = self._local_raw.get("device", {})
+        self.device = DeviceConfig(
+            receipt_printer=d.get("receipt_printer", ""),
+            a4_printer=d.get("a4_printer", ""),
+        )
+
+    def save_local(self) -> None:
+        """Save device-specific settings to config_local.json."""
+        self._local_raw["device"] = {
+            "receipt_printer": self.device.receipt_printer,
+            "a4_printer": self.device.a4_printer,
+        }
+        with open(_LOCAL_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(self._local_raw, f, indent=2, ensure_ascii=False)
 
     def _parse(self) -> None:
         n = self._raw["neto"]
@@ -284,6 +324,15 @@ class ConfigManager:
                 computer_id=musipos_raw.get("computer_id", "19"),
                 warehouse_id=musipos_raw.get("warehouse_id", "00001"),
             )
+
+        supa_raw = self._raw.get("supabase", {})
+        if supa_raw.get("url") and supa_raw.get("key"):
+            self.supabase = SupabaseConfig(
+                url=supa_raw["url"],
+                key=supa_raw["key"],
+            )
+
+        self.pos_dev_user = self._raw.get("pos_dev_user")
 
         ship_raw = self._raw.get("shipping", {})
         if ship_raw.get("sender"):

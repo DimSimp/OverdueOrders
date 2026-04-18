@@ -21,7 +21,8 @@ class SettingsWindow(ctk.CTkToplevel):
     """
 
     _NAV_ITEMS = [
-        ("Users", "_build_users_view"),
+        ("Users",    "_build_users_view"),
+        ("Printers", "_build_printers_view"),
     ]
 
     def __init__(self, master, user_manager: "UserManager", current_user: dict, on_switch_user=None, **kwargs) -> None:
@@ -136,3 +137,7 @@ class SettingsWindow(ctk.CTkToplevel):
             user_manager=self.user_manager,
             current_user=self.current_user,
         )
+
+    def _build_printers_view(self) -> ctk.CTkFrame:
+        from src.gui.settings.printer_settings_view import PrinterSettingsView
+        return PrinterSettingsView(self._content_area)
