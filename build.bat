@@ -39,6 +39,15 @@ if exist "data\shipping\label_settings.json" (
 )
 
 echo.
+echo === Copying SumatraPDF into build output ===
+if exist "SumatraPDF-3.6.1-64.exe" (
+    copy /y "SumatraPDF-3.6.1-64.exe" "dist\Scarlett AIO\SumatraPDF-3.6.1-64.exe" >nul
+    echo Copied SumatraPDF-3.6.1-64.exe to dist\Scarlett AIO\
+) else (
+    echo [WARNING] SumatraPDF-3.6.1-64.exe not found in project root -- PDF printing may not work.
+)
+
+echo.
 echo === Deploying to server ===
 set DEPLOY_PATH=\\SERVER\Project Folder\Order-Fulfillment-App\dist\Scarlett AIO
 robocopy "dist\Scarlett AIO" "%DEPLOY_PATH%" /MIR /XF config.json /R:2 /W:3 >nul

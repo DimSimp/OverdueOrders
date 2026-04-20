@@ -150,6 +150,8 @@ class MusiposConfig:
 class DeviceConfig:
     receipt_printer: str = ""   # display name of thermal receipt printer
     a4_printer: str = ""        # display name of A4 printer
+    envelope_printer: str = ""  # display name of envelope printer (A5)
+    ui_scale: float = 0.0       # manual UI scale override (0.0 = auto-detect)
 
 
 @dataclass
@@ -206,6 +208,8 @@ class ConfigManager:
         self.device = DeviceConfig(
             receipt_printer=d.get("receipt_printer", ""),
             a4_printer=d.get("a4_printer", ""),
+            envelope_printer=d.get("envelope_printer", ""),
+            ui_scale=float(d.get("ui_scale", 0.0)),
         )
 
     def save_local(self) -> None:
@@ -213,6 +217,8 @@ class ConfigManager:
         self._local_raw["device"] = {
             "receipt_printer": self.device.receipt_printer,
             "a4_printer": self.device.a4_printer,
+            "envelope_printer": self.device.envelope_printer,
+            "ui_scale": self.device.ui_scale,
         }
         with open(_LOCAL_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(self._local_raw, f, indent=2, ensure_ascii=False)

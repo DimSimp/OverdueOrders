@@ -213,10 +213,13 @@ class RecallDialog(ctk.CTkToplevel):
 def _fmt_dt(iso: str) -> str:
     """Format an ISO datetime string as 'DD-MM-YYYY  H:MM AM/PM' (Melbourne time)."""
     try:
+        import re
         from datetime import datetime
         from zoneinfo import ZoneInfo
         _MELB = ZoneInfo("Australia/Melbourne")
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        s = iso.replace("Z", "+00:00")
+        s = re.sub(r'\.(\d{1,6})', lambda m: "." + m.group(1).ljust(6, "0"), s)
+        dt = datetime.fromisoformat(s)
         dt_local = dt.astimezone(_MELB)
         hour = dt_local.hour % 12 or 12
         am_pm = "AM" if dt_local.hour < 12 else "PM"

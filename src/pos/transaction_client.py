@@ -14,16 +14,21 @@ def confirm_standard_sale(
     payment_online: float,   # pre-paid online amount
     cash_tendered: float,    # raw amount physically handed over
     change_given: float,     # cash_tendered − payment_cash
-    performed_by: str,       # staff username for audit trail
+    performed_by: str,            # staff username for audit trail
+    sale_type: str = "standard",  # "standard" or "refund"
+    source_tx_id: Optional[str] = None,  # for linked refunds: ID of the original sale
 ) -> dict:
-    """Write a completed Standard sale to Supabase.
+    """Write a completed Standard or Refund sale to Supabase.
 
     Inserts:
       - one ``transactions`` row  (trigger auto-assigns ``transaction_number``)
       - N ``transaction_lines`` rows
-      - one ``stock_movements`` row per line (type ``sale_instore``)
+      - one ``stock_movements`` row per line (``sale_instore`` or ``return_instore``)
 
-    Atomically decrements ``items.qty_on_hand`` for each line via the
+    For linked refunds, also marks the source transaction ``is_refunded = True``
+    so it cannot be refunded a second time.
+
+    Atomically adjusts ``items.qty_on_hand`` for each line via the
     ``adjust_item_qty`` RPC function defined in migration 02.
 
     Returns the inserted transaction record (includes ``transaction_number``).
@@ -42,8 +47,10 @@ def confirm_standard_sale(
         for line in cart_items.values()
     )
 
+    movement_type = "return_instore" if sale_type.lower() == "refund" else "sale_instore"
+
     tx_payload: dict = {
-        "sale_type":           "standard",
+        "sale_type":           sale_type.lower(),
         "sale_status":         "completed",
         "subtotal":            round(subtotal, 2),
         "cart_discount_pct":   round(cart_disc_pct, 2) if cart_disc_pct else None,
@@ -57,6 +64,7 @@ def confirm_standard_sale(
         "change_given":        round(change_given, 2) if change_given else None,
         "completed_at":        now,
         "performed_by":        performed_by or None,
+        "source_tx_id":        source_tx_id or None,
     }
 
     # Insert transaction — trigger auto-assigns transaction_number
@@ -95,7 +103,7 @@ def confirm_standard_sale(
 
     db.table("transaction_lines").insert(lines).execute()
 
-    # Atomically decrement qty_on_hand and write audit records
+    # Atomically adjust qty_on_hand and write audit records
     for item_id, line in cart_items.items():
         qty_int = int(line["qty"])
 
@@ -106,11 +114,15 @@ def confirm_standard_sale(
 
         db.table("stock_movements").insert({
             "item_id":       item_id,
-            "movement_type": "sale_instore",
+            "movement_type": movement_type,
             "qty_change":    -qty_int,
             "reference_id":  tx_number,
             "performed_by":  performed_by,
         }).execute()
+
+    # Mark the original sale as refunded so it cannot be refunded again
+    if source_tx_id and sale_type.lower() == "refund":
+        db.table("transactions").update({"is_refunded": True}).eq("id", source_tx_id).execute()
 
     return tx
 
@@ -325,6 +337,23 @@ def get_daily_transactions(date_str: str = None) -> list:
         .execute()
     )
     return result.data
+
+
+def get_transaction_by_number(tx_number: str) -> Optional[dict]:
+    """Return a completed transaction matching tx_number (with lines), or None."""
+    from src.supabase_client import get_client
+    db = get_client()
+    result = (
+        db.table("transactions")
+        .select("*, transaction_lines(*)")
+        .eq("sale_status", "completed")
+        .eq("transaction_number", tx_number.upper().strip())
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0]
+    return None
 
 
 def get_parked_transactions() -> list:

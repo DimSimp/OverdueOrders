@@ -46,8 +46,9 @@ class DailySalesDialog(ctk.CTkToplevel):
     - Right-click any row to open a context menu with "Reprint Receipt".
     """
 
-    def __init__(self, master, **kwargs) -> None:
+    def __init__(self, master, on_refund=None, **kwargs) -> None:
         super().__init__(master, **kwargs)
+        self._on_refund_cb = on_refund
         self._rows: list[dict] = []
         self._selected_tx: Optional[dict] = None
         self._sort_desc: bool = True        # True = newest first (▼)
@@ -98,6 +99,15 @@ class DailySalesDialog(ctk.CTkToplevel):
             hover_color=("gray85", "gray25"),
             command=self._load,
         ).pack(side="right", padx=16, pady=8)
+
+        self._refund_btn = ctk.CTkButton(
+            header, text="Refund Order", width=120, font=ctk.CTkFont(size=12),
+            state="disabled",
+            fg_color=("#9b1c1c", "#7f1d1d"),
+            hover_color=("#7f1d1d", "#5c1212"),
+            command=self._do_refund,
+        )
+        self._refund_btn.pack(side="right", padx=(0, 8), pady=8)
 
         self._reprint_btn = ctk.CTkButton(
             header, text="Reprint Receipt", width=130, font=ctk.CTkFont(size=12),
@@ -150,10 +160,12 @@ class DailySalesDialog(ctk.CTkToplevel):
         hsb.grid(row=1, column=0, sticky="ew")
 
         # Row tags
-        self._tree.tag_configure("tx_row",   font=("Segoe UI", 10, "bold"))
-        self._tree.tag_configure("line_row", font=("Segoe UI", 10))
-        self._tree.tag_configure("sum_row",  font=("Segoe UI", 10, "bold"),
-                                             foreground="#22c55e")
+        self._tree.tag_configure("tx_row",      font=("Segoe UI", 10, "bold"))
+        self._tree.tag_configure("refund_tx_row", font=("Segoe UI", 10, "bold"),
+                                                  foreground="#e74c3c")
+        self._tree.tag_configure("line_row",    font=("Segoe UI", 10))
+        self._tree.tag_configure("sum_row",     font=("Segoe UI", 10, "bold"),
+                                                foreground="#22c55e")
         # Divider row — a subtle colour-band shown between open transactions
         self._tree.tag_configure("div_row",
                                  background="#2a2a2a", foreground="#2a2a2a")
@@ -259,6 +271,7 @@ class DailySalesDialog(ctk.CTkToplevel):
         self._all_expanded = False
         self._selected_tx = None
         self._reprint_btn.configure(state="disabled")
+        self._refund_btn.configure(state="disabled")
         self._tree.delete(*self._tree.get_children())
         for tx in self._rows:
             self._insert_transaction(tx)
@@ -273,10 +286,14 @@ class DailySalesDialog(ctk.CTkToplevel):
 
     def _insert_transaction(self, tx: dict) -> None:
         """Insert one transaction parent row + child line rows + TOTAL footer."""
-        tx_id   = tx["id"]
-        tx_num  = tx.get("transaction_number") or ""
-        total   = float(tx.get("total") or 0)
-        lines   = tx.get("transaction_lines") or []
+        tx_id      = tx["id"]
+        tx_num_raw = tx.get("transaction_number") or ""
+        total      = float(tx.get("total") or 0)
+        lines      = tx.get("transaction_lines") or []
+        is_refund     = (tx.get("sale_type") or "").lower() == "refund"
+        is_refunded   = bool(tx.get("is_refunded"))
+        parent_tag = "refund_tx_row" if is_refund else "tx_row"
+        tx_num = f"{tx_num_raw}  [Refunded]" if is_refunded else tx_num_raw
 
         parts: list[str] = []
         cash = float(tx.get("payment_cash") or 0)
@@ -301,7 +318,7 @@ class DailySalesDialog(ctk.CTkToplevel):
                 "", "", "", "",
                 f"${total:,.2f}",
             ),
-            tags=("tx_row",),
+            tags=(parent_tag,),
             open=False,
         )
 
@@ -479,6 +496,7 @@ class DailySalesDialog(ctk.CTkToplevel):
         self._all_expanded = False
         self._selected_tx = None
         self._reprint_btn.configure(state="disabled")
+        self._refund_btn.configure(state="disabled")
         self._tree.delete(*self._tree.get_children())
         for tx in self._rows:
             self._insert_transaction(tx)
@@ -498,10 +516,15 @@ class DailySalesDialog(ctk.CTkToplevel):
         if not sel:
             self._selected_tx = None
             self._reprint_btn.configure(state="disabled")
+            self._refund_btn.configure(state="disabled")
             return
         tx = self._resolve_tx(sel[0])
         self._selected_tx = tx
         self._reprint_btn.configure(state="normal" if tx else "disabled")
+        is_refund_tx  = tx is not None and (tx.get("sale_type") or "").lower() == "refund"
+        already_done  = tx is not None and bool(tx.get("is_refunded"))
+        can_refund    = tx is not None and not is_refund_tx and not already_done and self._on_refund_cb is not None
+        self._refund_btn.configure(state="normal" if can_refund else "disabled")
 
     def _on_right_click(self, event) -> None:
         iid = self._tree.identify_row(event.y)
@@ -513,8 +536,14 @@ class DailySalesDialog(ctk.CTkToplevel):
         self._tree.selection_set(iid)
         self._selected_tx = tx
         self._reprint_btn.configure(state="normal")
+        is_refund_tx = (tx.get("sale_type") or "").lower() == "refund"
+        already_done = bool(tx.get("is_refunded"))
+        can_refund   = not is_refund_tx and not already_done and self._on_refund_cb is not None
+        self._refund_btn.configure(state="normal" if can_refund else "disabled")
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="Reprint Receipt", command=self._reprint_receipt)
+        if can_refund:
+            menu.add_command(label="Refund Order", command=self._do_refund)
         menu.tk_popup(event.x_root, event.y_root)
 
     def _resolve_tx(self, iid: str) -> Optional[dict]:
@@ -528,6 +557,15 @@ class DailySalesDialog(ctk.CTkToplevel):
         if parent_iid in tx_ids:
             return next((r for r in self._rows if r["id"] == parent_iid), None)
         return None
+
+    # ── Refund ─────────────────────────────────────────────────────────────
+
+    def _do_refund(self) -> None:
+        tx = self._selected_tx
+        if not tx or not self._on_refund_cb:
+            return
+        self._on_refund_cb(tx)
+        self.destroy()
 
     # ── Receipt reprint ────────────────────────────────────────────────────
 
@@ -588,10 +626,15 @@ def _is_divider(iid: str) -> bool:
 def _fmt_dt(iso: str) -> str:
     """Format an ISO UTC datetime string as 'DD-MM-YYYY  H:MM AM/PM' (Melbourne time)."""
     try:
+        import re
         from datetime import datetime
         from zoneinfo import ZoneInfo
         _MELB = ZoneInfo("Australia/Melbourne")
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        # Python 3.9 fromisoformat only accepts exactly 3 or 6 fractional digits.
+        # PostgreSQL strips trailing zeros (e.g. .100000 → .1), so normalise to 6.
+        s = iso.replace("Z", "+00:00")
+        s = re.sub(r'\.(\d{1,6})', lambda m: "." + m.group(1).ljust(6, "0"), s)
+        dt = datetime.fromisoformat(s)
         dt_local = dt.astimezone(_MELB)
         hour = dt_local.hour % 12 or 12
         am_pm = "AM" if dt_local.hour < 12 else "PM"

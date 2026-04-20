@@ -29,6 +29,58 @@ _install_memory_log()
 from src.config import config
 from src.gui.app import App
 
+_log = logging.getLogger(__name__)
+
+
+def _get_screen_height() -> int:
+    """Return the primary screen's logical height in pixels (accounting for Windows DPI scaling)."""
+    try:
+        import ctypes
+        physical_h = ctypes.windll.user32.GetSystemMetrics(1)  # SM_CYSCREEN
+        dpi = ctypes.windll.user32.GetDpiForSystem()           # typically 96, 120, 144…
+        return int(physical_h * 96 / dpi)
+    except Exception:
+        return 1080  # safe default
+
+
+def _apply_ui_scale() -> None:
+    """Set customtkinter widget scaling before any windows are created.
+
+    Checks config_local.json for a manual override (device.ui_scale > 0),
+    otherwise picks a scale factor based on the screen's logical height so
+    that the POS right-panel content always fits without clipping.
+
+    Scale tiers (logical screen height → factor):
+      ≤ 768 px  →  0.78
+      ≤ 864 px  →  0.85
+      ≤ 960 px  →  0.90
+      ≤ 1050 px →  0.95
+       > 1050   →  1.00  (no override)
+    """
+    import customtkinter as ctk
+
+    manual = config.device.ui_scale
+    if manual and manual > 0:
+        ctk.set_widget_scaling(manual)
+        _log.info("UI scale: %.2f (manual override via config_local.json)", manual)
+        return
+
+    screen_h = _get_screen_height()
+    if screen_h <= 768:
+        scale = 0.78
+    elif screen_h <= 864:
+        scale = 0.85
+    elif screen_h <= 960:
+        scale = 0.90
+    elif screen_h <= 1050:
+        scale = 0.95
+    else:
+        scale = 1.00
+
+    if scale < 1.0:
+        ctk.set_widget_scaling(scale)
+    _log.info("UI scale: %.2f (auto, screen_h=%d logical px)", scale, screen_h)
+
 
 def _register_if_needed():
     """
@@ -108,6 +160,7 @@ def main():
     # open it automatically on startup
     startup_session = sys.argv[1] if len(sys.argv) > 1 else None
 
+    _apply_ui_scale()  # must run before any CTk widgets are created
     app = App(config, startup_session=startup_session)
     app.mainloop()
 

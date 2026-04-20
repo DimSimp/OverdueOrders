@@ -18,6 +18,7 @@ class PrinterSettingsView(ctk.CTkFrame):
         self._printers: list[str] = []
         self._receipt_var = ctk.StringVar(value=config.device.receipt_printer or _NONE_LABEL)
         self._a4_var = ctk.StringVar(value=config.device.a4_printer or _NONE_LABEL)
+        self._envelope_var = ctk.StringVar(value=config.device.envelope_printer or _NONE_LABEL)
         self._build_ui()
         self._load_printers()
 
@@ -79,7 +80,29 @@ class PrinterSettingsView(ctk.CTkFrame):
             width=320,
             font=ctk.CTkFont(size=12),
         )
-        self._a4_menu.pack(anchor="w", pady=(0, 24))
+        self._a4_menu.pack(anchor="w", pady=(0, 20))
+
+        # ── Envelope printer ──────────────────────────────────────────────
+        ctk.CTkLabel(
+            self,
+            text="Envelope printer  (A5)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            self,
+            text="Used for printing Minilope and Devilope address labels.",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        ).pack(anchor="w", pady=(0, 4))
+
+        self._envelope_menu = ctk.CTkOptionMenu(
+            self,
+            variable=self._envelope_var,
+            values=[_NONE_LABEL],
+            width=320,
+            font=ctk.CTkFont(size=12),
+        )
+        self._envelope_menu.pack(anchor="w", pady=(0, 24))
 
         # ── Buttons ───────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -127,15 +150,24 @@ class PrinterSettingsView(ctk.CTkFrame):
         self._printers = printers
         options = [_NONE_LABEL] + printers
 
-        # Re-insert saved values that aren't in the discovered list
+        # Re-insert saved values that aren't in the discovered list, then
+        # explicitly restore the StringVar — CTkOptionMenu.configure(values=…)
+        # can reset the variable to the first item in some customtkinter builds.
         for var, menu in ((self._receipt_var, self._receipt_menu),
-                          (self._a4_var, self._a4_menu)):
-            saved = var.get()
-            if saved and saved != _NONE_LABEL and saved not in printers:
-                options_with_saved = [_NONE_LABEL, f"{saved} (not found)"] + printers
-                menu.configure(values=options_with_saved)
+                          (self._a4_var, self._a4_menu),
+                          (self._envelope_var, self._envelope_menu)):
+            # Strip any stale "(not found)" suffix carried from a previous scan
+            raw = var.get()
+            if raw.endswith(" (not found)"):
+                raw = raw[: -len(" (not found)")]
+
+            if raw and raw != _NONE_LABEL and raw not in printers:
+                opts = [_NONE_LABEL, f"{raw} (not found)"] + printers
+                menu.configure(values=opts)
+                var.set(f"{raw} (not found)")
             else:
                 menu.configure(values=options)
+                var.set(raw if raw in printers else _NONE_LABEL)
 
         count = len(printers)
         self._status_lbl.configure(
@@ -148,15 +180,19 @@ class PrinterSettingsView(ctk.CTkFrame):
     def _save(self) -> None:
         receipt = self._receipt_var.get()
         a4 = self._a4_var.get()
+        envelope = self._envelope_var.get()
 
         # Strip "(not found)" suffix if present
         if receipt.endswith(" (not found)"):
             receipt = receipt[: -len(" (not found)")]
         if a4.endswith(" (not found)"):
             a4 = a4[: -len(" (not found)")]
+        if envelope.endswith(" (not found)"):
+            envelope = envelope[: -len(" (not found)")]
 
         config.device.receipt_printer = "" if receipt == _NONE_LABEL else receipt
         config.device.a4_printer = "" if a4 == _NONE_LABEL else a4
+        config.device.envelope_printer = "" if envelope == _NONE_LABEL else envelope
 
         try:
             config.save_local()

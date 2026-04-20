@@ -45,6 +45,7 @@ class TillTab(ctk.CTkFrame):
         self._cart_items: dict[str, dict] = {}  # item_id → line data
         self._cart_disc_pct: float = 0.0
         self._parked_tx_id: Optional[str] = None
+        self._source_tx_id: Optional[str] = None  # set when loading a linked refund
         # Payment state
         self._payment_cash: float = 0.0    # cash tendered (0 = not entered)
         self._payment_eft: list[dict] = [] # [{"amount": X.XX}, ...]
@@ -70,6 +71,7 @@ class TillTab(ctk.CTkFrame):
         ).pack(side="left", padx=(14, 4), pady=10)
 
         self._sale_type_var = ctk.StringVar(value="Standard")
+        self._sale_type_var.trace_add("write", self._on_sale_type_change)
         ctk.CTkOptionMenu(
             top_bar,
             variable=self._sale_type_var,
@@ -78,17 +80,33 @@ class TillTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
         ).pack(side="left", pady=10)
 
-        ctk.CTkLabel(
-            top_bar, text="Customer:", font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(20, 4), pady=10)
+        # Tx# lookup row — shown only in Refund mode
+        self._tx_lookup_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        # NOT packed here — _on_sale_type_change controls visibility
 
-        self._customer_entry = ctk.CTkEntry(
-            top_bar,
-            placeholder_text="Name / mobile / barcode...",
-            width=200,
+        ctk.CTkLabel(
+            self._tx_lookup_frame,
+            text="Transaction #:",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(20, 4))
+
+        self._tx_number_entry = ctk.CTkEntry(
+            self._tx_lookup_frame,
+            placeholder_text="e.g. T-2026-0001",
+            width=180,
             font=ctk.CTkFont(size=12),
         )
-        self._customer_entry.pack(side="left", pady=10)
+        self._tx_number_entry.pack(side="left")
+        self._tx_number_entry.bind("<Return>", lambda _e: self._on_tx_lookup())
+
+        self._tx_load_btn = ctk.CTkButton(
+            self._tx_lookup_frame,
+            text="Load",
+            width=60,
+            font=ctk.CTkFont(size=12),
+            command=self._on_tx_lookup,
+        )
+        self._tx_load_btn.pack(side="left", padx=(6, 0))
 
         ctk.CTkButton(
             top_bar, text="Recall", width=80, font=ctk.CTkFont(size=12),
@@ -211,6 +229,29 @@ class TillTab(ctk.CTkFrame):
     def _build_payment_panel(self, parent):
         right = ctk.CTkFrame(parent, fg_color=("gray90", "gray15"), corner_radius=8)
         right.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
+
+        # Customer entry — top of right panel (future customer profile area)
+        customer_row = ctk.CTkFrame(right, fg_color="transparent")
+        customer_row.pack(fill="x", padx=16, pady=(12, 0))
+
+        ctk.CTkLabel(
+            customer_row,
+            text="Customer:",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray70"),
+        ).pack(side="left", padx=(0, 6))
+
+        self._customer_entry = ctk.CTkEntry(
+            customer_row,
+            placeholder_text="Name / mobile / barcode...",
+            font=ctk.CTkFont(size=12),
+        )
+        self._customer_entry.pack(side="left", fill="x", expand=True)
+
+        # Thin divider beneath customer row
+        ctk.CTkFrame(right, fg_color=("gray70", "gray40"), height=1).pack(
+            fill="x", padx=0, pady=(10, 0),
+        )
 
         # Push content to the bottom — spacer absorbs all free space at the top
         ctk.CTkFrame(right, fg_color="transparent").pack(expand=True)
@@ -491,14 +532,17 @@ class TillTab(ctk.CTkFrame):
         _cost = item.get("average_cost_exc_gst") or item.get("last_purchase_cost")
         cost_price = float(_cost) if _cost else None
 
+        is_refund = self._sale_type_var.get() == "Refund"
+        delta = -1 if is_refund else 1
+
         if item_id in self._cart_items:
-            self._cart_items[item_id]["qty"] += 1
+            self._cart_items[item_id]["qty"] += delta
             self._refresh_tree_row(item_id)
         else:
             self._cart_items[item_id] = {
                 "sku":        item.get("sku") or "",
                 "title":      item.get("title") or "",
-                "qty":        1,
+                "qty":        -1 if is_refund else 1,
                 "unit_price": unit_price,
                 "disc_pct":   0.0,
                 "cost_price": cost_price,
@@ -722,6 +766,7 @@ class TillTab(ctk.CTkFrame):
             self._eft_row_widgets.clear()
             self._add_eft_row()
         self._parked_tx_id = None
+        self._source_tx_id = None
         if hasattr(self, "_customer_entry"):
             self._customer_entry.delete(0, "end")
         self._update_totals()
@@ -804,7 +849,10 @@ class TillTab(ctk.CTkFrame):
             )
         else:
             self._lbl_discount.configure(text="—")
-        self._lbl_total.configure(text=f"${total:,.2f}")
+        self._lbl_total.configure(
+            text=f"${total:,.2f}",
+            text_color=("#c0392b", "#e74c3c") if total < -0.005 else ("gray10", "#e0e0e0"),
+        )
 
         # Cart margin (staff-only)
         total_cost = sum(
@@ -894,6 +942,8 @@ class TillTab(ctk.CTkFrame):
             + sum(e["amount"] for e in self._payment_eft)
             + self._payment_online
         )
+        if self._sale_type_var.get() == "Refund" and total < 0:
+            return max(0.0, abs(total) - paid)
         return max(0.0, total - paid)
 
     _MAX_EFT_ROWS = 3
@@ -991,10 +1041,11 @@ class TillTab(ctk.CTkFrame):
         if not hasattr(self, "_remaining_lbl"):
             return
         total = self._get_total()
+        is_refund = self._sale_type_var.get() == "Refund"
 
-        # Cash change hint (next to the cash field)
+        # Cash change hint (next to the cash field) — only for normal sales
         if hasattr(self, "_cash_change_lbl"):
-            if self._payment_cash > 0 and total > 0:
+            if self._payment_cash > 0 and total > 0 and not is_refund:
                 eft_total = sum(e["amount"] for e in self._payment_eft)
                 cash_needed = max(0.0, total - eft_total - self._payment_online)
                 change = self._payment_cash - cash_needed
@@ -1007,6 +1058,32 @@ class TillTab(ctk.CTkFrame):
                     self._cash_change_lbl.configure(text="")
             else:
                 self._cash_change_lbl.configure(text="")
+
+        # Refund mode: total is negative
+        if is_refund and total < -0.005:
+            refund_amt = abs(total)
+            given = (
+                self._payment_cash
+                + sum(e["amount"] for e in self._payment_eft)
+                + self._payment_online
+            )
+            remaining = refund_amt - given
+            if remaining > 0.005:
+                self._remaining_lbl.configure(
+                    text=f"Refund remaining  ${remaining:.2f}",
+                    text_color=("#c0392b", "#e74c3c"),
+                )
+            elif remaining < -0.005:
+                self._remaining_lbl.configure(
+                    text=f"Over-refund  ${-remaining:.2f}",
+                    text_color=("#c0392b", "#e74c3c"),
+                )
+            else:
+                self._remaining_lbl.configure(
+                    text="Refund ready  ✓",
+                    text_color=("#1a6b2e", "#22c55e"),
+                )
+            return
 
         if total <= 0:
             self._remaining_lbl.configure(text="")
@@ -1051,11 +1128,18 @@ class TillTab(ctk.CTkFrame):
             )
             return
 
+        sale_type = self._sale_type_var.get()
+        is_refund = sale_type == "Refund"
         total = self._get_total()
         subtotal = self._get_subtotal()
         eft_total = sum(e["amount"] for e in self._payment_eft)
-        cash_required = max(0.0, total - eft_total - self._payment_online)
-        change_given = max(0.0, self._payment_cash - cash_required)
+
+        if is_refund:
+            cash_required = max(0.0, abs(total) - eft_total - self._payment_online)
+            change_given = 0.0
+        else:
+            cash_required = max(0.0, total - eft_total - self._payment_online)
+            change_given = max(0.0, self._payment_cash - cash_required)
 
         performed_by = ""
         if self.current_user:
@@ -1069,6 +1153,8 @@ class TillTab(ctk.CTkFrame):
         cart_snapshot = {k: dict(v) for k, v in self._cart_items.items()}
         eft_snapshot = list(self._payment_eft)
         parked_tx_id = self._parked_tx_id
+        source_tx_id_snap = self._source_tx_id
+        confirm_text = "Confirm Refund" if is_refund else "Confirm Sale"
 
         self._btn_confirm.configure(state="disabled", text="Processing…")
 
@@ -1102,6 +1188,8 @@ class TillTab(ctk.CTkFrame):
                         cash_tendered=self._payment_cash,
                         change_given=change_given,
                         performed_by=performed_by,
+                        sale_type=sale_type,
+                        source_tx_id=source_tx_id_snap,
                     )
                 self.after(0, lambda: _on_success(tx))
             except Exception as exc:
@@ -1109,15 +1197,17 @@ class TillTab(ctk.CTkFrame):
                 self.after(0, lambda: _on_error(err))
 
         def _on_success(tx: dict):
-            cart_snapshot = dict(self._cart_items)   # capture before clear
-            self._btn_confirm.configure(state="normal", text="Confirm Sale")
+            cart_snap = dict(self._cart_items)   # capture before clear
+            self._btn_confirm.configure(state="normal", text=confirm_text)
             self._clear_cart()
+            if is_refund:
+                self._sale_type_var.set("Standard")  # revert after refund
             if self.refresh_inventory:
                 self.refresh_inventory()
-            _show_sale_complete_dialog(self, tx, cart_snapshot)
+            _show_sale_complete_dialog(self, tx, cart_snap)
 
         def _on_error(err: str):
-            self._btn_confirm.configure(state="normal", text="Confirm Sale")
+            self._btn_confirm.configure(state="normal", text=confirm_text)
             messagebox.showerror(
                 "Sale Failed",
                 f"Could not save the transaction:\n\n{err}",
@@ -1190,7 +1280,119 @@ class TillTab(ctk.CTkFrame):
 
     def _on_sales(self):
         from src.gui.pos.daily_sales_dialog import DailySalesDialog
-        DailySalesDialog(self.winfo_toplevel())
+        DailySalesDialog(self.winfo_toplevel(), on_refund=self._load_refund_cart)
+
+    def _on_tx_lookup(self):
+        """Load a transaction by number for refund (Load button or Enter key)."""
+        tx_number = self._tx_number_entry.get().strip()
+        if not tx_number:
+            return
+
+        self._tx_number_entry.configure(state="disabled")
+        self._tx_load_btn.configure(text="…", state="disabled")
+
+        def _restore():
+            self._tx_number_entry.configure(state="normal")
+            self._tx_load_btn.configure(text="Load", state="normal")
+
+        def _thread():
+            from src.pos.transaction_client import get_transaction_by_number
+            try:
+                tx = get_transaction_by_number(tx_number)
+                self.after(0, lambda: _on_result(tx))
+            except Exception as exc:
+                err = str(exc)
+                self.after(0, lambda: _on_error(err))
+
+        def _on_result(tx: Optional[dict]):
+            _restore()
+            if tx is None:
+                messagebox.showerror(
+                    "Not Found",
+                    f"Transaction '{tx_number}' was not found.",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            if (tx.get("sale_type") or "").lower() == "refund":
+                messagebox.showerror(
+                    "Invalid",
+                    "Cannot refund a refund transaction.",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            if tx.get("is_refunded"):
+                messagebox.showerror(
+                    "Already Refunded",
+                    "This transaction has already been refunded.",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            self._tx_number_entry.delete(0, "end")
+            self._load_refund_cart(tx)
+
+        def _on_error(err: str):
+            _restore()
+            messagebox.showerror(
+                "Lookup Error",
+                f"Could not query transaction:\n{err}",
+                parent=self.winfo_toplevel(),
+            )
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _on_sale_type_change(self, *_):
+        is_refund = self._sale_type_var.get() == "Refund"
+        self._btn_confirm.configure(
+            text="Confirm Refund" if is_refund else "Confirm Sale",
+        )
+        if hasattr(self, "_tx_lookup_frame"):
+            if is_refund:
+                self._tx_lookup_frame.pack(side="left", pady=10)
+            else:
+                self._tx_lookup_frame.pack_forget()
+                if hasattr(self, "_tx_number_entry"):
+                    self._tx_number_entry.delete(0, "end")
+        self._update_totals()
+
+    def _load_refund_cart(self, tx: dict):
+        """Load a past transaction into the cart with negated quantities for refund."""
+        if self._cart_items:
+            if not messagebox.askyesno(
+                "Replace Cart?",
+                "The current cart will be replaced with the refund. Continue?",
+                parent=self.winfo_toplevel(),
+            ):
+                return
+
+        self._clear_cart()
+        self._source_tx_id = tx.get("id")  # link this refund to the original sale
+        self._sale_type_var.set("Refund")  # triggers _on_sale_type_change via trace
+
+        lines = tx.get("transaction_lines") or []
+        for i, line in enumerate(lines):
+            item_id = line.get("item_id") or str(i)
+            qty = float(line.get("qty") or 1)
+            self._cart_items[item_id] = {
+                "sku":        line.get("sku") or "",
+                "title":      line.get("description") or "",
+                "qty":        -abs(qty),   # always negative for refund
+                "unit_price": float(line.get("unit_price") or 0),
+                "disc_pct":   float(line.get("discount_pct") or 0),
+                "cost_price": float(line.get("cost_price") or 0) if line.get("cost_price") else None,
+            }
+            self._insert_tree_row(item_id)
+            self._refresh_tree_row(item_id)
+
+        # Preserve cart-level discount so refund total matches original payment
+        cart_disc = float(tx.get("cart_discount_pct") or 0)
+        self._cart_disc_pct = cart_disc
+        self._disc_entry.delete(0, "end")
+        if cart_disc:
+            self._disc_entry.insert(0, str(cart_disc))
+
+        self._update_totals()
+        self.winfo_toplevel().lift()
+        self.winfo_toplevel().focus_force()
 
     def _load_parked_cart(self, tx: dict):
         """Restore the till from a recalled parked transaction snapshot."""

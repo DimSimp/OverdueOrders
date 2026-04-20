@@ -89,7 +89,10 @@ _MELB_TZ = ZoneInfo("Australia/Melbourne")
 def _fmt_datetime(iso: str) -> str:
     """Convert UTC ISO string to Melbourne local time, formatted as DD-MM-YYYY H:MM AM/PM."""
     try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        import re
+        s = iso.replace("Z", "+00:00")
+        s = re.sub(r'\.(\d{1,6})', lambda m: "." + m.group(1).ljust(6, "0"), s)
+        dt = datetime.fromisoformat(s)
         dt_local = dt.astimezone(_MELB_TZ)
         hour = dt_local.hour % 12 or 12          # 0 → 12, 13 → 1, etc.
         am_pm = "AM" if dt_local.hour < 12 else "PM"

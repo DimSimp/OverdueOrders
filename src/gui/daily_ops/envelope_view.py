@@ -684,7 +684,19 @@ class EnvelopePDFView(ctk.CTkFrame):
         if not path or not os.path.exists(path):
             return
         import subprocess
-        import shutil
+        import tkinter.messagebox as mb
+        from src.config import config
+
+        # Require envelope printer to be configured
+        printer = config.device.envelope_printer
+        if not printer:
+            mb.showwarning(
+                "No Envelope Printer Configured",
+                "No envelope printer has been set.\n\n"
+                "Go to Settings \u2192 Printers and select a printer under "
+                "\u201cEnvelope printer (A5)\u201d.",
+            )
+            return
 
         # Try SumatraPDF — supports direct print with monochrome + actual-size
         # (1x = 100% / no scaling, so A5 PDF prints on A5 paper; mono = B&W)
@@ -692,7 +704,7 @@ class EnvelopePDFView(ctk.CTkFrame):
         if sumatra:
             subprocess.Popen([
                 sumatra,
-                "-print-to-default",
+                "-print-to", printer,
                 "-print-settings", "1x,mono",
                 "-silent",
                 path,
@@ -702,7 +714,6 @@ class EnvelopePDFView(ctk.CTkFrame):
             # Without it the default PDF reader will use its own settings and
             # the postcode may fall outside the printable area.
             log.warning("SumatraPDF not found — opening PDF for manual printing")
-            import tkinter.messagebox as mb
             mb.showwarning(
                 "SumatraPDF not found",
                 "SumatraPDF is required to print envelopes correctly.\n\n"

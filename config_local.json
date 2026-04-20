@@ -1,6 +1,7 @@
 {
   "device": {
     "receipt_printer": "POS-80-Series",
-    "a4_printer": "Brother MFC-L8690CDW series Printer"
+    "a4_printer": "Brother MFC-L8690CDW series Printer",
+    "envelope_printer": "Brother MFC-L8690CDW series Printer"
   }
 }

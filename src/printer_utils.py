@@ -39,7 +39,7 @@ def print_pdf(pdf_path: str, printer_name: str) -> None:
     subprocess.Popen([
         sumatra,
         "-print-to", printer_name,
-        "-print-settings", "1x",
+        "-print-settings", "noscale,portrait,1x",
         "-silent",
         pdf_path,
     ])

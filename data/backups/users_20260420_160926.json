@@ -1,0 +1,89 @@
+{
+  "users": [
+    {
+      "user_id": "30d696c7-e191-4083-a95c-4958f549d743",
+      "username": "Sbonanno",
+      "first_name": "Sam",
+      "last_name": "Bonanno",
+      "password_hash": "pbkdf2:sha256:yFu402+0zyehhNJMBI3uvw==:A7j4trzp2hwRvMM8v6A33d/a3aiY3ZdfxqtoyvF5efg=",
+      "role": "admin",
+      "neto_api": "",
+      "created_at": "2026-03-27T16:45:49",
+      "active": true
+    },
+    {
+      "user_id": "827e6f9b-3508-4366-bec3-bc7edd85248d",
+      "username": "Ebburke",
+      "first_name": "Ethan",
+      "last_name": "Bremner-Burke",
+      "password_hash": "pbkdf2:sha256:ML1dNlnS3gLuqcmWyf3Q/A==:E6/EvZKTDPI/4OiyI/LsqwNKCtS46bYiLjh7UALeHr8=",
+      "role": "user",
+      "neto_api": "",
+      "created_at": "2026-03-27T16:46:21",
+      "active": true
+    },
+    {
+      "user_id": "2ec7f565-bea7-41f9-b9aa-a9f795766eeb",
+      "username": "Lfaehrmann",
+      "first_name": "Levi",
+      "last_name": "Faehrmann",
+      "password_hash": "pbkdf2:sha256:ve0duTrbn58y21vOrGc9sw==:uU0FSxEtOQZXZ7YEYuMge19JCmHFJLzSOzVwlmI9XzY=",
+      "role": "user",
+      "neto_api": "",
+      "created_at": "2026-03-27T16:47:41",
+      "active": true
+    },
+    {
+      "user_id": "fb1efb7a-292a-4626-8e9b-6bc2be726a06",
+      "username": "Kscarlett",
+      "first_name": "Kyal",
+      "last_name": "Scarlett",
+      "password_hash": "pbkdf2:sha256:lBJ9kpQoEBO7rXa9c7f9Tw==:qpdPZOgpxvWdPrqvC7shimsie4b51Xec+egsWvGyEm0=",
+      "role": "admin",
+      "neto_api": "",
+      "created_at": "2026-03-27T16:47:59",
+      "active": true
+    },
+    {
+      "user_id": "f4b74e33-8417-41cc-9e35-d3e317497a9e",
+      "username": "Sscarlett",
+      "first_name": "Shaun",
+      "last_name": "Scarlett",
+      "password_hash": "pbkdf2:sha256:kIGL6b3qaaVwzePplQNFPA==:f3DSL1D/bJp7zawy0M8/FoUBvNunDlHC3pAEgGiTKyw=",
+      "role": "user",
+      "neto_api": "",
+      "created_at": "2026-03-27T16:48:17",
+      "active": true
+    }
+  ],
+  "sessions": {
+    "Sbonanno": {
+      "logged_in": true,
+      "device_name": "SAMPC1",
+      "last_heartbeat": "2026-04-20T16:09:21",
+      "processing_order_id": "N480830",
+      "processing_since": "2026-04-20T16:07:05"
+    },
+    "Ebburke": {
+      "logged_in": true,
+      "device_name": "InDurstsLight",
+      "last_heartbeat": "2026-04-20T16:09:18",
+      "processing_order_id": "16-14501-44935",
+      "processing_since": "2026-04-20T16:09:05"
+    },
+    "Lfaehrmann": {
+      "logged_in": true,
+      "device_name": "InDurstsLight",
+      "last_heartbeat": "2026-04-16T18:25:48",
+      "processing_order_id": null,
+      "processing_since": null
+    },
+    "Sscarlett": {
+      "logged_in": false,
+      "device_name": "SAMPC1",
+      "last_heartbeat": "2026-04-20T10:58:32",
+      "processing_order_id": null,
+      "processing_since": null
+    }
+  }
+}

@@ -60,10 +60,19 @@ class App(ctk.CTk):
             _supa_init(config.supabase.url, config.supabase.key)
 
         # User system
-        from src.user_manager import UserManager
+        from src.user_manager import UserManager, USERS_FILE
         from src.assignment_manager import AssignmentManager
         self.user_manager = UserManager()
         self.assignment_manager = AssignmentManager()
+
+        # Periodic backup of critical network files → local fallback copies
+        from src.backup import schedule_backup
+        from src.config import CONFIG_PATH, LOCAL_DATA_DIR
+        schedule_backup(
+            sources=[USERS_FILE, CONFIG_PATH],
+            backup_dir=LOCAL_DATA_DIR / "backups",
+        )
+
         self._current_user: dict | None = None          # set after login
         self._processing_order_id: str | None = None   # set when detail view is open
         self._order_close_callback = None               # registered by OrderDetailView
