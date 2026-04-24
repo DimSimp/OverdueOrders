@@ -133,12 +133,17 @@ class PosWindow(ctk.CTkToplevel):
             self._tabs.set("Till")
             self._till_tab.load_customer_profile(customer)
 
+        def _refund_in_till(tx: dict):
+            self._tabs.set("Till")
+            self._till_tab._load_refund_cart(tx)
+
         # Customers tab — real implementation
         from src.gui.customers.customer_tab import CustomerTab
         self._customer_tab = CustomerTab(
             tabs.tab("Customers"),
             current_user=self.current_user,
             on_load_in_till=_load_customer_in_till,
+            on_refund_in_till=_refund_in_till,
         )
         self._customer_tab.pack(fill="both", expand=True)
 

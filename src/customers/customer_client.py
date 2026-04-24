@@ -14,6 +14,43 @@ _FULL_COLS = "*"
 
 _PAGE_SIZE = 100
 
+MERGEABLE_CUSTOMER_FIELDS = (
+    "first_name",
+    "surname",
+    "business",
+    "mobile",
+    "phone_1",
+    "fax",
+    "email",
+    "website",
+    "address_1",
+    "address_2",
+    "city",
+    "state",
+    "postcode",
+    "country",
+    "ship_same_as_invoice",
+    "ship_address_1",
+    "ship_address_2",
+    "ship_city",
+    "ship_state",
+    "ship_postcode",
+    "ship_country",
+    "tax_exemption_number",
+    "discount_id",
+    "discount_profile",
+    "terms_days",
+    "credit_limit",
+    "stop_credit",
+    "is_local",
+    "abn",
+    "newsletter_opt_in",
+    "private_comment",
+    "statement_comment",
+    "musipos_account_code",
+    "musipos_barcode_ref",
+)
+
 
 def search_customers(
     query: str,
@@ -109,6 +146,62 @@ def update_customer(uuid: str, data: dict) -> dict:
     return result.data[0]
 
 
+def merge_customers(
+    customer_a_uuid: str,
+    customer_b_uuid: str,
+    selected_values: dict,
+    merged_by: str | None = None,
+) -> dict:
+    """Merge two customer profiles into a newly-created customer record.
+
+    ``selected_values`` should contain the final chosen values for the merged
+    profile. Only whitelisted fields are forwarded to the SQL RPC.
+
+    Returns a dict containing the new customer record plus audit/count metadata.
+    """
+    from src.customers.discount_profiles import normalize_discount_profile
+    from src.supabase_client import get_client
+
+    if not customer_a_uuid or not customer_b_uuid:
+        raise ValueError("Both customer IDs are required.")
+    if customer_a_uuid == customer_b_uuid:
+        raise ValueError("A customer profile cannot be merged with itself.")
+
+    payload = {
+        field: selected_values.get(field)
+        for field in MERGEABLE_CUSTOMER_FIELDS
+        if field in selected_values
+    }
+    payload["discount_profile"] = normalize_discount_profile(payload.get("discount_profile"))
+
+    db = get_client()
+    result = db.rpc("merge_customers_fn", {
+        "p_customer_a": customer_a_uuid,
+        "p_customer_b": customer_b_uuid,
+        "p_selected": payload,
+        "p_merged_by": merged_by,
+    }).execute()
+
+    row = result.data[0] if result.data else None
+    if not row:
+        raise RuntimeError("Merge completed without returning a result.")
+
+    merged_uuid = row.get("merged_customer_uuid")
+    if not merged_uuid:
+        raise RuntimeError("Merge completed without a merged customer ID.")
+
+    customer = get_customer(merged_uuid)
+    if not customer:
+        raise RuntimeError("Merged customer was created but could not be reloaded.")
+
+    return {
+        "customer": customer,
+        "audit_id": row.get("audit_id"),
+        "moved_transaction_count": row.get("moved_transaction_count") or 0,
+        "moved_parked_count": row.get("moved_parked_count") or 0,
+    }
+
+
 def get_customer_transactions(
     uuid: str,
     page: int = 0,
@@ -123,7 +216,12 @@ def get_customer_transactions(
     from src.supabase_client import get_client
     db = get_client()
 
-    cols = "id,transaction_number,sale_type,total,completed_at"
+    cols = (
+        "id,transaction_number,sale_type,sale_status,total,completed_at,"
+        "customer_id,customer_name,park_name,performed_by,payment_cash,"
+        "payment_eft,payment_online,notes,cart_discount_pct,is_refunded,"
+        "transaction_lines(*)"
+    )
     # Fetch one extra row to detect whether a next page exists (avoids
     # count="exact" which fails when PostgREST returns content-range: */*).
     result = (

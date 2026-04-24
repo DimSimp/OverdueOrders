@@ -62,6 +62,7 @@ class TillTab(ctk.CTkFrame):
         self._payment_cash: float = 0.0    # cash tendered (0 = not entered)
         self._payment_eft: list[dict] = [] # [{"amount": X.XX}, ...]
         self._payment_online: float = 0.0
+        self._cash_rounding: float = 0.0   # ±$0.00–$0.02 applied when cash is used
         # Inline payment field widgets (populated in _build_payment_panel)
         self._eft_vars: list[tk.StringVar] = []
         self._eft_row_widgets: list = []
@@ -379,15 +380,30 @@ class TillTab(ctk.CTkFrame):
 
         ctk.CTkFrame(totals, height=1, fg_color=("gray70", "gray40")).pack(fill="x", pady=8)
 
-        # TOTAL — largest element
-        total_row = ctk.CTkFrame(totals, fg_color="transparent")
-        total_row.pack(fill="x")
+        # Cash rounding row — packed/unpacked dynamically when cash is used
+        self._rounding_row = ctk.CTkFrame(totals, fg_color="transparent")
+        # (not packed here; _update_totals manages visibility)
         ctk.CTkLabel(
-            total_row, text="TOTAL",
+            self._rounding_row, text="Cash Rounding",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray70"), anchor="w",
+        ).pack(side="left")
+        self._lbl_cash_rounding = ctk.CTkLabel(
+            self._rounding_row, text="",
+            font=ctk.CTkFont(size=12), anchor="e",
+            text_color=("gray40", "gray70"),
+        )
+        self._lbl_cash_rounding.pack(side="right")
+
+        # TOTAL — largest element
+        self._total_row = ctk.CTkFrame(totals, fg_color="transparent")
+        self._total_row.pack(fill="x")
+        ctk.CTkLabel(
+            self._total_row, text="TOTAL",
             font=ctk.CTkFont(size=18, weight="bold"), anchor="w",
         ).pack(side="left")
         self._lbl_total = ctk.CTkLabel(
-            total_row, text="$0.00",
+            self._total_row, text="$0.00",
             font=ctk.CTkFont(size=22, weight="bold"), anchor="e",
         )
         self._lbl_total.pack(side="right")
@@ -396,7 +412,7 @@ class TillTab(ctk.CTkFrame):
 
         # Hidden entry — swaps in over _lbl_total when the user clicks it
         self._entry_total = ctk.CTkEntry(
-            total_row,
+            self._total_row,
             font=ctk.CTkFont(size=20, weight="bold"),
             width=130, justify="right",
         )
@@ -818,6 +834,7 @@ class TillTab(ctk.CTkFrame):
         self._payment_eft = []
         self._payment_online = 0.0
         # Clear inline payment fields
+        self._cash_rounding = 0.0
         if hasattr(self, "_cash_var"):
             self._cash_var.set("")
         if hasattr(self, "_online_var"):
@@ -837,6 +854,7 @@ class TillTab(ctk.CTkFrame):
         if hasattr(self, "_notes_text"):
             self._notes_text.delete("1.0", "end")
         self._detach_customer()
+        self._sale_type_var.set("Standard")
         self._update_totals()
 
     def _on_manual_discount_change(self, selected: str):
@@ -912,7 +930,8 @@ class TillTab(ctk.CTkFrame):
             for line in self._cart_items.values()
         )
         discount_amt = subtotal * (self._cart_disc_pct / 100)
-        total = subtotal - discount_amt
+        base_total = subtotal - discount_amt
+        total = base_total + self._cash_rounding
 
         self._lbl_subtotal.configure(text=f"${subtotal:,.2f}")
         if self._cart_disc_pct:
@@ -921,18 +940,31 @@ class TillTab(ctk.CTkFrame):
             )
         else:
             self._lbl_discount.configure(text="—")
+
+        # Cash rounding row — shown only when rounding is non-zero
+        if hasattr(self, "_rounding_row") and hasattr(self, "_total_row"):
+            if self._cash_rounding != 0.0:
+                if not self._rounding_row.winfo_ismapped():
+                    self._rounding_row.pack(fill="x", pady=(0, 4), before=self._total_row)
+                sign = "+" if self._cash_rounding > 0 else "−"
+                self._lbl_cash_rounding.configure(
+                    text=f"{sign} ${abs(self._cash_rounding):.2f}"
+                )
+            else:
+                self._rounding_row.pack_forget()
+
         self._lbl_total.configure(
             text=f"${total:,.2f}",
             text_color=("#c0392b", "#e74c3c") if total < -0.005 else ("gray10", "#e0e0e0"),
         )
 
-        # Cart margin (staff-only)
+        # Cart margin uses base_total (before rounding) to keep it accurate
         total_cost = sum(
             line["qty"] * (line.get("cost_price") or 0)
             for line in self._cart_items.values()
         )
         has_cost = any(line.get("cost_price") for line in self._cart_items.values())
-        total_ex_gst = total / 1.1 if total > 0 else 0
+        total_ex_gst = base_total / 1.1 if base_total > 0 else 0
         if has_cost and total_ex_gst > 0:
             cart_margin = (total_ex_gst - total_cost) / total_ex_gst * 100
             m = round(cart_margin, 1)
@@ -1005,7 +1037,7 @@ class TillTab(ctk.CTkFrame):
         )
 
     def _get_total(self) -> float:
-        return self._get_subtotal() * (1 - self._cart_disc_pct / 100)
+        return self._get_subtotal() * (1 - self._cart_disc_pct / 100) + self._cash_rounding
 
     def _amount_remaining(self) -> float:
         total = self._get_total()
@@ -1118,7 +1150,20 @@ class TillTab(ctk.CTkFrame):
         except ValueError:
             self._payment_online = 0.0
 
-        self._update_remaining_display()
+        # Cash rounding — round the total to nearest 5c when any cash is used.
+        # Uses round(x * 20) / 20 which is the standard Australian 5c rounding.
+        base_total = self._get_subtotal() * (1 - self._cart_disc_pct / 100)
+        if self._payment_cash > 0:
+            rounded = round(base_total * 20) / 20
+            new_rounding = round(rounded - base_total, 2)
+        else:
+            new_rounding = 0.0
+
+        if new_rounding != self._cash_rounding:
+            self._cash_rounding = new_rounding
+            self._update_totals()   # re-renders total and rounding row
+        else:
+            self._update_remaining_display()
 
     def _update_remaining_display(self):
         """Update the cash change hint and the remaining/change/paid status label."""
@@ -1272,6 +1317,7 @@ class TillTab(ctk.CTkFrame):
                         customer_id=cust_id_snap,
                         customer_name=cust_name_snap,
                         notes=notes_snap or None,
+                        cash_rounding=self._cash_rounding or None,
                     )
                 else:
                     from src.pos.transaction_client import confirm_standard_sale
@@ -1291,6 +1337,7 @@ class TillTab(ctk.CTkFrame):
                         customer_id=cust_id_snap,
                         customer_name=cust_name_snap,
                         notes=notes_snap or None,
+                        cash_rounding=self._cash_rounding or None,
                     )
                 self.after(0, lambda: _on_success(tx))
             except Exception as exc:

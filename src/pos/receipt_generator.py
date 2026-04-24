@@ -333,6 +333,7 @@ def generate_receipt(tx: dict, cart_items: dict, customer: Optional[dict] = None
         ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
     ])
 
+    cash_rounding = tx.get("cash_rounding")
     totals_data: list[list] = []
     totals_data.append(["Subtotal", _fmt_money(subtotal)])
     if cart_disc_total:
@@ -346,6 +347,10 @@ def generate_receipt(tx: dict, cart_items: dict, customer: Optional[dict] = None
     )
     if line_disc_sum and not cart_disc_total:
         totals_data.append(["Item discounts", _fmt_money(-line_disc_sum)])
+
+    if cash_rounding:
+        sign = "+" if cash_rounding > 0 else "−"
+        totals_data.append(["Cash Rounding", f"{sign} ${abs(cash_rounding):.2f}"])
 
     # TOTAL row — larger bold
     totals_table = Table(totals_data, colWidths=[body_w - 60, 60], style=totals_style)

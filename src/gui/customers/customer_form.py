@@ -134,7 +134,10 @@ class CustomerForm(ctk.CTkToplevel):
         self._sw_stop_credit = self._toggle(toggles, "Stop Credit")
         self._sw_is_local = self._toggle(toggles, "Is Local")
         self._sw_newsletter = self._toggle(toggles, "Newsletter Opt-in")
-        self._sw_active = self._toggle(toggles, "Active", default=True)
+        # Active/inactive customer status is intentionally hidden for now.
+        # We have not used it in practice, but the original toggle is left
+        # here in case we decide to restore the feature later.
+        # self._sw_active = self._toggle(toggles, "Active", default=True)
 
         self._txt_private = self._textbox_block(
             right_account,
@@ -405,10 +408,10 @@ class CustomerForm(ctk.CTkToplevel):
             self._sw_is_local.select()
         if c.get("newsletter_opt_in"):
             self._sw_newsletter.select()
-        if c.get("active", True):
-            self._sw_active.select()
-        else:
-            self._sw_active.deselect()
+        # if c.get("active", True):
+        #     self._sw_active.select()
+        # else:
+        #     self._sw_active.deselect()
 
         if c.get("private_comment"):
             self._txt_private.insert("1.0", c["private_comment"])
@@ -501,7 +504,7 @@ class CustomerForm(ctk.CTkToplevel):
             "stop_credit": self._sw_stop_credit.get() == 1,
             "is_local": self._sw_is_local.get() == 1,
             "newsletter_opt_in": self._sw_newsletter.get() == 1,
-            "active": self._sw_active.get() == 1,
+            # "active": self._sw_active.get() == 1,
             "private_comment": self._txt_private.get("1.0", "end").strip() or None,
             "statement_comment": self._txt_statement.get("1.0", "end").strip() or None,
         }

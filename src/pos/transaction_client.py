@@ -20,6 +20,7 @@ def confirm_standard_sale(
     customer_id: Optional[str] = None,   # UUID of the linked customer (if any)
     customer_name: Optional[str] = None, # display name for the transaction record
     notes: Optional[str] = None,         # optional staff/transaction notes
+    cash_rounding: Optional[float] = None,  # Australian 5c rounding adjustment
 ) -> dict:
     """Write a completed Standard or Refund sale to Supabase.
 
@@ -71,6 +72,7 @@ def confirm_standard_sale(
         "customer_id":         customer_id or None,
         "customer_name":       customer_name or None,
         "notes":               notes or None,
+        "cash_rounding":       round(cash_rounding, 2) if cash_rounding else None,
     }
 
     # Insert transaction — trigger auto-assigns transaction_number
@@ -204,6 +206,7 @@ def complete_parked_sale(
     customer_id: Optional[str] = None,
     customer_name: Optional[str] = None,
     notes: Optional[str] = None,
+    cash_rounding: Optional[float] = None,
 ) -> dict:
     """Complete a previously-parked transaction.
 
@@ -243,6 +246,7 @@ def complete_parked_sale(
         "customer_id":         customer_id or None,
         "customer_name":       customer_name or None,
         "notes":               notes or None,
+        "cash_rounding":       round(cash_rounding, 2) if cash_rounding else None,
     }
 
     update_result = (

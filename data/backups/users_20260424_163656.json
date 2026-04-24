@@ -68,9 +68,9 @@
   ],
   "sessions": {
     "Sbonanno": {
-      "logged_in": false,
+      "logged_in": true,
       "device_name": "SAMPC1",
-      "last_heartbeat": "2026-04-24T14:18:50",
+      "last_heartbeat": "2026-04-24T16:36:48",
       "processing_order_id": null,
       "processing_since": null
     },
