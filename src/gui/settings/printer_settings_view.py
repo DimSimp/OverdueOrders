@@ -17,6 +17,9 @@ class PrinterSettingsView(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._printers: list[str] = []
         self._receipt_var = ctk.StringVar(value=config.device.receipt_printer or _NONE_LABEL)
+        self._paper_width_var = ctk.StringVar(
+            value=str(int(config.device.receipt_paper_width_mm or 80))
+        )
         self._a4_var = ctk.StringVar(value=config.device.a4_printer or _NONE_LABEL)
         self._envelope_var = ctk.StringVar(value=config.device.envelope_printer or _NONE_LABEL)
         self._build_ui()
@@ -58,7 +61,32 @@ class PrinterSettingsView(ctk.CTkFrame):
             width=320,
             font=ctk.CTkFont(size=12),
         )
-        self._receipt_menu.pack(anchor="w", pady=(0, 20))
+        self._receipt_menu.pack(anchor="w", pady=(0, 8))
+
+        # Paper width
+        width_row = ctk.CTkFrame(self, fg_color="transparent")
+        width_row.pack(anchor="w", pady=(0, 20))
+
+        ctk.CTkLabel(
+            width_row,
+            text="Paper width (mm):",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkOptionMenu(
+            width_row,
+            variable=self._paper_width_var,
+            values=["58", "72", "76", "80"],
+            width=80,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            width_row,
+            text="Common sizes: 58 mm (small desktop)  ·  80 mm (standard POS)",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray50", "gray60"),
+        ).pack(side="left", padx=(10, 0))
 
         # ── A4 printer ────────────────────────────────────────────────────
         ctk.CTkLabel(
@@ -193,6 +221,10 @@ class PrinterSettingsView(ctk.CTkFrame):
         config.device.receipt_printer = "" if receipt == _NONE_LABEL else receipt
         config.device.a4_printer = "" if a4 == _NONE_LABEL else a4
         config.device.envelope_printer = "" if envelope == _NONE_LABEL else envelope
+        try:
+            config.device.receipt_paper_width_mm = float(self._paper_width_var.get())
+        except ValueError:
+            config.device.receipt_paper_width_mm = 80.0
 
         try:
             config.save_local()

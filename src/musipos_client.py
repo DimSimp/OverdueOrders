@@ -158,6 +158,35 @@ class MusiposClient:
             log.warning("Musipos cascade lookup failed for %r: %s", sku, exc)
         return None
 
+    def get_live_qty_on_order(self, itm_iid: str) -> int:
+        """
+        Query sp4pop directly for the true outstanding quantity on order.
+
+        sp4pop rows are DELETED when fully received, so every row represents
+        an open order.  For partial receives pop_qty_rcv tracks what has
+        already arrived, so the remaining qty is (pop_qor - pop_qty_rcv).
+
+        This is more accurate than sp4qpc.qpc_qor, which is a denormalized
+        counter that can drift out of sync.
+        """
+        try:
+            conn = self.get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT ISNULL(SUM(pop_qor - ISNULL(pop_qty_rcv, 0)), 0) "
+                    "FROM sp4pop "
+                    "WHERE RTRIM(pop_iid) = RTRIM(?)",
+                    (itm_iid,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+            finally:
+                conn.close()
+        except Exception as exc:
+            log.warning("get_live_qty_on_order failed for %r: %s", itm_iid, exc)
+            return 0
+
     def _multi_lookup(self, sku: str, col: str) -> list[dict]:
         """Return ALL matching items for a column/value (no TOP 1 limit)."""
         if not sku:

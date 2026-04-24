@@ -23,6 +23,11 @@ else:
         datefmt="%H:%M:%S",
     )
 
+# Suppress verbose HTTP/2 debug noise from the Supabase client libraries.
+logging.getLogger("hpack").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from src.log_memory import install as _install_memory_log
 _install_memory_log()
 

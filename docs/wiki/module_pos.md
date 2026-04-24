@@ -76,10 +76,11 @@ Refund:          [load original transaction OR enter manually] → [confirm] →
 ## Right Panel Layout
 
 The right panel (≈30% width) displays all cart summary and payment UI, bottom-anchored so content
-sits just above the Confirm Sale button:
+sits just above the Confirm Sale button. The top of this panel now hosts the active customer card
+and transaction-note controls used by the receipt workflow:
 
 ```
-[customer details area — placeholder for Plan 05]
+[linked customer details + transaction notes]
 ══════════════════════════════════  ← section divider
 Cart discount %: [___] [Apply]
 Subtotal          $X.XX
@@ -117,12 +118,38 @@ as amounts are typed. Confirm Sale is blocked until the full amount is covered.
 
 ## Discounts
 
-Three controls, only one applied at a time:
-1. Manual cart discount % → reduces total proportionally
-2. Total Sale Price override → replaces running total
-3. Preset dropdown → selects from `discounts` table (merged from Plan 02 `preset_discounts` + Plan 05 `discounts`)
+The Till currently supports three discount mechanisms:
+1. Manual cart discount % → reduces the whole total proportionally
+2. Total Sale Price override → replaces the running total
+3. Discount profile selector beside Sale Type → applies a predefined line-level pricing rule
 
-Customer's `discount_id` auto-applied when customer is loaded onto the transaction.
+The active discount profile options are hardcoded for now:
+- `5%`
+- `10%`
+- `15%`
+- `Teacher`
+- `Staff`
+
+Current behaviour:
+- The same profile list is used by customer records (`customers.discount_profile`) and by the Till-side manual selector.
+- The Till selector is shown for every sale type except `Refund`, where the refund lookup UI uses that same space.
+- Only one profile source is active at a time. If staff choose a Till discount, it overrides any linked customer profile discount for that transaction. Clearing the Till selector back to `-` hands control back to the linked customer profile.
+- The selected profile is applied to current cart lines and to new items added afterward.
+- `Teacher` is currently a placeholder 15% discount until online-price-aware pricing is implemented.
+- `Staff` calculates a sell price from item cost so margin lands at or just above 10%, rounding up when an exact 10.00% result is not possible.
+
+The legacy `discounts` / `discount_id` schema is still present in Supabase, but it is not the
+active POS/customer discount path today.
+
+---
+
+## Customer Integration
+
+Customer linking is now a working part of the Till flow:
+- Staff can search and attach a customer from the Till itself.
+- Staff can also right-click a customer in the Customers tab and choose `Load in Till`, which switches back to the Till and attaches that profile to the active transaction.
+- When a customer is linked, the Till uses the same attach path regardless of where that customer came from, so the customer card, receipt output, and profile discount behaviour stay consistent.
+- Historical recall/refund flows re-link customers without repricing old transactions.
 
 ---
 
@@ -190,7 +217,8 @@ then `print_pdf()` on a background thread.
 
 | Action | What POS does |
 |--------|--------------|
-| Load customer | Queries `customers`; auto-applies their `discount_id` |
+| Load customer in Till | Queries `customers`; attaches the profile to the active transaction; auto-applies `discount_profile` unless a Till-side manual discount is currently selected |
+| Load in Till from Customers tab | Uses the same customer-attach path as the Till search pane, then returns focus to the Till tab |
 | Scan barcode / enter SKU | Queries `items` for exact match; populates row |
 | Confirm Standard/Invoice sale | Decrements `qty_on_hand`, writes `sale_instore` movement |
 | Confirm Deposit | Increments `qty_allocated_customer`, creates `deposits` record |
@@ -212,10 +240,12 @@ Contains:
 - Store name, address, phone, ABN (from `config.shipping.sender`)
 - Transaction number (e.g. `T-2026-0001`) + Code 128 barcode (for refund scanning)
 - Date/time (Melbourne local), staff name
+- Linked customer summary when present
 - Line items: SKU, description (truncated to 18 chars), qty, unit price, line total
 - Per-line discount sub-rows (italic, grey) if `disc_pct > 0`
 - Subtotal, item discounts, cart discount, **TOTAL** (large bold)
 - Payment breakdown: cash (+ tendered / change), EFT (multiple entries), online
+- Optional transaction notes when print-notes is enabled
 - GST included line
 
 Printed via `src/printer_utils.print_pdf()` using the configured `receipt_printer` device.

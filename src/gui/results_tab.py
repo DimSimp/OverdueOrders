@@ -6,6 +6,7 @@ import threading
 import re
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime
 from tkinter import messagebox, filedialog, Menu, StringVar, BooleanVar
 import tkinter.ttk as ttk
@@ -72,6 +73,9 @@ class OrderTreeview(ctk.CTkFrame):
         self,
         master,
         col_spec: dict,
+        table_id: str = "",
+        user_manager=None,
+        current_user: dict | None = None,
         on_row_click=None,
         on_context_action=None,
         context_label: str = "Move to Unmatched",
@@ -88,6 +92,9 @@ class OrderTreeview(ctk.CTkFrame):
         self._on_assign_request = on_assign_request
         self._copy_cols: list = copy_cols or []
         self._col_spec = col_spec
+        self._table_id = table_id
+        self._user_manager = user_manager
+        self._current_user = current_user
         self._selectable = selectable
         self._use_tree_as_check = False  # set in _build_tree; True when #0 becomes checkbox
         self._checked_order_ids: set[tuple[str, str]] = set()
@@ -107,10 +114,23 @@ class OrderTreeview(ctk.CTkFrame):
         self._col_headings: dict[str, str] = {}  # col_id → original heading text
         # Filter state
         self._filter_visible: bool = False
+        self._columns_visible: bool = False
+        self._options_frame: ctk.CTkFrame | None = None
         self._filter_frame: ctk.CTkFrame | None = None
+        self._columns_frame: ctk.CTkFrame | None = None
         self._platform_filters: dict[str, BooleanVar] = {}
         self._shipping_filters: dict[str, BooleanVar] = {}
         self._postage_filters: dict[str, BooleanVar] = {}
+        self._tree_columns: list[str] = []
+        self._fixed_columns: set[str] = set()
+        self._toggleable_columns: list[str] = []
+        self._visible_columns: list[str] = []
+        self._column_vars: dict[str, BooleanVar] = {}
+        self._default_col_widths: dict[str, int] = {}
+        self._column_minwidths: dict[str, int] = {}
+        self._content_widths: dict[str, int] = {}
+        self._default_tree_col_width: int = 0
+        self._resize_pending: bool = False
         # Click guard — blocks spurious release events after view transitions
         self._click_blocked_until: float = 0.0
         self._build_tree()
@@ -140,6 +160,13 @@ class OrderTreeview(ctk.CTkFrame):
             cols = ["check"] + data_cols
         else:
             cols = data_cols
+        self._tree_columns = list(cols)
+        self._fixed_columns = set()
+        if self._use_tree_as_check:
+            self._fixed_columns.add("order_no")
+        elif self._selectable:
+            self._fixed_columns.add("check")
+        self._toggleable_columns = [c for c in self._tree_columns if c not in self._fixed_columns]
         # Use "headings" (no tree column) when the #0 width is 0 (flat list)
         show = "tree headings" if w0 > 0 else "headings"
         self._tree = ttk.Treeview(
@@ -149,6 +176,7 @@ class OrderTreeview(ctk.CTkFrame):
             show=show,
             selectmode="browse",
         )
+        self._default_tree_col_width = w0 if (w0 > 0 and not self._use_tree_as_check) else 40
 
         if self._use_tree_as_check:
             # #0 = checkbox (not in _col_headings so sort indicators don't reset it)
@@ -157,6 +185,8 @@ class OrderTreeview(ctk.CTkFrame):
             self._tree.column("#0", width=40, minwidth=40, stretch=False)
             # order_no = order ID, takes the place of the old #0 content
             self._col_headings["order_no"] = h0
+            self._default_col_widths["order_no"] = w0
+            self._column_minwidths["order_no"] = 80
             self._tree.heading("order_no", text=h0, anchor="w",
                                command=lambda: self._on_header_click("order_no"))
             self._tree.column("order_no", width=w0, minwidth=60, stretch=False)
@@ -164,6 +194,9 @@ class OrderTreeview(ctk.CTkFrame):
             # Flat list: check is the first data column
             self._tree.heading("check", text="☐", anchor="center",
                                command=self._toggle_all_checks)
+            self._col_headings["check"] = ""
+            self._default_col_widths["check"] = 40
+            self._column_minwidths["check"] = 40
             self._tree.column("check", width=40, minwidth=40, stretch=False)
         elif w0 > 0:
             # Standard (non-selectable) tree column
@@ -177,10 +210,17 @@ class OrderTreeview(ctk.CTkFrame):
             if col_id == "#0":
                 continue
             self._col_headings[col_id] = heading
-            stretch = col_id in ("notes", "description", "order_notes")
+            self._default_col_widths[col_id] = width
+            self._column_minwidths[col_id] = self._min_width_for_column(col_id, width)
             self._tree.heading(col_id, text=heading, anchor="w",
                                command=lambda c=col_id: self._on_header_click(c))
-            self._tree.column(col_id, width=width, minwidth=30, stretch=stretch)
+            self._tree.column(
+                col_id,
+                width=width,
+                minwidth=self._column_minwidths[col_id],
+                stretch=False,
+            )
+        self._load_column_preferences()
 
         # ── Search bar (row 0) ────────────────────────────────────────────
         search_bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -209,7 +249,18 @@ class OrderTreeview(ctk.CTkFrame):
         )
         self._filter_btn.pack(side="left", padx=(4, 4))
 
+        self._columns_btn = ctk.CTkButton(
+            search_bar, text="Columns", width=78, height=28,
+            fg_color="gray50", hover_color="gray40",
+            command=self._toggle_columns_panel,
+        )
+        self._columns_btn.pack(side="left", padx=(0, 4))
+
         self._search_var.trace_add("write", self._apply_filter)
+
+        self._options_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._options_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(0, 4))
+        self._options_frame.grid_remove()
 
         # ── Filter panel (row 1, hidden by default) ──────────────────────
         # Built on demand in _toggle_filter_panel / _rebuild_filter_panel
@@ -232,7 +283,335 @@ class OrderTreeview(ctk.CTkFrame):
         self._tree.bind("<Button-3>", self._on_right_click)
         self._tree.bind("<Motion>", self._on_hover)
         self._tree.bind("<Leave>", self._on_leave)
+        self._tree.bind("<Configure>", self._on_tree_resize)
         self._tree.configure(cursor="hand2")
+        self._apply_display_columns(save=False)
+
+    def _min_width_for_column(self, col_id: str, width: int) -> int:
+        if col_id in ("check", "qty"):
+            return 40
+        if col_id == "date":
+            return 60
+        if col_id in ("platform", "shipping", "assigned", "status"):
+            return 70
+        if col_id == "order_no":
+            return 80
+        if col_id == "sku":
+            return 90
+        if col_id == "description":
+            return 140
+        if col_id in ("customer", "notes", "order_notes"):
+            return 100
+        return min(max(60, width // 2), width)
+
+    def _grow_weight_for_column(self, col_id: str) -> int:
+        if col_id == "description":
+            return 4
+        if col_id in ("customer", "sku", "notes", "order_notes"):
+            return 2
+        if col_id in ("check", "order_no", "qty", "date", "platform", "shipping", "assigned", "status"):
+            return 0
+        return 1
+
+    def _get_saved_table_preferences(self) -> dict:
+        if not self._table_id or not self._user_manager or not self._current_user:
+            return {}
+        return self._user_manager.get_table_preferences(
+            self._current_user.get("user_id", ""),
+            self._table_id,
+        )
+
+    def _set_saved_table_preferences(self, preferences: dict) -> None:
+        if not self._table_id or not self._user_manager or not self._current_user:
+            return
+        updated_user = self._user_manager.set_table_preferences(
+            self._current_user.get("user_id", ""),
+            self._table_id,
+            preferences,
+        )
+        if updated_user and isinstance(self._current_user, dict):
+            self._current_user.clear()
+            self._current_user.update(updated_user)
+
+    def _load_column_preferences(self):
+        prefs = self._get_saved_table_preferences()
+        hidden = {
+            col for col in prefs.get("hidden_columns", [])
+            if col in self._toggleable_columns
+        }
+        if len(hidden) >= len(self._toggleable_columns) and self._toggleable_columns:
+            hidden = set(self._toggleable_columns[1:])
+        self._column_vars = {}
+        self._visible_columns = []
+        for col in self._tree_columns:
+            if col in self._fixed_columns:
+                self._visible_columns.append(col)
+                continue
+            visible = col not in hidden
+            self._column_vars[col] = BooleanVar(value=visible)
+            if visible:
+                self._visible_columns.append(col)
+
+    def reload_column_preferences(self):
+        """Reload the saved visible-column state for this table."""
+        self._load_column_preferences()
+        self._apply_display_columns(save=False)
+        if self._columns_visible and self._columns_frame:
+            self._rebuild_columns_panel()
+
+    def _sync_visible_columns_from_vars(self):
+        self._visible_columns = [
+            col for col in self._tree_columns
+            if col in self._fixed_columns or self._column_vars[col].get()
+        ]
+
+    def _save_column_preferences(self):
+        if not self._table_id:
+            return
+        prefs = self._get_saved_table_preferences()
+        prefs["hidden_columns"] = [
+            col for col in self._toggleable_columns
+            if not self._column_vars[col].get()
+        ]
+        self._set_saved_table_preferences(prefs)
+
+    def _apply_display_columns(self, save: bool = True):
+        self._sync_visible_columns_from_vars()
+        self._tree.configure(displaycolumns=tuple(self._visible_columns))
+        if save:
+            self._save_column_preferences()
+        self._refresh_content_widths()
+        self._queue_resize()
+
+    def _toggle_columns_panel(self):
+        """Show or hide the columns panel."""
+        self._columns_visible = not self._columns_visible
+        if self._columns_visible:
+            self._rebuild_columns_panel()
+        self._refresh_options_panel()
+
+    def _refresh_options_panel(self):
+        if not self._options_frame:
+            return
+        if self._filter_frame:
+            self._filter_frame.pack_forget()
+        if self._columns_frame:
+            self._columns_frame.pack_forget()
+
+        if not self._filter_visible and not self._columns_visible:
+            self._options_frame.grid_remove()
+        else:
+            self._options_frame.grid()
+            if self._filter_visible and self._filter_frame:
+                self._filter_frame.pack(fill="x", expand=True, pady=(0, 4 if self._columns_visible else 0))
+            if self._columns_visible and self._columns_frame:
+                self._columns_frame.pack(fill="x", expand=True)
+
+        self._filter_btn.configure(
+            fg_color=("dodgerblue3", "dodgerblue4") if self._filter_visible else "gray50"
+        )
+        self._columns_btn.configure(
+            fg_color=("dodgerblue3", "dodgerblue4") if self._columns_visible else "gray50"
+        )
+
+    def _rebuild_columns_panel(self):
+        if self._columns_frame:
+            self._columns_frame.destroy()
+
+        self._columns_frame = ctk.CTkFrame(
+            self._options_frame,
+            fg_color=("gray88", "gray20"),
+            corner_radius=6,
+        )
+        bar = ctk.CTkFrame(self._columns_frame, fg_color="transparent")
+        bar.pack(fill="x", padx=10, pady=6)
+
+        ctk.CTkLabel(
+            bar, text="Columns:", font=ctk.CTkFont(size=11, weight="bold")
+        ).pack(side="left", padx=(0, 8))
+
+        for col_id in self._toggleable_columns:
+            ctk.CTkCheckBox(
+                bar,
+                text=self._col_headings.get(col_id, col_id.title()),
+                variable=self._column_vars[col_id],
+                font=ctk.CTkFont(size=11),
+                height=24,
+                checkbox_width=18,
+                checkbox_height=18,
+                command=lambda c=col_id: self._on_column_toggle(c),
+            ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            bar,
+            text="Reset",
+            width=64,
+            height=26,
+            fg_color="gray50",
+            hover_color="gray40",
+            command=self._reset_columns,
+        ).pack(side="right")
+
+        if self._columns_visible:
+            self._refresh_options_panel()
+
+    def _on_column_toggle(self, col_id: str):
+        if not self._column_vars[col_id].get():
+            visible_toggleable = [
+                cid for cid in self._toggleable_columns
+                if self._column_vars[cid].get()
+            ]
+            if not visible_toggleable:
+                self._column_vars[col_id].set(True)
+                return
+        self._apply_display_columns()
+
+    def _reset_columns(self):
+        for var in self._column_vars.values():
+            var.set(True)
+        self._apply_display_columns()
+        if self._columns_visible and self._columns_frame:
+            self._rebuild_columns_panel()
+
+    def _get_display_columns(self) -> list[str]:
+        display = self._tree["displaycolumns"]
+        if display == "#all":
+            return list(self._tree_columns)
+        if isinstance(display, str):
+            return [display] if display else []
+        return list(display)
+
+    def _column_id_from_token(self, token: str) -> str | None:
+        if token == "#0":
+            return "#0"
+        try:
+            idx = int(token.lstrip("#")) - 1
+        except (TypeError, ValueError):
+            return None
+        display_cols = self._get_display_columns()
+        if 0 <= idx < len(display_cols):
+            return display_cols[idx]
+        return None
+
+    def _font_for_style(self, style_name: str, fallback: str):
+        style = ttk.Style()
+        font_name = style.lookup(style_name, "font") or style.lookup("Treeview", "font") or fallback
+        try:
+            return tkfont.nametofont(font_name)
+        except Exception:
+            return tkfont.Font(font=font_name)
+
+    def _refresh_content_widths(self):
+        body_font = self._font_for_style("Orders.Treeview", "TkDefaultFont")
+        heading_font = self._font_for_style("Treeview.Heading", "TkHeadingFont")
+        widths: dict[str, int] = {}
+        padding = 26
+
+        for col in self._tree_columns:
+            heading = self._col_headings.get(col, "")
+            widths[col] = max(
+                self._column_minwidths.get(col, 40),
+                heading_font.measure(heading) + padding,
+            )
+
+        def _consume_item(iid: str):
+            for col in self._tree_columns:
+                if col == "#0":
+                    text = self._tree.item(iid, "text")
+                else:
+                    text = self._tree.set(iid, col)
+                widths[col] = max(
+                    widths.get(col, 0),
+                    body_font.measure(str(text)) + padding,
+                )
+
+        for parent in self._tree.get_children():
+            _consume_item(parent)
+            for child in self._tree.get_children(parent):
+                _consume_item(child)
+
+        self._content_widths = widths
+
+    def _on_tree_resize(self, _event=None):
+        self._queue_resize()
+
+    def _queue_resize(self):
+        if self._resize_pending:
+            return
+        self._resize_pending = True
+        self.after_idle(self._autosize_visible_columns)
+
+    def _autosize_visible_columns(self):
+        self._resize_pending = False
+        tree_width = self._tree.winfo_width()
+        if tree_width <= 50:
+            return
+
+        display_cols = self._get_display_columns()
+        if not display_cols:
+            return
+
+        reserved = self._default_tree_col_width if self._tree["show"] == "tree headings" else 0
+        available = max(80, tree_width - reserved - 6)
+        widths = {
+            col: max(
+                self._content_widths.get(col, self._default_col_widths.get(col, 80)),
+                self._column_minwidths.get(col, 40),
+            )
+            for col in display_cols
+        }
+        mins = {col: self._column_minwidths.get(col, 40) for col in display_cols}
+
+        total = sum(widths.values())
+        if total > available:
+            shortage = total - available
+            shrinkable = {
+                col: max(0, widths[col] - mins[col])
+                for col in display_cols
+            }
+            total_shrink = sum(shrinkable.values())
+            if total_shrink:
+                for col, capacity in shrinkable.items():
+                    if capacity <= 0:
+                        continue
+                    reduction = min(capacity, int(shortage * capacity / total_shrink))
+                    widths[col] -= reduction
+                remainder = sum(widths.values()) - available
+                for col in sorted(display_cols, key=lambda c: widths[c] - mins[c], reverse=True):
+                    if remainder <= 0:
+                        break
+                    extra = min(remainder, max(0, widths[col] - mins[col]))
+                    widths[col] -= extra
+                    remainder -= extra
+        elif total < available:
+            extra = available - total
+            grow_weights = {col: self._grow_weight_for_column(col) for col in display_cols}
+            total_weight = sum(weight for weight in grow_weights.values() if weight > 0)
+            if total_weight <= 0:
+                grow_weights = {col: (0 if col == "check" else 1) for col in display_cols}
+                total_weight = sum(grow_weights.values())
+            if total_weight > 0:
+                for col, weight in grow_weights.items():
+                    if weight <= 0:
+                        continue
+                    widths[col] += int(extra * weight / total_weight)
+                remainder = available - sum(widths.values())
+                for col in sorted(display_cols, key=lambda c: grow_weights.get(c, 0), reverse=True):
+                    if remainder <= 0:
+                        break
+                    if grow_weights.get(col, 0) <= 0:
+                        continue
+                    widths[col] += 1
+                    remainder -= 1
+
+        for col in self._tree_columns:
+            if col in widths:
+                self._tree.column(
+                    col,
+                    width=max(mins.get(col, 40), widths[col]),
+                    minwidth=mins.get(col, 40),
+                    stretch=False,
+                )
 
     # ── Data loading ──────────────────────────────────────────────────────
 
@@ -333,6 +712,8 @@ class OrderTreeview(ctk.CTkFrame):
                 self._tree.tag_configure(tag_bg, background=bg)
                 display_row = ("☐",) + tuple(row) if self._selectable else row
                 self._tree.insert("", "end", text="", values=display_row, tags=[tag_bg])
+
+        self._queue_resize()
 
     def _group_passes_filters(self, g: dict, query: str) -> bool:
         """Return True if group passes search query + checkbox filters."""
@@ -466,15 +847,10 @@ class OrderTreeview(ctk.CTkFrame):
 
     def _toggle_filter_panel(self):
         """Show or hide the filter panel."""
+        self._filter_visible = not self._filter_visible
         if self._filter_visible:
-            if self._filter_frame:
-                self._filter_frame.grid_remove()
-            self._filter_visible = False
-            self._filter_btn.configure(fg_color="gray50")
-        else:
             self._rebuild_filter_panel()
-            self._filter_visible = True
-            self._filter_btn.configure(fg_color=("dodgerblue3", "dodgerblue4"))
+        self._refresh_options_panel()
 
     def _rebuild_filter_options(self):
         """Scan groups for unique platforms/postage types and update filter variables."""
@@ -508,8 +884,11 @@ class OrderTreeview(ctk.CTkFrame):
         if self._filter_frame:
             self._filter_frame.destroy()
 
-        self._filter_frame = ctk.CTkFrame(self, fg_color=("gray88", "gray20"), corner_radius=6)
-        self._filter_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(0, 4))
+        self._filter_frame = ctk.CTkFrame(
+            self._options_frame,
+            fg_color=("gray88", "gray20"),
+            corner_radius=6,
+        )
 
         # Platform section
         plat_frame = ctk.CTkFrame(self._filter_frame, fg_color="transparent")
@@ -549,6 +928,9 @@ class OrderTreeview(ctk.CTkFrame):
                     command=self._apply_filter,
                 ).pack(side="left", padx=(0, 8))
 
+        if self._filter_visible:
+            self._refresh_options_panel()
+
     # ── Public helpers ────────────────────────────────────────────────────
 
     def block_clicks(self, duration_ms: int = 150):
@@ -566,14 +948,10 @@ class OrderTreeview(ctk.CTkFrame):
         """Return True if the x coordinate falls within the checkbox column."""
         if not self._selectable:
             return False
-        col = self._tree.identify_column(x)
+        col = self._column_id_from_token(self._tree.identify_column(x))
         if self._use_tree_as_check:
             return col == "#0"
-        try:
-            idx = int(col.lstrip("#")) - 1
-            return self._tree["columns"][idx] == "check"
-        except (ValueError, IndexError):
-            return False
+        return col == "check"
 
     def _on_click(self, event):
         if self._is_check_col(event.x):
@@ -598,11 +976,8 @@ class OrderTreeview(ctk.CTkFrame):
         if iid not in self._group_meta:
             if not self._copy_cols:
                 return
-            col_id = self._tree.identify_column(event.x)
-            try:
-                idx = int(col_id.lstrip("#")) - 1
-                col_name = self._tree["columns"][idx]
-            except (ValueError, IndexError):
+            col_name = self._column_id_from_token(self._tree.identify_column(event.x))
+            if not col_name:
                 return
             if col_name not in self._copy_cols:
                 return
@@ -1042,6 +1417,9 @@ class ResultsTab(ctk.CTkFrame):
         self._matched_tree = OrderTreeview(
             _matched_container,
             col_spec=_MATCHED_COL_SPEC,
+            table_id="afternoon_matched_orders",
+            user_manager=getattr(self._app, "user_manager", None),
+            current_user=getattr(self._app, "_current_user", None),
             on_row_click=self._open_detail_view,
             on_context_action=self._exclude_order,
             context_label="Move to Unmatched",
@@ -1055,6 +1433,9 @@ class ResultsTab(ctk.CTkFrame):
         self._inv_tree = OrderTreeview(
             self._inner_tabs.tab("Unmatched Invoice Items"),
             col_spec=_INV_COL_SPEC,
+            table_id="afternoon_unmatched_invoice_items",
+            user_manager=getattr(self._app, "user_manager", None),
+            current_user=getattr(self._app, "_current_user", None),
             selectable=True,
             on_selection_change=self._on_selection_change,
             copy_cols=["sku"],
@@ -1073,6 +1454,9 @@ class ResultsTab(ctk.CTkFrame):
         self._unmatched_orders_tree = OrderTreeview(
             _unmatched_container,
             col_spec=_UNMATCHED_ORD_COL_SPEC,
+            table_id="afternoon_unmatched_orders",
+            user_manager=getattr(self._app, "user_manager", None),
+            current_user=getattr(self._app, "_current_user", None),
             on_context_action=self._include_order,
             context_label="Move to Matched",
             selectable=True,

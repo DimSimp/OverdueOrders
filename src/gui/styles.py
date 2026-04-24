@@ -90,6 +90,23 @@ def apply_styles() -> None:
         foreground=[("selected", "white")],
     )
 
+    # ── Cust.Treeview — Customer browse ──────────────────────────────────
+    style.configure(
+        "Cust.Treeview",
+        rowheight=26, font=("Segoe UI", 11),
+        background="#1c1c1c", foreground="#e0e0e0", fieldbackground="#1c1c1c",
+    )
+    style.configure(
+        "Cust.Treeview.Heading",
+        font=("Segoe UI", 11, "bold"),
+        background="#2a2a2a", foreground="#cccccc",
+    )
+    style.map(
+        "Cust.Treeview",
+        background=[("selected", "#1f538d")],
+        foreground=[("selected", "white")],
+    )
+
     # ── Prev.Treeview — CSV import preview ───────────────────────────────
     style.configure("Prev.Treeview", rowheight=22, font=("Segoe UI", 10))
     style.configure("Prev.Treeview.Heading", font=("Segoe UI", 10, "bold"))

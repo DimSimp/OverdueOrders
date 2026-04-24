@@ -312,7 +312,7 @@ class DailySalesDialog(ctk.CTkToplevel):
             values=(
                 tx_num,
                 _fmt_dt(tx.get("completed_at", "")),
-                tx.get("park_name") or "",
+                tx.get("customer_name") or tx.get("park_name") or "",
                 tx.get("performed_by") or "",
                 payment_str,
                 "", "", "", "",
@@ -602,7 +602,12 @@ class DailySalesDialog(ctk.CTkToplevel):
             try:
                 from src.pos.receipt_generator import generate_receipt
                 from src.printer_utils import print_pdf
-                pdf_path = generate_receipt(tx, cart_items)
+                customer = None
+                cust_uuid = tx.get("customer_id")
+                if cust_uuid:
+                    from src.customers.customer_client import get_customer
+                    customer = get_customer(cust_uuid)
+                pdf_path = generate_receipt(tx, cart_items, customer)
                 print_pdf(pdf_path, printer)
             except Exception as exc:
                 err = str(exc)

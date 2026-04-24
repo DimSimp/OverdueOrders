@@ -26,7 +26,8 @@ class PosWindow(ctk.CTkToplevel):
 
         self.title("Scarlett Music — POS / Till")
         self.geometry("1280x800")
-        self.minsize(1000, 650)
+        # Keep the POS window wide enough for the current 3-column customer detail layout.
+        self.minsize(1220, 650)
         self.resizable(True, True)
 
         if os.path.exists(_APP_ICON):
@@ -122,8 +123,27 @@ class PosWindow(ctk.CTkToplevel):
         self._till_tab.navigate_to_inventory = _go_inventory
         self._till_tab.refresh_inventory = self._inventory_tab.refresh_search
 
+        def _go_customer(uuid: str):
+            self._tabs.set("Customers")
+            self._customer_tab.show_customer(uuid)
+
+        self._till_tab.navigate_to_customer = _go_customer
+
+        def _load_customer_in_till(customer: dict):
+            self._tabs.set("Till")
+            self._till_tab.load_customer_profile(customer)
+
+        # Customers tab — real implementation
+        from src.gui.customers.customer_tab import CustomerTab
+        self._customer_tab = CustomerTab(
+            tabs.tab("Customers"),
+            current_user=self.current_user,
+            on_load_in_till=_load_customer_in_till,
+        )
+        self._customer_tab.pack(fill="both", expand=True)
+
         # Stub tabs
-        for name in ("Customers", "Purchasing", "Reporting"):
+        for name in ("Purchasing", "Reporting"):
             ctk.CTkLabel(
                 tabs.tab(name),
                 text=f"{name} — coming soon",

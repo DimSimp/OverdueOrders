@@ -33,6 +33,10 @@ existing Neto/eBay dispatch workflow intact. All new persistent data lives in Su
 PostgreSQL), making it accessible from the desktop app, the GitHub Actions sync script, and any
 future integrations.
 
+Daily Operations and Afternoon Operations remain the live workflows for overdue orders, dispatch,
+freight, and invoice-import tasks, while the newer POS, Customers, and Inventory modules continue
+to expand inside the tabbed POS window.
+
 **Guiding principles:**
 - Single source of truth for stock across all channels (in-store, Neto, eBay)
 - Every stock movement is traceable via `stock_movements`
@@ -96,10 +100,10 @@ future integrations.
 | Module | Depends On | Required By |
 |--------|-----------|-------------|
 | **Inventory** | Suppliers | POS, Purchasing, Online, Reporting |
-| **POS / Till** | Inventory, Customers, Users, Discounts | Reporting |
+| **POS / Till** | Inventory, Customers, Users | Reporting |
 | **Suppliers** | — | Inventory, Purchasing, Import |
 | **Purchasing** | Inventory, Suppliers, CSO | Reporting |
-| **Customers** | Discounts | POS, CSO, Reporting |
+| **Customers** | — | POS, CSO, Reporting |
 | **CSO** | Customers, Inventory, Purchasing | POS, Reporting |
 | **Online Integration** | Inventory | Reporting |
 | **Reporting** | POS, Online, Inventory, Customers, Purchasing | — |
@@ -147,12 +151,12 @@ Keep existing dispatch workflow alive while adding stock sync.
 ### Phase 3 — POS Core
 The in-store transaction system.
 
-- [x] `discounts` table — created and seeded with 10/20/30/40/50% system presets
+- [x] `discounts` table — created and seeded from the original schema design; the current POS/customer discount flow now uses hardcoded `discount_profile` values on customer records plus a Till-side selector
 - [x] `transactions` + `transaction_lines` tables — created (repairs + deposits deferred)
 - [x] POS button added to home screen (`pos_dev_user` gated); home screen updated to order: POS → Daily → Afternoon
-- [~] POS/Till (Plan 02) — `PosWindow` + `TillTab` (`src/gui/pos/`). Cart fully functional: SKU/barcode lookup → Supabase `items` (exact + case-insensitive; 1 match → add to cart, 0/many → inventory fuzzy search); spinner animation on Add button during lookup; rescan increments qty; inline editing of Qty/Unit Price/Disc %/Line Total (single-click overlay); bidirectional Line Total ↔ Disc % back-calculation; cart-level TOTAL override; Margin column (green > 10% / orange = 10% / red < 10%) per line + Cart Margin summary; out-of-stock modal (Allow/Remove); serialised item warning. Right-click context menu on cart rows: Show in Inventory (auto-selects item in inventory detail panel), Remove from Cart. Cross-tab wiring: Inventory tab → Add to Cart; "Show in Inventory" → auto-selects via `_auto_select` flag in `InventoryTab.search_and_focus()`. Centralised `ttk.Style` in `src/gui/styles.py`. **Right panel layout** (bottom-anchored): customer placeholder area → cart breakdown (discount input, subtotal/discount/margin/total) → Payment Method section → remaining/confirm. **Payment flow complete**: always-visible 3-column inline panel (EFT | Cash | Online); EFT capped at 3 rows; Cash shows live Change hint; live "Remaining / Change due / Paid in full" status label. `confirm_standard_sale()` in `src/pos/transaction_client.py` writes `transactions` + `transaction_lines`, atomically decrements `qty_on_hand` via `adjust_item_qty` RPC, writes `sale_instore` stock movements. Transaction numbers auto-assigned by `BEFORE INSERT` trigger (`T-2026-NNNN`, concurrent-safe). Dev data reset: `docs/sql/reset_dev_transactions.sql`. **Park & Recall**: `park_transaction()` snapshots cart → `parked` row with `cart_snapshot JSONB`; `RecallDialog` (700×460) lists parked transactions with Delete button; recalling a transaction auto-deletes it from parked list; completes as a new standard sale. **Receipt PDF**: `src/pos/receipt_generator.py` (reportlab, 80mm thermal, Code128 barcode, PyMuPDF content trim); post-sale `_ReceiptDialog` prompt; reprint available from Daily Sales. **Daily Sales dialog**: `DailySalesDialog` non-modal window; collapsible tx rows with line-item detail + TOTAL footer; day summary panel; expand/collapse all (#0 heading); sort by date (detail heading ▼/▲); divider rows between expanded transactions (TreeviewOpen/Close); Reprint Receipt button + right-click menu. **Next**: Customer profile integration.
+- [~] POS/Till (Plan 02) — `PosWindow` + `TillTab` (`src/gui/pos/`). Cart fully functional: SKU/barcode lookup → Supabase `items` (exact + case-insensitive; 1 match → add to cart, 0/many → inventory fuzzy search); spinner animation on Add button during lookup; rescan increments qty; inline editing of Qty/Unit Price/Disc %/Line Total (single-click overlay); bidirectional Line Total ↔ Disc % back-calculation; cart-level TOTAL override; Margin column (green > 10% / orange = 10% / red < 10%) per line + Cart Margin summary; out-of-stock modal (Allow/Remove); serialised item warning. Right-click context menu on cart rows: Show in Inventory (auto-selects item in inventory detail panel), Remove from Cart. Cross-tab wiring: Inventory tab → Add to Cart; "Show in Inventory" → auto-selects via `_auto_select` flag in `InventoryTab.search_and_focus()`. Centralised `ttk.Style` in `src/gui/styles.py`. **Right panel layout** now includes linked customer details plus transaction notes/receipt-print controls above the cart breakdown. **Payment flow complete**: always-visible 3-column inline panel (EFT | Cash | Online); EFT capped at 3 rows; Cash shows live Change hint; live "Remaining / Change due / Paid in full" status label. `confirm_standard_sale()` in `src/pos/transaction_client.py` writes `transactions` + `transaction_lines`, atomically decrements `qty_on_hand` via `adjust_item_qty` RPC, writes `sale_instore` stock movements. Transaction numbers auto-assigned by `BEFORE INSERT` trigger (`T-2026-NNNN`, concurrent-safe). Dev data reset: `docs/sql/reset_dev_transactions.sql`. **Park & Recall**: `park_transaction()` snapshots cart → `parked` row with `cart_snapshot JSONB`; `RecallDialog` (700×460) lists parked transactions with Delete button; recalling a transaction auto-deletes it from parked list; completes as a new standard sale. **Receipt PDF**: `src/pos/receipt_generator.py` (reportlab, 80mm thermal, Code128 barcode, PyMuPDF content trim); post-sale `_ReceiptDialog` prompt; reprint available from Daily Sales. **Customer integration now live**: customer lookup/attach in Till, customer details and transaction notes on receipts, right-click `Load in Till` from the Customers tab, customer `discount_profile` auto-applied on attach, and a manual Till discount dropdown beside Sale Type that overrides the linked customer discount while selected. `Teacher` currently uses a placeholder 15% discount; `Staff` prices from cost with a rounded-up 10% margin target.
 - [x] Inventory tab — `InventoryTab` live in POS window (`src/gui/inventory/`). Search/filter/paginate grid; full detail panel on row select. Musipos CSV importer (`src/inventory/importer.py`) with cp1252 encoding, date/price parsing, cross-supplier SKU deduplication; bulk upserted 105K+ items to Supabase with 0 errors.
-- [ ] Customer management UI (Plan 05)
+- [~] Customer management UI (Plan 05) — Customers tab is live in the POS window with search, pagination, customer detail panel, sale history, CSV import, create/edit modal, invoice/shipping addresses, profile discount selection, and right-click `Load in Till`. Quotes, Invoices, Repairs, and Deposits tabs are present as placeholders and still need full implementation.
 - [ ] `repairs` + `deposits` tables
 - [x] Receipt PDF generation — `src/pos/receipt_generator.py`; see POS/Till entry above.
 
@@ -241,4 +245,4 @@ plans.
 
 ---
 
-*Last updated: 2026-04-18 — Park & Recall system (park_transaction, RecallDialog with Delete, auto-delete on recall); receipt PDF (reportlab, 80mm thermal, barcode, PyMuPDF trim); Daily Sales dialog (collapsible tx rows, line-item detail, day summary panel, expand/collapse all, sort by date, divider rows, Reprint Receipt). Next: customer profile integration.*
+*Last updated: 2026-04-23 — customer profile integration is live in Till; receipts can include linked customer details and transaction notes; Customers tab can load a customer directly into the active Till transaction; customer profile discounts and manual Till discounts are implemented; customer create/edit modal now includes separate invoice and shipping addresses plus profile discount selection.*

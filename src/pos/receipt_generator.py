@@ -30,14 +30,11 @@ from src.config import LOCAL_DATA_DIR, config
 
 
 # ── Paper dimensions ──────────────────────────────────────────────────────────
+# These are computed at render time from config so the user can change paper
+# width in Settings → Printers without restarting the app.
+# Common roll widths: 58 mm (desktop) · 72 mm · 76 mm · 80 mm (standard POS)
 
-_PAGE_W   = 80 * mm          # 226.77pt
-_MARGIN   = 3 * mm           # narrow margins for thermal
-_BODY_W   = _PAGE_W - 2 * _MARGIN
-
-# Column widths for line-items table (must sum ≤ _BODY_W ≈ 214pt)
-# SKU/desc | Qty | Unit price | Line total
-_COL_WIDTHS = [92, 22, 44, 50]   # 208pt total
+_MARGIN_MM = 3  # fixed narrow margin on each side
 
 
 # ── Styles ────────────────────────────────────────────────────────────────────
@@ -65,6 +62,9 @@ def _styles():
         "gst":        ParagraphStyle("gst",        fontSize=7,  alignment=TA_LEFT,  **base),
         "footer":     ParagraphStyle("footer",     fontSize=8,  alignment=TA_CENTER,
                                      fontName="Helvetica-Oblique", leading=10),
+        "notes":      ParagraphStyle("notes",      fontSize=8,  alignment=TA_LEFT,
+                                     fontName="Helvetica-Oblique", leading=10,
+                                     spaceAfter=1),
     }
 
 
@@ -136,7 +136,8 @@ class _BarcodeFlowable(Flowable):
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def generate_receipt(tx: dict, cart_items: dict) -> str:
+def generate_receipt(tx: dict, cart_items: dict, customer: Optional[dict] = None,
+                     notes: Optional[str] = None) -> str:
     """Generate an 80mm thermal receipt PDF and return its absolute path.
 
     Parameters
@@ -156,6 +157,20 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
     out_dir = Path(LOCAL_DATA_DIR) / "receipts"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = str(out_dir / "receipt_last.pdf")
+
+    # ── Paper dimensions (read from device config each call) ──────────────────
+    paper_w_mm = (config.device.receipt_paper_width_mm or 80.0)
+    page_w  = paper_w_mm * mm
+    margin  = _MARGIN_MM * mm
+    body_w  = page_w - 2 * margin
+    # Line-items column widths — proportional to body width
+    # SKU/desc ≈44% | Qty ≈10.5% | Unit ≈21% | Total ≈24%
+    col_widths = [
+        round(body_w * 0.442),
+        round(body_w * 0.106),
+        round(body_w * 0.212),
+        round(body_w * 0.240),
+    ]
 
     s = _styles()
     story: list = []
@@ -194,6 +209,32 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
     if performed_by:
         story.append(Paragraph(f"Staff: {performed_by}", s["tx_info"]))
     story.append(Spacer(1, 3))
+
+    # ── Customer details (when linked) ────────────────────────────────────────
+    if customer:
+        first = customer.get("first_name") or ""
+        last  = customer.get("surname") or ""
+        cname = f"{first} {last}".strip()
+        cid   = customer.get("customer_id")
+        mob   = customer.get("mobile") or ""
+
+        story.append(_divider(thick=False))
+        if cname:
+            story.append(Paragraph(f"Customer: <b>{cname}</b>", s["tx_info"]))
+        if cid is not None:
+            story.append(Paragraph(f"ID{cid}", s["tx_info"]))
+        if mob:
+            story.append(Paragraph(f"Ph: {_fmt_phone(mob)}", s["tx_info"]))
+        story.append(Spacer(1, 3))
+
+    # ── Transaction notes ─────────────────────────────────────────────────────
+    _notes = (notes or tx.get("notes") or "").strip()
+    if _notes:
+        story.append(_divider(thick=False))
+        story.append(Paragraph("Notes:", s["label_bold"]))
+        for _line in _notes.splitlines():
+            story.append(Paragraph(_line or " ", s["notes"]))
+        story.append(Spacer(1, 3))
 
     # ── Line items ────────────────────────────────────────────────────────────
     story.append(_divider(thick=True))
@@ -273,7 +314,7 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
         for cmd in extra._cmds:
             combined_style.add(*cmd)
 
-    items_table = Table(tbl_data, colWidths=_COL_WIDTHS, style=combined_style)
+    items_table = Table(tbl_data, colWidths=col_widths, style=combined_style)
     story.append(items_table)
     story.append(Spacer(1, 4))
 
@@ -307,14 +348,14 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
         totals_data.append(["Item discounts", _fmt_money(-line_disc_sum)])
 
     # TOTAL row — larger bold
-    totals_table = Table(totals_data, colWidths=[_BODY_W - 60, 60], style=totals_style)
+    totals_table = Table(totals_data, colWidths=[body_w - 60, 60], style=totals_style)
     story.append(totals_table)
 
     story.append(_divider(thick=False))
 
     total_row = Table(
         [["TOTAL", _fmt_money(total)]],
-        colWidths=[_BODY_W - 60, 60],
+        colWidths=[body_w - 60, 60],
         style=TableStyle([
             ("FONTNAME",  (0, 0), (-1, -1), "Helvetica-Bold"),
             ("FONTSIZE",  (0, 0), (-1, -1), 11),
@@ -360,7 +401,7 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
             ("TOPPADDING", (0, 0), (-1, -1), 1),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
         ])
-        pay_table = Table(pay_data, colWidths=[_BODY_W - 60, 60], style=pay_style)
+        pay_table = Table(pay_data, colWidths=[body_w - 60, 60], style=pay_style)
         story.append(pay_table)
         story.append(Spacer(1, 4))
 
@@ -369,7 +410,7 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
     gst_amount = round(total / 11, 2)
     gst_row = Table(
         [["GST Included:", _fmt_money(gst_amount)]],
-        colWidths=[_BODY_W - 60, 60],
+        colWidths=[body_w - 60, 60],
         style=TableStyle([
             ("FONTNAME",  (0, 0), (-1, -1), "Helvetica"),
             ("FONTSIZE",  (0, 0), (-1, -1), 7),
@@ -401,11 +442,11 @@ def generate_receipt(tx: dict, cart_items: dict) -> str:
 
     doc = SimpleDocTemplate(
         out_path,
-        pagesize=(_PAGE_W, _TALL),
-        leftMargin=_MARGIN,
-        rightMargin=_MARGIN,
-        topMargin=_MARGIN,
-        bottomMargin=_MARGIN,
+        pagesize=(page_w, _TALL),
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=margin,
         title=f"Receipt {tx_num}",
     )
     doc.build(story)

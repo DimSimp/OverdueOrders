@@ -309,9 +309,10 @@ Primary key: `(kit_id, component_id)`
 
 ### `discounts`
 
-> **Conflict resolved**: Merges Plan 02 `preset_discounts` and Plan 05 `discounts`.
-> Single table used for: (a) customer profile auto-apply discount, (b) POS manual preset dropdown.
-> Column name: `percentage` (Plan 05 naming; Plan 02 used `discount_pct`).
+> Legacy/table-driven discount definition table from the original POS schema.
+> It still exists in Supabase and is seeded with system presets, but the current customer/Till
+> discount flow does not depend on it. The live implementation uses `customers.discount_profile`
+> plus a hardcoded Till-side selector with the same values.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -323,6 +324,8 @@ Primary key: `(kit_id, component_id)`
 | `created_at` | timestamptz DEFAULT now() | |
 
 **System presets** (seeded on first run, `is_system = true`): 10%, 20%, 30%, 40%, 50%.
+These are retained for compatibility with the original schema, not because the current Till UI
+reads from this table.
 
 ---
 
@@ -331,6 +334,8 @@ Primary key: `(kit_id, component_id)`
 > Includes `musipos_account_code` and `musipos_barcode_ref` from Plan 09 import.
 > `customer_id` is the human-readable sequential reference number — **not** used as FK target.
 > All FKs to customers use `customers.id` (UUID).
+>
+> Current form validation requires `first_name` plus at least one of `mobile` or `phone_1`.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -340,7 +345,7 @@ Primary key: `(kit_id, component_id)`
 | `first_name` | text NOT NULL | |
 | `surname` | text | |
 | `business` | text | Company/school name |
-| `mobile` | text NOT NULL | Required |
+| `mobile` | text | One of `mobile` / `phone_1` should be present |
 | `phone_1` | text | Additional phone |
 | `fax` | text | |
 | `email` | text | |
@@ -359,7 +364,8 @@ Primary key: `(kit_id, component_id)`
 | `ship_postcode` | text | |
 | `ship_country` | text | |
 | `tax_exemption_number` | text | |
-| `discount_id` | uuid FK → `discounts.id` | Auto-applied at POS checkout |
+| `discount_id` | uuid FK → `discounts.id` | Legacy/table-driven discount link; not the active POS/customer discount path |
+| `discount_profile` | text | Hardcoded profile name used by current POS flow: `5%`, `10%`, `15%`, `Teacher`, `Staff` |
 | `terms_days` | integer | Payment terms for customer invoices |
 | `credit_limit` | numeric(10,2) | |
 | `stop_credit` | boolean DEFAULT false | |
@@ -410,7 +416,7 @@ Primary key: `(kit_id, component_id)`
 | `payment_online` | numeric(10,2) DEFAULT 0 | Manually-invoiced online orders |
 | `cash_tendered` | numeric(10,2) | Entered by cashier for cash payment |
 | `change_given` | numeric(10,2) | `cash_tendered − (total − payment_eft − payment_online)` |
-| `discount_id` | uuid FK → `discounts.id` | Preset discount applied (nullable) |
+| `discount_id` | uuid FK → `discounts.id` | Legacy/table-driven preset link; current Till discount profiles do not rely on this field |
 | `notes` | text | Transaction notes |
 | `print_notes` | boolean DEFAULT false | Print notes on receipt |
 | `due_date` | date | Invoice-type only: `created_at + customer.terms_days` |
@@ -763,4 +769,4 @@ online_sales ──────────── (stock_movements ref)
 
 ---
 
-*Last updated: 2026-04-15 — initial unified schema; resolved 6 conflicts from plan files*
+*Last updated: 2026-04-23 — documented current customer/Till discount flow (`discount_profile`), invoice/shipping customer address fields, and the present role of legacy `discounts` / `discount_id` columns in the schema.*

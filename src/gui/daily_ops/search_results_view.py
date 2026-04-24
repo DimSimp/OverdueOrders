@@ -152,6 +152,9 @@ class SearchResultsView(ctk.CTkFrame):
         self._tree = OrderTreeview(
             list_container,
             col_spec=_SEARCH_COL_SPEC,
+            table_id="daily_search_results",
+            user_manager=getattr(self._window, "user_manager", None),
+            current_user=getattr(self._window, "current_user", None),
             on_row_click=self._open_detail_view,
             on_context_action=self._remove_from_list,
             context_label="Remove from List",

@@ -20,14 +20,23 @@ if getattr(sys, "frozen", False):
     except OSError:
         _network_available = False
     CONFIG_PATH = _NETWORK_CONFIG_PATH if _network_available else _LOCAL_CONFIG
+
+    # Device-specific settings must live on the local machine even when the exe
+    # is launched from a network share.  LOCALAPPDATA is always per-machine
+    # (C:\Users\<user>\AppData\Local) so each workstation gets its own file.
+    import os as _os
+    _LOCAL_CONFIG_PATH = (
+        Path(_os.environ.get("LOCALAPPDATA", str(_LOCAL_BASE)))
+        / "ScarlettAIO"
+        / "config_local.json"
+    )
 else:
     _LOCAL_BASE = Path(__file__).parent.parent
     CONFIG_PATH = _LOCAL_BASE / "config.json"
+    # When running from source, keep config_local.json in the project root.
+    _LOCAL_CONFIG_PATH = _LOCAL_BASE / "config_local.json"
 
 EXAMPLE_PATH = _LOCAL_BASE / "config.example.json"
-
-# Device-specific settings — always local to this machine, never on the network share.
-_LOCAL_CONFIG_PATH = _LOCAL_BASE / "config_local.json"
 
 # ── Server availability ───────────────────────────────────────────────────────
 # Checked once at import time. Import SERVER_AVAILABLE and LOCAL_DATA_DIR in
@@ -152,6 +161,7 @@ class DeviceConfig:
     a4_printer: str = ""        # display name of A4 printer
     envelope_printer: str = ""  # display name of envelope printer (A5)
     ui_scale: float = 0.0       # manual UI scale override (0.0 = auto-detect)
+    receipt_paper_width_mm: float = 80.0  # thermal paper roll width in mm (typically 58 or 80)
 
 
 @dataclass
@@ -204,21 +214,28 @@ class ConfigManager:
         if _LOCAL_CONFIG_PATH.exists():
             with open(_LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
                 self._local_raw = json.load(f)
-        d = self._local_raw.get("device", {})
+        d = dict(self._local_raw.get("device", {}))
+        legacy_table_prefs = d.pop("table_preferences", None)
         self.device = DeviceConfig(
             receipt_printer=d.get("receipt_printer", ""),
             a4_printer=d.get("a4_printer", ""),
             envelope_printer=d.get("envelope_printer", ""),
             ui_scale=float(d.get("ui_scale", 0.0)),
+            receipt_paper_width_mm=float(d.get("receipt_paper_width_mm", 80.0)),
         )
+        if legacy_table_prefs is not None:
+            self._local_raw["device"] = d
+            self.save_local()
 
     def save_local(self) -> None:
         """Save device-specific settings to config_local.json."""
+        _LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         self._local_raw["device"] = {
             "receipt_printer": self.device.receipt_printer,
             "a4_printer": self.device.a4_printer,
             "envelope_printer": self.device.envelope_printer,
             "ui_scale": self.device.ui_scale,
+            "receipt_paper_width_mm": self.device.receipt_paper_width_mm,
         }
         with open(_LOCAL_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(self._local_raw, f, indent=2, ensure_ascii=False)

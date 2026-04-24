@@ -24,8 +24,71 @@ def list_printers() -> list[str]:
         return []
 
 
+def get_printable_width_mm(printer_name: str) -> float:
+    """Return the printable area width of the named printer in mm.
+
+    Queries the GDI HORZRES / LOGPIXELSX device capabilities via ctypes.
+    Returns 0.0 if the printer cannot be opened or the call fails.
+    """
+    try:
+        import ctypes
+        gdi = ctypes.windll.gdi32
+        hdc = gdi.CreateDCW("WINSPOOL", printer_name, None, None)
+        if not hdc:
+            return 0.0
+        HORZRES    = 8
+        LOGPIXELSX = 88
+        pixels = gdi.GetDeviceCaps(hdc, HORZRES)
+        dpi    = gdi.GetDeviceCaps(hdc, LOGPIXELSX)
+        gdi.DeleteDC(hdc)
+        if dpi <= 0:
+            return 0.0
+        return pixels / dpi * 25.4
+    except Exception:
+        return 0.0
+
+
+def _resize_pdf_width(pdf_path: str, target_w_mm: float) -> None:
+    """Scale a PDF page to target_w_mm wide (proportionally), in-place.
+
+    Skips silently if the page is already within 0.5 mm of the target or if
+    PyMuPDF is unavailable.
+    """
+    try:
+        import fitz
+        MM_TO_PT = 72.0 / 25.4
+        target_pt = target_w_mm * MM_TO_PT
+
+        src = fitz.open(pdf_path)
+        orig_w = src[0].rect.width
+        orig_h = src[0].rect.height
+        if abs(orig_w - target_pt) < (0.5 * MM_TO_PT):
+            src.close()
+            return  # already close enough
+
+        scale  = target_pt / orig_w
+        new_w  = target_pt
+        new_h  = orig_h * scale
+
+        out      = fitz.open()
+        new_page = out.new_page(width=new_w, height=new_h)
+        new_page.show_pdf_page(new_page.rect, src, 0)
+        src.close()
+
+        tmp = pdf_path + ".sz"
+        out.save(tmp, garbage=4, deflate=True)
+        out.close()
+        os.replace(tmp, pdf_path)
+    except Exception:
+        pass  # Print the original if resize fails
+
+
 def print_pdf(pdf_path: str, printer_name: str) -> None:
     """Send a PDF to the named printer via SumatraPDF (silent, non-blocking).
+
+    Queries the printer's actual printable-area width via GDI and pre-scales
+    the PDF to that width before printing, so that noscale printing is
+    edge-accurate regardless of the hardware margin the driver exposes.
 
     Raises RuntimeError if SumatraPDF is not found.
     """
@@ -36,6 +99,11 @@ def print_pdf(pdf_path: str, printer_name: str) -> None:
             "Install it from https://www.sumatrapdfreader.org/ or place "
             "SumatraPDF.exe next to the app."
         )
+
+    pw = get_printable_width_mm(printer_name)
+    if pw > 0:
+        _resize_pdf_width(pdf_path, pw)
+
     subprocess.Popen([
         sumatra,
         "-print-to", printer_name,

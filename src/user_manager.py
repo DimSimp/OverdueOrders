@@ -229,6 +229,37 @@ class UserManager:
                 return _strip_hash(u)
         return None
 
+    def get_table_preferences(self, user_id: str, table_id: str) -> dict:
+        """Return saved table preferences for one user/table pair."""
+        if not user_id or not table_id:
+            return {}
+        try:
+            data = self.load()
+        except Exception:
+            return {}
+        for user in data.get("users", []):
+            if user.get("user_id") == user_id:
+                prefs = user.get("preferences", {})
+                table_prefs = prefs.get("table_preferences", {})
+                return dict(table_prefs.get(table_id, {}))
+        return {}
+
+    def set_table_preferences(self, user_id: str, table_id: str, preferences: dict) -> Optional[dict]:
+        """Persist table preferences for one user/table pair and return the updated user."""
+        if not user_id or not table_id:
+            return None
+        data = self.load()
+        for user in data.get("users", []):
+            if user.get("user_id") == user_id:
+                prefs = dict(user.get("preferences", {}))
+                table_prefs = dict(prefs.get("table_preferences", {}))
+                table_prefs[table_id] = dict(preferences or {})
+                prefs["table_preferences"] = table_prefs
+                user["preferences"] = prefs
+                self.save(data)
+                return _strip_hash(user)
+        return None
+
     # ── Login / Logout ────────────────────────────────────────────────────────
 
     def login(self, username: str, device_name: str = "", force: bool = False) -> LoginResult:

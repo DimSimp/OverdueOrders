@@ -171,6 +171,8 @@ class DailyOpsResultsView(ctk.CTkFrame):
 
         # ── Tab view ────────────────────────────────────────────────────────
         def _on_tab_change():
+            self._active_tree.reload_column_preferences()
+            self._removed_tree.reload_column_preferences()
             self._on_selection_change()
 
         self._tabs = ctk.CTkTabview(parent, corner_radius=6, command=_on_tab_change)
@@ -187,6 +189,9 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._active_tree = OrderTreeview(
             _active_c,
             col_spec=_DAILY_COL_SPEC,
+            table_id="daily_ops_results",
+            user_manager=getattr(self._window, "user_manager", None),
+            current_user=getattr(self._window, "current_user", None),
             on_row_click=self._open_detail_view,
             on_context_action=self._move_to_removed,
             context_label="Move to Removed",
@@ -205,6 +210,9 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._removed_tree = OrderTreeview(
             _removed_c,
             col_spec=_DAILY_COL_SPEC,
+            table_id="daily_ops_results",
+            user_manager=getattr(self._window, "user_manager", None),
+            current_user=getattr(self._window, "current_user", None),
             on_row_click=self._open_detail_view,
             on_context_action=self._move_to_active,
             context_label="Move back to Active",

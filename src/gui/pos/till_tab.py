@@ -7,6 +7,13 @@ from typing import Optional
 
 import customtkinter as ctk
 
+from src.customers.discount_profiles import (
+    DISCOUNT_PROFILE_OPTIONS,
+    discount_percent_for_profile,
+    normalize_discount_profile,
+    staff_price_from_cost,
+)
+
 
 class TillTab(ctk.CTkFrame):
     """
@@ -41,11 +48,16 @@ class TillTab(ctk.CTkFrame):
         # Set by PosWindow after wiring both tabs
         self.navigate_to_inventory: Optional[callable] = None
         self.refresh_inventory: Optional[callable] = None
+        self.navigate_to_customer: Optional[callable] = None
+        # Linked customer state
+        self._linked_customer: Optional[dict] = None
+        self._customer_card_widgets: list = []
         # Cart state
         self._cart_items: dict[str, dict] = {}  # item_id → line data
         self._cart_disc_pct: float = 0.0
         self._parked_tx_id: Optional[str] = None
         self._source_tx_id: Optional[str] = None  # set when loading a linked refund
+        self._manual_discount_profile: Optional[str] = None
         # Payment state
         self._payment_cash: float = 0.0    # cash tendered (0 = not entered)
         self._payment_eft: list[dict] = [] # [{"amount": X.XX}, ...]
@@ -79,6 +91,26 @@ class TillTab(ctk.CTkFrame):
             width=120,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", pady=10)
+
+        self._manual_discount_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        self._manual_discount_frame.pack(side="left", padx=(16, 0), pady=10)
+
+        ctk.CTkLabel(
+            self._manual_discount_frame,
+            text="Discount:",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 4))
+
+        self._manual_discount_var = ctk.StringVar(value="-")
+        self._manual_discount_menu = ctk.CTkOptionMenu(
+            self._manual_discount_frame,
+            variable=self._manual_discount_var,
+            values=DISCOUNT_PROFILE_OPTIONS,
+            width=110,
+            font=ctk.CTkFont(size=12),
+            command=self._on_manual_discount_change,
+        )
+        self._manual_discount_menu.pack(side="left")
 
         # Tx# lookup row — shown only in Refund mode
         self._tx_lookup_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
@@ -139,7 +171,7 @@ class TillTab(ctk.CTkFrame):
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.pack(fill="both", expand=True)
         main.grid_columnconfigure(0, weight=7)
-        main.grid_columnconfigure(1, weight=3)
+        main.grid_columnconfigure(1, weight=2)
         main.grid_rowconfigure(0, weight=1)
 
         self._build_cart_panel(main)
@@ -230,9 +262,9 @@ class TillTab(ctk.CTkFrame):
         right = ctk.CTkFrame(parent, fg_color=("gray90", "gray15"), corner_radius=8)
         right.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
 
-        # Customer entry — top of right panel (future customer profile area)
+        # ── Customer search (top — always visible) ────────────────────────
         customer_row = ctk.CTkFrame(right, fg_color="transparent")
-        customer_row.pack(fill="x", padx=16, pady=(12, 0))
+        customer_row.pack(side="top", fill="x", padx=16, pady=(12, 0))
 
         ctk.CTkLabel(
             customer_row,
@@ -247,22 +279,53 @@ class TillTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
         )
         self._customer_entry.pack(side="left", fill="x", expand=True)
+        self._customer_entry.bind("<Return>", lambda _e: self._on_customer_search())
+
+        self._customer_find_btn = ctk.CTkButton(
+            customer_row, text="Find", width=52,
+            font=ctk.CTkFont(size=12),
+            command=self._on_customer_search,
+        )
+        self._customer_find_btn.pack(side="left", padx=(4, 0))
 
         # Thin divider beneath customer row
         ctk.CTkFrame(right, fg_color=("gray70", "gray40"), height=1).pack(
-            fill="x", padx=0, pady=(10, 0),
+            side="top", fill="x", pady=(10, 0),
         )
 
-        # Push content to the bottom — spacer absorbs all free space at the top
-        ctk.CTkFrame(right, fg_color="transparent").pack(expand=True)
+        # ── Fixed bottom block — packed before the customer card so it always
+        #    claims its space first.  The Confirm Sale button can never be
+        #    displaced regardless of how many EFT rows are added above it.
+        bottom = ctk.CTkFrame(right, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x")
+
+        # Notes section (top of the fixed block)
+        ctk.CTkFrame(bottom, fg_color=("gray70", "gray40"), height=1).pack(fill="x")
+        ctk.CTkLabel(
+            bottom,
+            text="Transaction Notes",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=("gray40", "gray70"),
+            anchor="w",
+        ).pack(fill="x", padx=10, pady=(5, 2))
+        self._notes_text = ctk.CTkTextbox(
+            bottom,
+            height=72,
+            font=ctk.CTkFont(size=11),
+            fg_color=("gray85", "gray20"),
+            border_width=1,
+            border_color=("gray70", "gray40"),
+            wrap="word",
+        )
+        self._notes_text.pack(fill="x", padx=10, pady=(0, 8))
 
         # ── Cart breakdown section cap ────────────────────────────────────
-        ctk.CTkFrame(right, fg_color=("gray60", "gray35"), height=2).pack(
+        ctk.CTkFrame(bottom, fg_color=("gray60", "gray35"), height=2).pack(
             fill="x", padx=0, pady=(0, 0),
         )
 
-        # Cart discount % control — top of breakdown section
-        disc_row = ctk.CTkFrame(right, fg_color="transparent")
+        # Cart discount % control
+        disc_row = ctk.CTkFrame(bottom, fg_color="transparent")
         disc_row.pack(fill="x", padx=16, pady=(10, 0))
 
         ctk.CTkLabel(
@@ -281,7 +344,7 @@ class TillTab(ctk.CTkFrame):
         ).pack(side="left", padx=(4, 0))
 
         # Totals — Subtotal → Discount → Cart Margin → divider → TOTAL
-        totals = ctk.CTkFrame(right, fg_color="transparent")
+        totals = ctk.CTkFrame(bottom, fg_color="transparent")
         totals.pack(fill="x", padx=16, pady=(10, 0))
 
         def _total_row(label_text: str, attr: str):
@@ -316,7 +379,7 @@ class TillTab(ctk.CTkFrame):
 
         ctk.CTkFrame(totals, height=1, fg_color=("gray70", "gray40")).pack(fill="x", pady=8)
 
-        # TOTAL — largest element, at the bottom of the breakdown
+        # TOTAL — largest element
         total_row = ctk.CTkFrame(totals, fg_color="transparent")
         total_row.pack(fill="x")
         ctk.CTkLabel(
@@ -343,19 +406,19 @@ class TillTab(ctk.CTkFrame):
         self._entry_total.bind("<Escape>", self._cancel_total_edit)
 
         # ── Payment section ───────────────────────────────────────────────
-        ctk.CTkFrame(right, fg_color=("gray60", "gray35"), height=2).pack(
+        ctk.CTkFrame(bottom, fg_color=("gray60", "gray35"), height=2).pack(
             fill="x", padx=0, pady=(20, 0),
         )
         ctk.CTkLabel(
-            right, text="Payment Method",
+            bottom, text="Payment Method",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=("gray30", "gray80"), anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 8))
 
         # 3-column payment grid
-        cols = ctk.CTkFrame(right, fg_color="transparent")
+        cols = ctk.CTkFrame(bottom, fg_color="transparent")
         cols.pack(fill="x", padx=16, pady=(0, 4))
-        cols.grid_columnconfigure(0, weight=1)
+        cols.grid_columnconfigure(0, weight=2)  # EFT — wider to fit entry + buttons
         cols.grid_columnconfigure(1, weight=1)
         cols.grid_columnconfigure(2, weight=1)
 
@@ -369,21 +432,12 @@ class TillTab(ctk.CTkFrame):
             text_color=("gray40", "gray70"), anchor="w",
         ).pack(anchor="w")
 
-        self._eft_frame = ctk.CTkFrame(eft_col, fg_color="transparent")
+        # Fixed height — pre-allocates space for 3 rows so adding rows never
+        # shifts surrounding elements.
+        self._eft_frame = ctk.CTkFrame(eft_col, fg_color="transparent", width=1, height=96)
+        self._eft_frame.pack_propagate(False)
         self._eft_frame.pack(fill="x", pady=(4, 0))
         self._add_eft_row()  # start with one empty row
-
-        # [+] button always lives below the last EFT row
-        self._btn_add_eft = ctk.CTkButton(
-            self._eft_frame, text="+", width=22, height=22,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="transparent", border_width=1,
-            border_color=("gray60", "gray45"),
-            text_color=("gray40", "gray70"),
-            hover_color=("gray85", "gray25"),
-            command=self._add_eft_row,
-        )
-        self._btn_add_eft.pack(anchor="w", pady=(3, 0))
 
         # ── Cash column ───────────────────────────────────────────────────
         cash_col = ctk.CTkFrame(cols, fg_color="transparent")
@@ -428,18 +482,18 @@ class TillTab(ctk.CTkFrame):
         self._online_var.trace_add("write", self._recalc_payments)
 
         # Remaining / Change / Paid status
-        ctk.CTkFrame(right, fg_color=("gray70", "gray40"), height=1).pack(
+        ctk.CTkFrame(bottom, fg_color=("gray70", "gray40"), height=1).pack(
             fill="x", padx=16, pady=(10, 4),
         )
         self._remaining_lbl = ctk.CTkLabel(
-            right, text="",
+            bottom, text="",
             font=ctk.CTkFont(size=13, weight="bold"),
             anchor="e",
         )
         self._remaining_lbl.pack(fill="x", padx=16, pady=(0, 2))
 
         self._btn_confirm = ctk.CTkButton(
-            right,
+            bottom,
             text="Confirm Sale",
             height=56,
             font=ctk.CTkFont(size=16, weight="bold"),
@@ -448,6 +502,12 @@ class TillTab(ctk.CTkFrame):
             command=self._confirm_sale,
         )
         self._btn_confirm.pack(fill="x", padx=16, pady=(0, 16))
+
+        # ── Customer card — plain frame, fills all remaining space ────────
+        # Packed last (side="top") so it occupies whatever height is left
+        # between the customer search row and the fixed bottom block.
+        self._customer_card_frame = ctk.CTkFrame(right, fg_color="transparent")
+        self._customer_card_frame.pack(side="top", fill="both", expand=True)
 
     # ── SKU lookup ────────────────────────────────────────────────────────
 
@@ -537,6 +597,7 @@ class TillTab(ctk.CTkFrame):
 
         if item_id in self._cart_items:
             self._cart_items[item_id]["qty"] += delta
+            self._apply_customer_profile_to_line(self._cart_items[item_id])
             self._refresh_tree_row(item_id)
         else:
             self._cart_items[item_id] = {
@@ -544,10 +605,13 @@ class TillTab(ctk.CTkFrame):
                 "title":      item.get("title") or "",
                 "qty":        -1 if is_refund else 1,
                 "unit_price": unit_price,
+                "base_unit_price": unit_price,
                 "disc_pct":   0.0,
                 "cost_price": cost_price,
             }
+            self._apply_customer_profile_to_line(self._cart_items[item_id])
             self._insert_tree_row(item_id)
+            self._refresh_tree_row(item_id)
 
         self._update_totals()
 
@@ -767,9 +831,17 @@ class TillTab(ctk.CTkFrame):
             self._add_eft_row()
         self._parked_tx_id = None
         self._source_tx_id = None
-        if hasattr(self, "_customer_entry"):
-            self._customer_entry.delete(0, "end")
+        self._manual_discount_profile = None
+        if hasattr(self, "_manual_discount_var"):
+            self._manual_discount_var.set("-")
+        if hasattr(self, "_notes_text"):
+            self._notes_text.delete("1.0", "end")
+        self._detach_customer()
         self._update_totals()
+
+    def _on_manual_discount_change(self, selected: str):
+        self._manual_discount_profile = normalize_discount_profile(selected)
+        self._apply_customer_profile_to_cart()
 
     def _apply_discount(self):
         val = self._disc_entry.get().strip().rstrip("%")
@@ -947,7 +1019,6 @@ class TillTab(ctk.CTkFrame):
         return max(0.0, total - paid)
 
     _MAX_EFT_ROWS = 3
-
     def _add_eft_row(self):
         """Append a new empty EFT amount entry row (max 3)."""
         if len(self._eft_row_widgets) >= self._MAX_EFT_ROWS:
@@ -957,15 +1028,12 @@ class TillTab(ctk.CTkFrame):
         self._eft_vars.append(var)
 
         row = ctk.CTkFrame(self._eft_frame, fg_color="transparent")
-        if hasattr(self, "_btn_add_eft"):
-            row.pack(fill="x", pady=(0, 3), before=self._btn_add_eft)
-        else:
-            row.pack(fill="x", pady=(0, 3))
+        row.pack(fill="x", pady=(0, 3))
         self._eft_row_widgets.append(row)
 
         ctk.CTkEntry(
             row, textvariable=var,
-            width=52, font=ctk.CTkFont(size=12), justify="right",
+            width=70, font=ctk.CTkFont(size=12), justify="right",
             placeholder_text="0.00",
         ).pack(side="left")
 
@@ -977,11 +1045,17 @@ class TillTab(ctk.CTkFrame):
             command=lambda r=row: self._remove_eft_row(r),
         ).pack(side="left", padx=(3, 0))
 
-        # Hide [+] when the limit is reached
-        if len(self._eft_row_widgets) >= self._MAX_EFT_ROWS and hasattr(self, "_btn_add_eft"):
-            self._btn_add_eft.pack_forget()
+        ctk.CTkButton(
+            row, text="+", width=20, height=20,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="transparent", border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray40", "gray70"),
+            hover_color=("gray85", "gray25"),
+            command=self._add_eft_row,
+        ).pack(side="left", padx=(3, 0))
 
-        self._refresh_eft_minus_buttons()
+        self._refresh_eft_buttons()
 
     def _remove_eft_row(self, row: ctk.CTkFrame):
         """Remove an EFT row (minimum one row always remains)."""
@@ -991,23 +1065,33 @@ class TillTab(ctk.CTkFrame):
         self._eft_vars.pop(idx)
         self._eft_row_widgets.pop(idx)
         row.destroy()
-        # Re-show [+] if we're now below the limit
-        if len(self._eft_row_widgets) < self._MAX_EFT_ROWS and hasattr(self, "_btn_add_eft"):
-            self._btn_add_eft.pack(anchor="w", pady=(3, 0))
-        self._refresh_eft_minus_buttons()
+        self._refresh_eft_buttons()
         self._recalc_payments()
 
-    def _refresh_eft_minus_buttons(self):
-        """Show [−] buttons only when more than one EFT row exists."""
-        show = len(self._eft_row_widgets) > 1
-        for row in self._eft_row_widgets:
+    def _refresh_eft_buttons(self):
+        """Sync [−] and [+] visibility across all EFT rows.
+
+        Rules:
+        - [−] shown on every row only when more than one row exists.
+        - [+] shown only on the last row, and only when below the 3-row max.
+        """
+        n = len(self._eft_row_widgets)
+        for i, row in enumerate(self._eft_row_widgets):
             children = row.winfo_children()
-            if len(children) >= 2:
-                btn = children[1]
-                if show:
-                    btn.pack(side="left", padx=(4, 0))
-                else:
-                    btn.pack_forget()
+            if len(children) < 3:
+                continue
+            minus_btn = children[1]
+            plus_btn  = children[2]
+
+            # Always forget both first to preserve left-to-right pack order.
+            minus_btn.pack_forget()
+            plus_btn.pack_forget()
+
+            if n > 1:
+                minus_btn.pack(side="left", padx=(3, 0))
+
+            if i == n - 1 and n < self._MAX_EFT_ROWS:
+                plus_btn.pack(side="left", padx=(3, 0))
 
     def _recalc_payments(self, *_):
         """Read inline field values → update payment state vars → refresh display."""
@@ -1156,6 +1240,17 @@ class TillTab(ctk.CTkFrame):
         source_tx_id_snap = self._source_tx_id
         confirm_text = "Confirm Refund" if is_refund else "Confirm Sale"
 
+        _cust = self._linked_customer
+        cust_id_snap   = _cust.get("id") if _cust else None
+        cust_name_snap = (
+            f"{_cust.get('first_name', '')} {_cust.get('surname', '')}".strip()
+            if _cust else None
+        )
+        notes_snap = (
+            self._notes_text.get("1.0", "end").strip()
+            if hasattr(self, "_notes_text") else ""
+        )
+
         self._btn_confirm.configure(state="disabled", text="Processing…")
 
         def _thread():
@@ -1174,6 +1269,9 @@ class TillTab(ctk.CTkFrame):
                         cash_tendered=self._payment_cash,
                         change_given=change_given,
                         performed_by=performed_by,
+                        customer_id=cust_id_snap,
+                        customer_name=cust_name_snap,
+                        notes=notes_snap or None,
                     )
                 else:
                     from src.pos.transaction_client import confirm_standard_sale
@@ -1190,6 +1288,9 @@ class TillTab(ctk.CTkFrame):
                         performed_by=performed_by,
                         sale_type=sale_type,
                         source_tx_id=source_tx_id_snap,
+                        customer_id=cust_id_snap,
+                        customer_name=cust_name_snap,
+                        notes=notes_snap or None,
                     )
                 self.after(0, lambda: _on_success(tx))
             except Exception as exc:
@@ -1198,13 +1299,34 @@ class TillTab(ctk.CTkFrame):
 
         def _on_success(tx: dict):
             cart_snap = dict(self._cart_items)   # capture before clear
+            cust_snap = self._linked_customer     # capture before detach
+
+            # Snapshot change/total labels before clearing so staff can still
+            # read them after confirmation. Cleared naturally when next item is
+            # added or cart is explicitly cleared.
+            _snap_remaining_text  = self._remaining_lbl.cget("text")       if hasattr(self, "_remaining_lbl") else ""
+            _snap_remaining_color = self._remaining_lbl.cget("text_color") if hasattr(self, "_remaining_lbl") else None
+            _snap_total_text      = self._lbl_total.cget("text")           if hasattr(self, "_lbl_total")     else ""
+
             self._btn_confirm.configure(state="normal", text=confirm_text)
             self._clear_cart()
             if is_refund:
                 self._sale_type_var.set("Standard")  # revert after refund
+
+            # Restore snapshots for non-refund sales only (refund type reset
+            # above re-runs _update_totals so restoration would be meaningless).
+            if not is_refund:
+                if hasattr(self, "_remaining_lbl") and _snap_remaining_text:
+                    self._remaining_lbl.configure(
+                        text=_snap_remaining_text,
+                        text_color=_snap_remaining_color,
+                    )
+                if hasattr(self, "_lbl_total") and _snap_total_text:
+                    self._lbl_total.configure(text=_snap_total_text)
+
             if self.refresh_inventory:
                 self.refresh_inventory()
-            _show_sale_complete_dialog(self, tx, cart_snap)
+            _show_sale_complete_dialog(self, tx, cart_snap, cust_snap)
 
         def _on_error(err: str):
             self._btn_confirm.configure(state="normal", text=confirm_text)
@@ -1215,6 +1337,272 @@ class TillTab(ctk.CTkFrame):
             )
 
         threading.Thread(target=_thread, daemon=True).start()
+
+    # ── Customer lookup ───────────────────────────────────────────────────
+
+    def _on_customer_search(self):
+        query = self._customer_entry.get().strip()
+        if not query:
+            return
+        self._customer_find_btn.configure(state="disabled", text="…")
+        threading.Thread(
+            target=self._customer_lookup_thread, args=(query,), daemon=True,
+        ).start()
+
+    def _customer_lookup_thread(self, query: str):
+        from src.customers.customer_client import lookup_for_till
+        try:
+            results = lookup_for_till(query)
+            self.after(0, lambda: self._handle_customer_results(query, results))
+        except Exception as exc:
+            err = str(exc)
+            self.after(0, lambda: self._on_customer_lookup_error(err))
+
+    def _handle_customer_results(self, query: str, results: list):
+        self._customer_find_btn.configure(state="normal", text="Find")
+        if len(results) == 1:
+            self._attach_customer(results[0])
+            self._customer_entry.delete(0, "end")
+        elif len(results) == 0:
+            # Brief visual feedback — "?" for 1.5 s then reset
+            self._customer_find_btn.configure(text="?", state="disabled")
+            self.after(1500, lambda: self._customer_find_btn.configure(
+                text="Find", state="normal"
+            ))
+        else:
+            self._show_customer_picker(results)
+
+    def _show_customer_picker(self, customers: list):
+        """Small modal to pick from multiple customer search results."""
+        dlg = ctk.CTkToplevel(self.winfo_toplevel())
+        dlg.title("Select Customer")
+        dlg.geometry("420x300")
+        dlg.resizable(False, True)
+        dlg.grab_set()
+        dlg.transient(self.winfo_toplevel())
+        dlg.after(50, dlg.lift)
+
+        ctk.CTkLabel(
+            dlg,
+            text="Multiple matches — choose one:",
+            font=ctk.CTkFont(size=12),
+        ).pack(pady=(14, 6), padx=16)
+
+        list_frame = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
+        list_frame.pack(fill="both", expand=True, padx=16, pady=(0, 6))
+
+        def _pick(c):
+            dlg.destroy()
+            self._attach_customer(c)
+            self._customer_entry.delete(0, "end")
+
+        for c in customers[:5]:
+            first = c.get("first_name", "") or ""
+            last  = c.get("surname", "") or ""
+            name  = f"{first} {last}".strip() or "—"
+            cid   = c.get("customer_id")
+            mob   = c.get("mobile") or ""
+            biz   = c.get("business") or ""
+            parts = [name]
+            if cid:
+                parts.append(f"ID{cid}")
+            if mob:
+                parts.append(mob)
+            if biz:
+                parts.append(biz)
+            label = "  ·  ".join(parts)
+
+            ctk.CTkButton(
+                list_frame,
+                text=label,
+                font=ctk.CTkFont(size=12),
+                anchor="w",
+                fg_color="transparent",
+                border_width=1,
+                border_color=("gray65", "gray40"),
+                text_color=("gray20", "gray90"),
+                hover_color=("gray85", "gray25"),
+                command=lambda _c=c: _pick(_c),
+            ).pack(fill="x", pady=3)
+
+        if len(customers) >= 6:
+            ctk.CTkLabel(
+                dlg,
+                text="Showing first 5 results — refine your search.",
+                font=ctk.CTkFont(size=10),
+                text_color=("gray50", "gray60"),
+            ).pack(pady=(0, 4))
+
+        ctk.CTkButton(
+            dlg, text="Cancel", width=80, height=28,
+            fg_color="transparent", border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray20", "gray90"),
+            hover_color=("gray85", "gray25"),
+            command=dlg.destroy,
+        ).pack(pady=(0, 12))
+
+    def _attach_customer(self, customer: dict, apply_profile_discount: bool = True):
+        self._linked_customer = customer
+        if apply_profile_discount:
+            self._apply_customer_profile_to_cart()
+        self._refresh_customer_display()
+
+    def load_customer_profile(self, customer: dict, apply_profile_discount: bool = True) -> None:
+        """Public wrapper used by other POS tabs to link a customer to the current sale."""
+        if not customer:
+            return
+        self._attach_customer(customer, apply_profile_discount=apply_profile_discount)
+        if hasattr(self, "_customer_entry"):
+            self._customer_entry.delete(0, "end")
+        if hasattr(self, "_sku_entry"):
+            self._sku_entry.focus_set()
+
+    def _detach_customer(self):
+        self._linked_customer = None
+        if hasattr(self, "_customer_entry"):
+            self._customer_entry.delete(0, "end")
+        self._apply_customer_profile_to_cart()
+        self._refresh_customer_display()
+
+    def _current_discount_profile(self) -> str | None:
+        if self._manual_discount_profile:
+            return self._manual_discount_profile
+        if not self._linked_customer:
+            return None
+        return normalize_discount_profile(self._linked_customer.get("discount_profile"))
+
+    def _apply_customer_profile_to_line(self, line: dict) -> None:
+        if self._sale_type_var.get() == "Refund":
+            return
+
+        profile = self._current_discount_profile()
+        base_price = float(line.get("base_unit_price") or line.get("unit_price") or 0.0)
+        line["base_unit_price"] = base_price
+
+        if not profile:
+            line["unit_price"] = base_price
+            line["disc_pct"] = 0.0
+            return
+
+        if profile == "Staff":
+            staff_price = staff_price_from_cost(line.get("cost_price"))
+            line["unit_price"] = staff_price if staff_price is not None else base_price
+            line["disc_pct"] = 0.0
+            return
+
+        pct = discount_percent_for_profile(profile)
+        line["unit_price"] = base_price
+        line["disc_pct"] = round(pct or 0.0, 2)
+
+    def _apply_customer_profile_to_cart(self) -> None:
+        if self._sale_type_var.get() == "Refund":
+            return
+        for item_id, line in self._cart_items.items():
+            self._apply_customer_profile_to_line(line)
+            if self._tree.exists(item_id):
+                self._refresh_tree_row(item_id)
+        self._update_totals()
+
+    def _refresh_customer_display(self):
+        """Rebuild the customer card inside the scrollable card frame."""
+        if not hasattr(self, "_customer_card_frame"):
+            return
+        for w in self._customer_card_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._customer_card_widgets.clear()
+
+        c = self._linked_customer
+        if c is None:
+            return
+
+        inner = self._customer_card_frame
+
+        first = c.get("first_name", "") or ""
+        last  = c.get("surname", "") or ""
+        name  = f"{first} {last}".strip() or "—"
+        cid   = c.get("customer_id")
+        biz   = c.get("business") or ""
+        profile = normalize_discount_profile(c.get("discount_profile"))
+        email = c.get("email") or ""
+        uuid  = c.get("id")
+
+        def _valid_phone(s: str) -> bool:
+            return bool(s) and sum(ch.isdigit() for ch in s) >= 6
+
+        _mob  = c.get("mobile") or ""
+        _ph1  = c.get("phone_1") or ""
+        mob   = _mob if _valid_phone(_mob) else (_ph1 if _valid_phone(_ph1) else "")
+
+        # Card background
+        card = ctk.CTkFrame(inner, fg_color=("gray80", "gray25"), corner_radius=8)
+        card.pack(fill="x", padx=8, pady=(8, 4))
+        self._customer_card_widgets.append(card)
+
+        # Name row — name label + Profile button + Remove button
+        name_row = ctk.CTkFrame(card, fg_color="transparent")
+        name_row.pack(fill="x", padx=10, pady=(10, 4))
+
+        ctk.CTkLabel(
+            name_row, text=name,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
+        ctk.CTkButton(
+            name_row, text="✕", width=26, height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray55", "gray40"),
+            text_color=("gray40", "gray70"),
+            hover_color=("gray75", "gray30"),
+            command=self._detach_customer,
+        ).pack(side="right", padx=(4, 0))
+
+        if self.navigate_to_customer and uuid:
+            ctk.CTkButton(
+                name_row, text="Profile →", width=76, height=26,
+                font=ctk.CTkFont(size=11),
+                fg_color="transparent",
+                border_width=1,
+                border_color=("gray55", "gray40"),
+                text_color=("gray40", "gray70"),
+                hover_color=("gray75", "gray30"),
+                command=lambda _u=uuid: self.navigate_to_customer(_u),
+            ).pack(side="right")
+
+        # Detail lines
+        detail_lines = [
+            (f"ID{cid}", True) if cid is not None else None,
+            (biz,        False) if biz   else None,
+            (f"Discount: {profile}", False) if profile else None,
+            (mob,        False) if mob   else None,
+            (email,      False) if email else None,
+        ]
+        for item in detail_lines:
+            if item is None:
+                continue
+            text, bold = item
+            ctk.CTkLabel(
+                card, text=text,
+                font=ctk.CTkFont(size=11, weight="bold" if bold else "normal"),
+                text_color=("gray25", "gray85") if bold else ("gray45", "gray65"),
+                anchor="w",
+            ).pack(fill="x", padx=10, pady=(0, 2))
+
+        ctk.CTkFrame(card, fg_color="transparent", height=6).pack()  # bottom padding
+
+    def _on_customer_lookup_error(self, err: str):
+        self._customer_find_btn.configure(state="normal", text="Find")
+        messagebox.showerror(
+            "Customer Lookup",
+            f"Could not search customers:\n{err}",
+            parent=self.winfo_toplevel(),
+        )
 
     # ── Transaction stubs ─────────────────────────────────────────────────
 
@@ -1236,8 +1624,17 @@ class TillTab(ctk.CTkFrame):
         subtotal     = self._get_subtotal()
         total        = self._get_total()
         sale_type    = self._sale_type_var.get()
-        customer     = self._customer_entry.get().strip()
         performed_by = (self.current_user or {}).get("username", "")
+        _cust = self._linked_customer
+        customer_id = _cust.get("id") if _cust else None
+        customer = (
+            f"{_cust.get('first_name', '')} {_cust.get('surname', '')}".strip()
+            if _cust else self._customer_entry.get().strip()
+        )
+        notes_park = (
+            self._notes_text.get("1.0", "end").strip()
+            if hasattr(self, "_notes_text") else ""
+        )
 
         def _thread():
             try:
@@ -1250,6 +1647,8 @@ class TillTab(ctk.CTkFrame):
                     sale_type=sale_type,
                     customer_name=customer,
                     performed_by=performed_by,
+                    customer_id=customer_id,
+                    notes=notes_park or None,
                 )
                 self.after(0, lambda: _done(tx))
             except Exception as exc:
@@ -1345,6 +1744,14 @@ class TillTab(ctk.CTkFrame):
         self._btn_confirm.configure(
             text="Confirm Refund" if is_refund else "Confirm Sale",
         )
+        if hasattr(self, "_manual_discount_frame"):
+            if is_refund:
+                if self._manual_discount_var.get() != "-":
+                    self._manual_discount_var.set("-")
+                self._manual_discount_profile = None
+                self._manual_discount_frame.pack_forget()
+            elif not self._manual_discount_frame.winfo_manager():
+                self._manual_discount_frame.pack(side="left", padx=(16, 0), pady=10)
         if hasattr(self, "_tx_lookup_frame"):
             if is_refund:
                 self._tx_lookup_frame.pack(side="left", pady=10)
@@ -1390,6 +1797,23 @@ class TillTab(ctk.CTkFrame):
         if cart_disc:
             self._disc_entry.insert(0, str(cart_disc))
 
+        # Restore transaction notes from the original sale
+        orig_notes = (tx.get("notes") or "").strip()
+        if hasattr(self, "_notes_text"):
+            self._notes_text.delete("1.0", "end")
+            if orig_notes:
+                self._notes_text.insert("1.0", orig_notes)
+
+        # Re-link the customer if the original sale had one
+        orig_customer_id = tx.get("customer_id")
+        if orig_customer_id:
+            def _fetch_cust():
+                from src.customers.customer_client import get_customer
+                c = get_customer(orig_customer_id)
+                if c:
+                    self.after(0, lambda: self._attach_customer(c, apply_profile_discount=False))
+            threading.Thread(target=_fetch_cust, daemon=True).start()
+
         self._update_totals()
         self.winfo_toplevel().lift()
         self.winfo_toplevel().focus_force()
@@ -1428,7 +1852,23 @@ class TillTab(ctk.CTkFrame):
             self._disc_entry.delete(0, "end")
             self._disc_entry.insert(0, str(disc_pct))
 
-        if customer:
+        # Restore transaction notes
+        recalled_notes = snapshot.get("notes") or ""
+        if recalled_notes and hasattr(self, "_notes_text"):
+            self._notes_text.delete("1.0", "end")
+            self._notes_text.insert("1.0", recalled_notes)
+
+        # Re-link the customer if the snapshot has a customer_id
+        recalled_customer_id = snapshot.get("customer_id")
+        if recalled_customer_id:
+            def _fetch_cust():
+                from src.customers.customer_client import get_customer
+                c = get_customer(recalled_customer_id)
+                if c:
+                    self.after(0, lambda: self._attach_customer(c, apply_profile_discount=False))
+            threading.Thread(target=_fetch_cust, daemon=True).start()
+        elif customer:
+            # Legacy parked transactions without a linked customer UUID
             self._customer_entry.delete(0, "end")
             self._customer_entry.insert(0, customer)
 
@@ -1449,7 +1889,8 @@ def _bg_delete_parked(tx_id: str) -> None:
         pass  # non-critical; the row will just linger until manually cleaned
 
 
-def _show_sale_complete_dialog(parent: ctk.CTkFrame, tx: dict, cart_snapshot: dict) -> None:
+def _show_sale_complete_dialog(parent: ctk.CTkFrame, tx: dict, cart_snapshot: dict,
+                               customer: Optional[dict] = None) -> None:
     """CTkToplevel shown after a successful sale — offers to print a receipt."""
     tx_num = tx.get("transaction_number", "")
     dlg = ctk.CTkToplevel(parent.winfo_toplevel())
@@ -1490,7 +1931,7 @@ def _show_sale_complete_dialog(parent: ctk.CTkFrame, tx: dict, cart_snapshot: di
         try:
             from src.pos.receipt_generator import generate_receipt
             from src.printer_utils import print_pdf
-            pdf_path = generate_receipt(tx, cart_snapshot)
+            pdf_path = generate_receipt(tx, cart_snapshot, customer)
             print_pdf(pdf_path, printer)
         except Exception as exc:
             messagebox.showerror(

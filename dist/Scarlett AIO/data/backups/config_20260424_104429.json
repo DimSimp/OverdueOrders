@@ -1,0 +1,339 @@
+{
+  "neto": {
+    "store_url": "https://www.scarlettmusic.com.au",
+    "api_key": "XDW07irbsPizRNtHTOlalVCIhcweIiIR",
+    "username": "SamAPI"
+  },
+  "ebay": {
+    "client_id": "KyalScar-Awaiting-PRD-aca833663-f54c920e",
+    "client_secret": "PRD-ca8336639ad2-75af-45bc-992a-d0bc",
+    "ru_name": "Kyal_Scarlett-KyalScar-Awaiti-ogyqlfexa",
+    "refresh_token": "v^1.1#i^1#f^0#p^3#r^1#I^3#t^Ul4xMF80OkM2RTA0MzYzRDYzOTlGQ0M4MUM0NjIzMkM5MTY5RDM0XzJfMSNFXjI2MA==",
+    "access_token": "v^1.1#i^1#r^0#f^0#I^3#p^3#t^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",
+    "access_token_expires_at": 1776991432.831813,
+    "environment": "production",
+    "dev_id": "5c97c2a8-eae7-49cc-ae81-c3ed1bbab335",
+    "user_token": "v^1.1#i^1#r^1#p^3#I^3#f^0#t^Ul4xMF83OkQwMUFGQTAyRUNGMTU1N0MxODhBMzI1NURDNTk1QUMyXzJfMSNFXjI2MA=="
+  },
+  "suppliers": [
+    {
+      "name": "Australis Music",
+      "suffix": "AUSTRALIS",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "marker",
+      "item_start_marker": "No. Description",
+      "item_end_marker": "Freight",
+      "trailing_numeric_count": 4,
+      "sku_min_digits": 5,
+      "validation_marker": "Australis"
+    },
+    {
+      "name": "Paytons",
+      "suffix": "PT",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "text",
+      "sku_pattern": "[A-Z][A-Z0-9\\-]{2,15}",
+      "qty_pattern": "(?:Qty|QTY|Quantity)[:\\s]+(\\d+)",
+      "validation_marker": "Paytons"
+    },
+    {
+      "name": "Electric Factory",
+      "suffix": "EF",
+      "suffix_position": "append",
+      "character_substitutions": {
+        "/": ""
+      },
+      "pdf_format": "table",
+      "sku_column_hint": "SKU",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description",
+      "validation_marker": "Electric Factory"
+    },
+    {
+      "name": "CMI",
+      "suffix": "CMI",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "sku_column_hint": "Part",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description",
+      "validation_marker": "CMI"
+    },
+    {
+      "name": "CMC Music",
+      "suffix": "CMC",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "sku_column_hint": "Code",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description",
+      "validation_marker": "CMC"
+    },
+    {
+      "name": "AMS (Australasian Music Supplies)",
+      "suffix": "",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "sku_column_hint": "Model No",
+      "qty_column_hint": "SUPP",
+      "desc_column_hint": "Description",
+      "validation_marker": "Australasian Music"
+    },
+    {
+      "name": "Pro Music Australia",
+      "suffix": "",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "sku_column_hint": "SKU",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description",
+      "validation_marker": "Pro Music"
+    },
+    {
+      "name": "Amber Technology",
+      "suffix": "",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "ai_only",
+      "sku_column_hint": "Item code",
+      "qty_column_hint": "Shipped",
+      "desc_column_hint": "Item Description",
+      "validation_marker": "ambertech"
+    },
+    {
+      "name": "D'Addario Australia",
+      "suffix": "",
+      "suffix_position": "append",
+      "character_substitutions": {
+        " ": "",
+        "/": ""
+      },
+      "pdf_format": "daddario",
+      "validation_marker": "D'Addario"
+    },
+    {
+      "name": "Shriro",
+      "suffix": "",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "validation_marker": "Shriro",
+      "sku_column_hint": "SKU",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description"
+    },
+    {
+      "name": "Jade",
+      "suffix": "JD",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "validation_marker": "Jade",
+      "sku_column_hint": "SKU",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description"
+    },
+    {
+      "name": "Dunphy Imports",
+      "suffix": "DUNIM",
+      "suffix_position": "append",
+      "character_substitutions": {},
+      "pdf_format": "table",
+      "validation_marker": "Dunphy",
+      "sku_column_hint": "SKU",
+      "qty_column_hint": "Qty",
+      "desc_column_hint": "Description"
+    }
+  ],
+  "supabase": {
+    "url": "https://dahcszqzpxdntsczsaff.supabase.co",
+    "key": "sb_publishable_FKlc1aMyxqGa9TsFEFBsNQ_xTQ9l8Wq"
+  },
+  "pos_dev_user": "Sbonanno",
+  "openai": {
+    "api_key": "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",
+    "model": "gpt-4o"
+  },
+  "ftp": {
+    "host": "ftp.drivehq.com",
+    "username": "kyaldabomb",
+    "password": "D5es4stu!",
+    "morning_filename": "Morning_Inventory_Report.xlsx",
+    "afternoon_filename": "Afternoon_Inventory_Report.xlsx",
+    "local_inventory_dir": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Inventory_Reports"
+  },
+  "app": {
+    "order_lookback_days": 90,
+    "on_po_filter_phrase": "on po",
+    "output_dir": "output",
+    "dry_run": false,
+    "snapshot_dir": "",
+    "lists_dir": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Lists",
+    "session_dir": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Session",
+    "inventory_csv": "inventory.CSV",
+    "sku_corrections_file": "sku_corrections.csv",
+    "sku_aliases_file": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Inventory_Reports\\sku_mappings.csv",
+    "note_filter_phrases": [
+      "on po",
+      "stock",
+      "aside",
+      "waiting",
+      "asked",
+      "message"
+    ],
+    "daily_ops_toggles": {
+      "platforms": {
+        "Website": true,
+        "eBay (via Neto)": false,
+        "BigW": true,
+        "Kogan": true,
+        "Amazon": true,
+        "Everydaymarket": true,
+        "Control Panel": true,
+        "Quote": true
+      },
+      "include_express": false,
+      "include_click_collect": false,
+      "ebay_direct": true
+    },
+    "platform_toggles": {
+      "Website": true,
+      "eBay (via Neto)": false,
+      "BigW": true,
+      "Kogan": true,
+      "Amazon": true,
+      "Everydaymarket": true,
+      "Control Panel": true,
+      "Quote": true,
+      "eBay (direct)": true
+    },
+    "all_orders_toggles": {
+      "platforms": {
+        "Website": true,
+        "eBay (via Neto)": false,
+        "BigW": true,
+        "Kogan": true,
+        "Amazon": true,
+        "Everydaymarket": true,
+        "Control Panel": true,
+        "Quote": true
+      },
+      "ebay_direct": true
+    },
+    "search_order_toggles": {
+      "platforms": {
+        "Website": true,
+        "eBay (via Neto)": false,
+        "BigW": true,
+        "Kogan": true,
+        "Amazon": true,
+        "Everydaymarket": true,
+        "Control Panel": true,
+        "Quote": true
+      },
+      "ebay_direct": true,
+      "neto_statuses": {
+        "New": true,
+        "Pick": true,
+        "Pack": true,
+        "Pending Dispatch": true,
+        "Pending Pickup": true,
+        "Dispatched": true,
+        "On Hold": false,
+        "Uncommitted": false,
+        "New Backorder": false,
+        "Backorder Approved": false,
+        "Cancelled": false
+      },
+      "ebay_statuses": {
+        "Awaiting Dispatch": true,
+        "Dispatched": false
+      }
+    }
+  },
+  "musipos": {
+    "server": "SERVER\\MUSIPOSSQLSRV08",
+    "database": "musipos",
+    "user": "sa",
+    "password": "musiposce$2008",
+    "kit_mappings_path": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Inventory_Reports\\sku_mappings.csv",
+    "musipos_map_path": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Inventory_Reports\\musipos_sku_map.csv",
+    "enabled": true
+  },
+  "shipping": {
+    "sender": {
+      "name": "Scarlett Music",
+      "company": "Scarlett Music",
+      "street1": "286-288 Ballarat Rd",
+      "street2": "",
+      "city": "Footscray",
+      "state": "VIC",
+      "postcode": "3011",
+      "country": "AU",
+      "phone": "0393185751",
+      "email": "info@scarlettmusic.com.au"
+    },
+    "bookings_dir": "\\\\SERVER\\Project Folder\\Order-Fulfillment-App\\Bookings",
+    "couriers": {
+      "auspost": {
+        "enabled": true,
+        "account_number": "0007805312",
+        "api_username": "966afe1c-c07b-4902-b1d7-77ad1aac0915",
+        "api_secret": "x428429fabeb99f420f1"
+      },
+      "aramex": {
+        "enabled": true,
+        "client_id": "fw-fl2-MEL0900146-d2f1bfc5a108",
+        "client_secret": "4c6483bb-5994-4773-b263-e0dfb7b29edf"
+      },
+      "bonds": {
+        "enabled": true,
+        "account": "V01523",
+        "authorization_code": "@WV6mSH4NByW"
+      },
+      "allied": {
+        "enabled": true,
+        "api_key": "755cf13abb3934695f03bd4a75cfbca7",
+        "account_code": "SCAMUS",
+        "state": "VIC"
+      },
+      "dai_post": {
+        "enabled": true,
+        "postcodes_file": "\\\\SERVER\\Project Folder\\Python\\Courier Info\\Dai_Postcodes.xlsx",
+        "rates_file": "\\\\SERVER\\Project Folder\\Python\\Courier Info\\Dai_Rates.xlsx",
+        "username": "ScarlettMusic",
+        "password": "D5es4stu!",
+        "account": "SCA",
+        "origin_terminal": "TME",
+        "db_host": "143.244.166.150",
+        "db_port": 5432,
+        "db_name": "postgres",
+        "db_user": "kyal",
+        "db_password": "123456789Kyal"
+      },
+      "tge": {
+        "enabled": true,
+        "username": "accounts@scarlettmusic.com.au",
+        "password": "t2TrAPsNTB",
+        "account_code": "80119621",
+        "api_key": "0O87zfzRVu4yf84mxgRiQ2uw9Q86Xb1Z8JrcnJfL",
+        "mytoll_identity": "727aba8b-0807-4a90-93be-0231d61d4806",
+        "mytoll_token": "eyJhbGciOiJSUzUxMiJ9.eyJ1c2VySWQiOiI3MjdhYmE4Yi0wODA3LTRhOTAtOTNiZS0wMjMxZDYxZDQ4MDYiLCJUJlQiOnRydWUsImdlbmVyYXRlRGF0ZSI6IjE3NTAxMzM4Njg3NzEiLCJjdXN0b21OYW1lIjoiMTctMDYtMjVfTXlUZWFtR0VUb2tlbiIsImNlcnRpZmljYXRlTmFtZSI6ImxvY2FsaGNsIiwiQyZDIjp0cnVlLCJ1bmlxdWVJZCI6ImM0NzE3ODI5NmQwZDMzZGNjY2UxZjgyNDA4MWFiNDNhOTkzNjQ0YzEwNjU4YWRlYTZiOGU0Yjk4YWQ0YTMwZmYiLCJleHAiOjE4MTMyMDU4Njh9.f-_21kIPQYnB1EQNvdhj-NA7k8_W0hvTgJUNf-PK3znbHh-eaE_4-AWkNzEsSlGgV64ZUKCoBTvVgPvQ3aWwP96cbmrwGkdvDISVXdUiEfLWsfIOuRBxgNln5e42zujrGqEl93wrBUFdEhwyvf37LNXtwGA9Qu8MRHuDAJsHyBMgr_p-1YbgglUYtRU_vyLd9KqEw0cxKPm3c1VqYxt8mBbbaOSyOV9KN_2bcOPU8SdzxTuH8AbrNjw2L329mQX3D2VPPZ6SlxGu8hKCqMXj4Y4e-ZEpq7S2-QKN6j0mEPouMZyt15Lj2Dn5a1kasqgVrnXx-3bCjSocbbhW49qk2Q",
+        "cert_file": "\\\\SERVER\\Python\\TOLL\\my_client.cert",
+        "key_file": "\\\\SERVER\\Python\\TOLL\\my_client.key",
+        "surcharges_file": "\\\\SERVER\\Project Folder\\Python\\Courier Info\\Toll_Road_Express_Surcharges.xlsx",
+        "db_host": "143.244.166.150",
+        "db_port": 5432,
+        "db_name": "postgres",
+        "db_user": "kyal",
+        "db_password": "123456789Kyal"
+      }
+    }
+  }
+}

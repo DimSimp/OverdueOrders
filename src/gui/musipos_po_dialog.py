@@ -119,6 +119,8 @@ class MusiposPODialog(ctk.CTkToplevel):
     def _do_resolve(self):
         try:
             items = self._client.resolve_item_multi(self._neto_sku, self._suppliers_config)
+            for item in items:
+                item["qty_on_order"] = self._client.get_live_qty_on_order(item["itm_iid"])
         except Exception as exc:
             self.after(0, lambda: self._on_resolve_done([], str(exc)))
             return
@@ -385,6 +387,8 @@ class MusiposPODialog(ctk.CTkToplevel):
         def _work():
             try:
                 items = self._client.resolve_manual_multi(sku)
+                for item in items:
+                    item["qty_on_order"] = self._client.get_live_qty_on_order(item["itm_iid"])
             except Exception as exc:
                 self.after(0, lambda: self._on_manual_done([], str(exc)))
                 return

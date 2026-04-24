@@ -17,6 +17,9 @@ def confirm_standard_sale(
     performed_by: str,            # staff username for audit trail
     sale_type: str = "standard",  # "standard" or "refund"
     source_tx_id: Optional[str] = None,  # for linked refunds: ID of the original sale
+    customer_id: Optional[str] = None,   # UUID of the linked customer (if any)
+    customer_name: Optional[str] = None, # display name for the transaction record
+    notes: Optional[str] = None,         # optional staff/transaction notes
 ) -> dict:
     """Write a completed Standard or Refund sale to Supabase.
 
@@ -65,6 +68,9 @@ def confirm_standard_sale(
         "completed_at":        now,
         "performed_by":        performed_by or None,
         "source_tx_id":        source_tx_id or None,
+        "customer_id":         customer_id or None,
+        "customer_name":       customer_name or None,
+        "notes":               notes or None,
     }
 
     # Insert transaction — trigger auto-assigns transaction_number
@@ -135,6 +141,8 @@ def park_transaction(
     sale_type: str,
     customer_name: str,
     performed_by: str,
+    customer_id: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> dict:
     """Snapshot the current cart as a parked transaction row.
 
@@ -156,13 +164,18 @@ def park_transaction(
         "cart_items":    cart_items,
         "cart_disc_pct": cart_disc_pct,
         "customer_name": customer_name,
+        "customer_id":   customer_id,
         "sale_type":     sale_type,
+        "notes":         notes or None,
     }
 
     tx_payload = {
         "sale_type":           sale_type.lower(),
         "sale_status":         "parked",
         "park_name":           customer_name or None,
+        "customer_id":         customer_id or None,
+        "customer_name":       customer_name or None,
+        "notes":               notes or None,
         "subtotal":            round(subtotal, 2),
         "cart_discount_pct":   round(cart_disc_pct, 2) if cart_disc_pct else None,
         "cart_discount_total": cart_disc_total,
@@ -188,6 +201,9 @@ def complete_parked_sale(
     cash_tendered: float,
     change_given: float,
     performed_by: str,
+    customer_id: Optional[str] = None,
+    customer_name: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> dict:
     """Complete a previously-parked transaction.
 
@@ -224,6 +240,9 @@ def complete_parked_sale(
         "cash_tendered":       round(cash_tendered, 2) if cash_tendered else None,
         "change_given":        round(change_given, 2) if change_given else None,
         "performed_by":        performed_by or None,
+        "customer_id":         customer_id or None,
+        "customer_name":       customer_name or None,
+        "notes":               notes or None,
     }
 
     update_result = (
