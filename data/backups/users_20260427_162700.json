@@ -22,6 +22,11 @@
             "hidden_columns": [
               "assigned"
             ]
+          },
+          "afternoon_matched_orders": {
+            "hidden_columns": [
+              "assigned"
+            ]
           }
         }
       }
@@ -35,7 +40,17 @@
       "role": "user",
       "neto_api": "",
       "created_at": "2026-03-27T16:46:21",
-      "active": true
+      "active": true,
+      "preferences": {
+        "table_preferences": {
+          "afternoon_matched_orders": {
+            "hidden_columns": [
+              "date",
+              "assigned"
+            ]
+          }
+        }
+      }
     },
     {
       "user_id": "2ec7f565-bea7-41f9-b9aa-a9f795766eeb",
@@ -75,16 +90,16 @@
     "Sbonanno": {
       "logged_in": true,
       "device_name": "SAMPC1",
-      "last_heartbeat": "2026-04-27T10:29:38",
-      "processing_order_id": null,
-      "processing_since": null
+      "last_heartbeat": "2026-04-27T16:26:55",
+      "processing_order_id": "N481443",
+      "processing_since": "2026-04-27T16:24:39"
     },
     "Ebburke": {
       "logged_in": true,
       "device_name": "InDurstsLight",
-      "last_heartbeat": "2026-04-27T10:29:34",
-      "processing_order_id": null,
-      "processing_since": null
+      "last_heartbeat": "2026-04-27T16:27:01",
+      "processing_order_id": "05-14553-60018",
+      "processing_since": "2026-04-27T16:23:13"
     },
     "Lfaehrmann": {
       "logged_in": false,

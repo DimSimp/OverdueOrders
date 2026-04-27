@@ -1204,7 +1204,17 @@ class TillTab(ctk.CTkFrame):
         if not hasattr(self, "_remaining_lbl"):
             return
         total = self._get_total()
+        is_quote = self._sale_type_var.get() == "Quote"
         is_refund = self._sale_type_var.get() == "Refund"
+
+        if is_quote:
+            if hasattr(self, "_cash_change_lbl"):
+                self._cash_change_lbl.configure(text="")
+            self._remaining_lbl.configure(
+                text=f"Quote total  ${total:.2f}" if total > 0 else "",
+                text_color=("#1f4f7a", "#93c5fd"),
+            )
+            return
 
         # Cash change hint (next to the cash field) — only for normal sales
         if hasattr(self, "_cash_change_lbl"):
@@ -1282,22 +1292,43 @@ class TillTab(ctk.CTkFrame):
             messagebox.showerror("Empty Cart", "No items in cart.", parent=self.winfo_toplevel())
             return
 
-        remaining = self._amount_remaining()
-        if remaining > 0.005:
+        sale_type = self._sale_type_var.get()
+        is_quote = sale_type == "Quote"
+        is_refund = sale_type == "Refund"
+
+        if is_quote and not self._linked_customer:
             messagebox.showerror(
-                "Payment Incomplete",
-                f"${remaining:.2f} still needs to be paid.",
+                "Customer Required",
+                "Add a customer profile before saving a quote.",
                 parent=self.winfo_toplevel(),
             )
             return
 
-        sale_type = self._sale_type_var.get()
-        is_refund = sale_type == "Refund"
+        if not is_quote:
+            remaining = self._amount_remaining()
+            if remaining > 0.005:
+                messagebox.showerror(
+                    "Payment Incomplete",
+                    f"${remaining:.2f} still needs to be paid.",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+
+        if is_quote and not messagebox.askyesno(
+            "Save Quote?",
+            "Save this quote transaction and generate the A4 quote document?",
+            parent=self.winfo_toplevel(),
+        ):
+            return
+
         total = self._get_total()
         subtotal = self._get_subtotal()
         eft_total = sum(e["amount"] for e in self._payment_eft)
 
-        if is_refund:
+        if is_quote:
+            cash_required = 0.0
+            change_given = 0.0
+        elif is_refund:
             cash_required = max(0.0, abs(total) - eft_total - self._payment_online)
             change_given = 0.0
         else:
@@ -1317,9 +1348,10 @@ class TillTab(ctk.CTkFrame):
         eft_snapshot = list(self._payment_eft)
         parked_tx_id = self._parked_tx_id
         source_tx_id_snap = self._source_tx_id
-        confirm_text = "Confirm Refund" if is_refund else "Confirm Sale"
+        confirm_text = "Save Quote" if is_quote else ("Confirm Refund" if is_refund else "Confirm Sale")
 
         _cust = self._linked_customer
+        customer_snapshot = dict(_cust) if _cust else None
         cust_id_snap   = _cust.get("id") if _cust else None
         cust_name_snap = (
             f"{_cust.get('first_name', '')} {_cust.get('surname', '')}".strip()
@@ -1334,7 +1366,29 @@ class TillTab(ctk.CTkFrame):
 
         def _thread():
             try:
-                if parked_tx_id:
+                quote_pdf_path = None
+                if is_quote:
+                    from src.pos.transaction_client import delete_parked_transaction, save_quote_transaction
+                    tx = save_quote_transaction(
+                        cart_items=cart_snapshot,
+                        subtotal=subtotal,
+                        cart_disc_pct=self._cart_disc_pct,
+                        total=total,
+                        performed_by=performed_by,
+                        customer_id=cust_id_snap,
+                        customer_name=cust_name_snap,
+                        notes=notes_snap or None,
+                    )
+                    if parked_tx_id:
+                        delete_parked_transaction(parked_tx_id)
+                    from src.pos.customer_document_generator import generate_quote_document
+                    quote_pdf_path = generate_quote_document(
+                        tx,
+                        cart_snapshot,
+                        customer_snapshot,
+                        notes=notes_snap or None,
+                    )
+                elif parked_tx_id:
                     from src.pos.transaction_client import complete_parked_sale
                     tx = complete_parked_sale(
                         parked_tx_id=parked_tx_id,
@@ -1373,12 +1427,12 @@ class TillTab(ctk.CTkFrame):
                         notes=notes_snap or None,
                         cash_rounding=self._cash_rounding or None,
                     )
-                self.after(0, lambda: _on_success(tx))
+                self.after(0, lambda: _on_success(tx, quote_pdf_path))
             except Exception as exc:
                 err = str(exc)
                 self.after(0, lambda: _on_error(err))
 
-        def _on_success(tx: dict):
+        def _on_success(tx: dict, quote_pdf_path: Optional[str] = None):
             cart_snap = dict(self._cart_items)   # capture before clear
             cust_snap = self._linked_customer     # capture before detach
 
@@ -1407,7 +1461,10 @@ class TillTab(ctk.CTkFrame):
 
             if self.refresh_inventory:
                 self.refresh_inventory()
-            _show_sale_complete_dialog(self, tx, cart_snap, cust_snap)
+            if is_quote:
+                _show_quote_preview(self, tx, quote_pdf_path, cart_snap, cust_snap)
+            else:
+                _show_sale_complete_dialog(self, tx, cart_snap, cust_snap)
 
         def _on_error(err: str):
             self._btn_confirm.configure(state="normal", text=confirm_text)
@@ -1820,9 +1877,13 @@ class TillTab(ctk.CTkFrame):
         threading.Thread(target=_thread, daemon=True).start()
 
     def _on_sale_type_change(self, *_):
-        is_refund = self._sale_type_var.get() == "Refund"
+        sale_type = self._sale_type_var.get()
+        is_refund = sale_type == "Refund"
+        button_text = "Save Quote" if sale_type == "Quote" else (
+            "Confirm Refund" if is_refund else "Confirm Sale"
+        )
         self._btn_confirm.configure(
-            text="Confirm Refund" if is_refund else "Confirm Sale",
+            text=button_text,
         )
         if hasattr(self, "_manual_discount_frame"):
             if is_refund:
@@ -2067,3 +2128,32 @@ def _show_sale_complete_dialog(parent: ctk.CTkFrame, tx: dict, cart_snapshot: di
         hover_color=("gray85", "gray25"),
         command=_no,
     ).pack(side="left")
+
+
+def _show_quote_preview(parent: ctk.CTkFrame, tx: dict, pdf_path: Optional[str],
+                        cart_snapshot: dict, customer: Optional[dict] = None) -> None:
+    """Open the saved quote document preview after a quote transaction is stored."""
+    if not pdf_path:
+        messagebox.showwarning(
+            "Quote Saved",
+            "The quote was saved, but the PDF document could not be generated.",
+            parent=parent.winfo_toplevel(),
+        )
+        return
+
+    tx_num = tx.get("transaction_number") or "Quote"
+    try:
+        from src.gui.pos.document_preview_dialog import DocumentPreviewDialog
+        DocumentPreviewDialog(
+            parent.winfo_toplevel(),
+            pdf_path=pdf_path,
+            title=f"Quote Preview - {tx_num}",
+            customer=customer,
+            email_subject=f"Quote {tx_num} from Scarlett Music",
+        )
+    except Exception as exc:
+        messagebox.showerror(
+            "Preview Failed",
+            f"The quote was saved, but the preview could not be opened:\n{exc}",
+            parent=parent.winfo_toplevel(),
+        )

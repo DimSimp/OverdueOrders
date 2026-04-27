@@ -222,7 +222,12 @@ class CustomerTab(ctk.CTkFrame):
         )
         self._history_tab.pack(fill="both", expand=True)
 
-        for name in ("Quotes", "Invoices", "Repairs", "Deposits", "Audit"):
+        from src.gui.customers.tabs.quotes_tab import QuotesTab
+
+        self._quotes_tab = QuotesTab(self._detail_tabs.tab("Quotes"))
+        self._quotes_tab.pack(fill="both", expand=True)
+
+        for name in ("Invoices", "Repairs", "Deposits", "Audit"):
             ctk.CTkLabel(
                 self._detail_tabs.tab(name),
                 text=f"{name} - coming soon",
@@ -371,12 +376,15 @@ class CustomerTab(ctk.CTkFrame):
 
         self._info_tab.load_customer(customer)
         self._history_tab.load_for_customer(customer["id"])
+        self._quotes_tab.load_for_customer(customer)
         self._detail_tabs.set("Customer Info")
 
     def _on_detail_tab_change(self):
         tab = self._detail_tabs.get()
         if tab == "Sale History":
             self._history_tab.on_tab_selected()
+        elif tab == "Quotes":
+            self._quotes_tab.on_tab_selected()
 
     def _on_right_click(self, event):
         row = self._tree.identify_row(event.y)

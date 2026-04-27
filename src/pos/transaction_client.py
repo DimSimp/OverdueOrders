@@ -135,6 +135,96 @@ def confirm_standard_sale(
     return tx
 
 
+def save_quote_transaction(
+    cart_items: dict,
+    subtotal: float,
+    cart_disc_pct: float,
+    total: float,
+    performed_by: str,
+    customer_id: str,
+    customer_name: str,
+    notes: Optional[str] = None,
+) -> dict:
+    """Save a customer quote without taking payment or moving stock.
+
+    Quotes use the shared ``transactions`` / ``transaction_lines`` tables so
+    they can be recalled, converted, and displayed in the Customer detail tabs.
+    """
+    if not customer_id:
+        raise ValueError("A customer profile is required to save a quote.")
+
+    from src.supabase_client import get_client
+    db = get_client()
+
+    cart_disc_total: Optional[float] = (
+        round(subtotal * cart_disc_pct / 100, 2) if cart_disc_pct else None
+    )
+    total_cost = sum(
+        line["qty"] * (line.get("cost_price") or 0)
+        for line in cart_items.values()
+    )
+    max_quote = (
+        db.table("transactions")
+        .select("quote_number")
+        .filter("quote_number", "not.is", "null")
+        .order("quote_number", desc=True)
+        .limit(1)
+        .execute()
+    )
+    quote_number = 1
+    if max_quote.data:
+        quote_number = int(max_quote.data[0].get("quote_number") or 0) + 1
+
+    tx_payload: dict = {
+        "sale_type":           "quote",
+        "sale_status":         "draft",
+        "quote_number":        quote_number,
+        "customer_id":         customer_id,
+        "customer_name":       customer_name or None,
+        "subtotal":            round(subtotal, 2),
+        "cart_discount_pct":   round(cart_disc_pct, 2) if cart_disc_pct else None,
+        "cart_discount_total": cart_disc_total,
+        "total":               round(total, 2),
+        "total_cost":          round(total_cost, 2) if total_cost else None,
+        "performed_by":        performed_by or None,
+        "notes":               notes or None,
+    }
+
+    tx_result = db.table("transactions").insert(tx_payload).execute()
+    tx = tx_result.data[0]
+    tx_id: str = tx["id"]
+
+    lines = []
+    for item_id, line in cart_items.items():
+        unit_price: float = line["unit_price"]
+        disc_pct: float = line["disc_pct"]
+        qty: float = line["qty"]
+        line_total = round(qty * unit_price * (1 - disc_pct / 100), 2)
+        cost: Optional[float] = line.get("cost_price")
+
+        margin_pct: Optional[float] = None
+        if cost and cost > 0 and unit_price > 0:
+            sell_ex_gst = unit_price / 1.1
+            if sell_ex_gst > 0:
+                margin_pct = round((sell_ex_gst - cost) / sell_ex_gst * 100, 2)
+
+        lines.append({
+            "transaction_id": tx_id,
+            "item_id":        item_id,
+            "sku":            line["sku"],
+            "description":    line["title"],
+            "qty":            qty,
+            "unit_price":     round(unit_price, 2),
+            "cost_price":     round(cost, 2) if cost else None,
+            "discount_pct":   round(disc_pct, 2) if disc_pct else None,
+            "line_total":     line_total,
+            "line_margin_pct": margin_pct,
+        })
+
+    db.table("transaction_lines").insert(lines).execute()
+    return tx
+
+
 def park_transaction(
     cart_items: dict,
     subtotal: float,

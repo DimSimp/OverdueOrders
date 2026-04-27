@@ -2425,6 +2425,18 @@ class ResultsTab(ctk.CTkFrame):
         old_neto_set = set(old_neto_ids)
         old_ebay_set = set(old_ebay_ids)
 
+        # Guard: if every requested order is absent from the response, the API
+        # likely returned a spurious empty result rather than confirming dispatch.
+        # Applying such a result would wipe the entire session, so bail out.
+        neto_all_missing = bool(old_neto_set) and not fresh_neto_map.keys() & old_neto_set
+        ebay_all_missing = bool(old_ebay_set) and not fresh_ebay_map.keys() & old_ebay_set
+        if neto_all_missing or ebay_all_missing:
+            self._error_label.configure(
+                text="Refresh returned no orders — session unchanged. Check your connection and try again.",
+                text_color="orange",
+            )
+            return
+
         # Orders requested but absent from response = dispatched/cancelled
         dropped_ids = (
             (old_neto_set - fresh_neto_map.keys()) |

@@ -27,15 +27,16 @@ The Customers tab is already usable inside the POS window:
 - Detail panel with working `Customer Info` and `Sale History` tabs
 - `Sale History` defaults to newest-first completed transactions, paginated 100 at a time
 - `Sale History` has `From` / `To` date range filters with popup calendar pickers
-- Placeholder tabs for `Quotes`, `Invoices`, `Repairs`, `Deposits`, and `Audit`
+- Working `Quotes` tab listing quote transactions saved from the Till
+- Placeholder tabs for `Invoices`, `Repairs`, `Deposits`, and `Audit`
 - CSV import button
 - Create/edit customer modal
 - Right-click `Load in Till` on a customer row
 - Sale History can start a refund in the Till; the Till preloads the original transaction number,
   cart lines, customer, notes, and original payment method split
 
-The unfinished parts are the deeper workflow tabs and any linked repair/deposit/quote editing from
-inside the Customers module.
+The unfinished parts are quote recall/convert actions plus the deeper invoice, repair, deposit,
+and audit workflows.
 
 ---
 
@@ -69,15 +70,16 @@ the active customer/POS discount mechanism today.
 |-----|-------------|
 | Customer Info | `customers` record |
 | Sale History | Completed transactions linked to the customer; newest-first, 100 per page, optional date range |
-| Quotes | Placeholder tab |
+| Quotes | Quote transactions linked to the customer; newest-first, 100 per page; can preview the A4 quote PDF |
 | Invoices | Placeholder tab |
 | Repairs | Placeholder tab |
 | Deposits | Placeholder tab |
 | Audit | Placeholder tab |
 
-Only `Customer Info` and `Sale History` are currently implemented. The other tabs are visible so
-the final layout is in place, but they still show coming-soon placeholders. The `Audit` tab is
-present as a reminder for the future all-actions customer audit trail; it does not query audit data yet.
+`Customer Info`, `Sale History`, and `Quotes` are currently implemented. The remaining tabs are
+visible so the final layout is in place, but they still show coming-soon placeholders. The `Audit`
+tab is present as a reminder for the future all-actions customer audit trail; it does not query
+audit data yet.
 
 ---
 
@@ -96,6 +98,7 @@ Same daily startup check as supplier invoices (Plan 04). Customer invoices where
 | POS checkout | Loads customer; applies `discount_profile` unless Till manual discount is selected; attaches customer to transaction |
 | Customers tab → Till | Right-click `Load in Till` attaches the selected customer to the active Till transaction |
 | Sale History to Refund in Till | Loads the selected original sale into the Till as a linked refund, preserving transaction number and original payment split |
+| Till Quote to Customer Quotes tab | Saving a Quote in the Till writes a draft `transactions` row with `sale_type = 'quote'`, then appears in the selected customer's Quotes tab |
 | POS receipt email | Updates `customers.email` if missing and staff provide one |
 | Repair intake | Creates `repairs` record linked to this customer |
 | Deposit taken | Creates `deposits` record linked to this customer |
@@ -139,4 +142,4 @@ Implemented fields and behaviour:
 
 ---
 
-*Last updated: 2026-04-27 — Sale History date range/calendar filtering and 100-row paging documented; Audit placeholder tab documented; refund handoff to Till now preserves original transaction/payment details.*
+*Last updated: 2026-04-27 — Quotes tab now lists Till-saved draft quotes and can preview the A4 quote document; Sale History/refund updates remain documented.*

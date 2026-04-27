@@ -64,12 +64,33 @@ show_pos = (
 
 ```
 Standard Sale:   [cart built] → [payment entered] → [confirm] → stock moves, receipt
-Quote:           [cart built] → [confirm draft] → [recall → promote to Invoice]
+Quote:           [cart built] -> [save draft] -> [A4 preview] -> [customer Quotes tab]
 Invoice:         [cart built] → [confirm, stock moves] → [recall → mark paid]
 Deposit:         [cart built] → [deposit amount entered] → [confirm] → allocation created
 Repair:          [repair details entered] → [confirm intake] → [collect via POS later]
 Refund:          [load original transaction OR enter manually] -> [original payment split restored] -> [confirm] -> stock restored
 ```
+
+---
+
+## Quotes
+
+The `Quote` sale type is now the first customer-document workflow built on top of
+`transactions` + `transaction_lines`.
+
+Current behaviour:
+- Switching Sale Type to `Quote` does not clear the cart, customer, notes, or discounts.
+- Saving a quote requires a linked customer profile.
+- Quote save skips payment validation and does not create stock movements.
+- On confirmation, staff are prompted to save the quote. `Yes` writes a draft quote transaction,
+  assigns a sequential `quote_number`, writes transaction lines, clears the Till, and opens the
+  A4 quote preview.
+- The A4 preview can print to the configured A4 printer, save a PDF copy, open an email draft for
+  the customer, or close.
+
+**Files**: `src/pos/transaction_client.py` -> `save_quote_transaction`;
+`src/pos/customer_document_generator.py` -> A4 quote/customer-document template;
+`src/gui/pos/document_preview_dialog.py` -> PDF preview/actions.
 
 ---
 
@@ -285,4 +306,4 @@ Reprint: available from the Daily Sales dialog for any past transaction.
 
 ---
 
-*Last updated: 2026-04-27 — Daily Sales date range/calendar filters, transaction-number search, refund action, and net refund summaries documented; Till refund loader now preserves original transaction number and payment split.*
+*Last updated: 2026-04-27 — Quote sale type now saves draft quote transactions and opens an A4 customer-document preview; Daily Sales/refund updates remain documented.*

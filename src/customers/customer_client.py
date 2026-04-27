@@ -255,6 +255,36 @@ def get_customer_transactions(
     return rows, total
 
 
+def get_customer_quotes(
+    uuid: str,
+    page: int = 0,
+    page_size: int = 100,
+) -> tuple[list, int]:
+    """Return quote transactions linked to a customer, newest first."""
+    from src.supabase_client import get_client
+    db = get_client()
+
+    cols = (
+        "id,transaction_number,quote_number,sale_type,sale_status,total,"
+        "created_at,customer_id,customer_name,performed_by,notes,"
+        "cart_discount_pct,transaction_lines(*)"
+    )
+    result = (
+        db.table("transactions")
+        .select(cols)
+        .eq("customer_id", uuid)
+        .eq("sale_type", "quote")
+        .order("created_at", desc=True)
+        .range(page * page_size, page * page_size + page_size)
+        .execute()
+    )
+    rows = result.data or []
+    has_next = len(rows) > page_size
+    rows = rows[:page_size]
+    total = page * page_size + len(rows) + (1 if has_next else 0)
+    return rows, total
+
+
 def _completed_at_bounds(
     date_from: Optional[date],
     date_to: Optional[date],
