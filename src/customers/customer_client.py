@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
 
@@ -205,7 +207,9 @@ def merge_customers(
 def get_customer_transactions(
     uuid: str,
     page: int = 0,
-    page_size: int = 50,
+    page_size: int = 100,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
 ) -> tuple[list, int]:
     """Return completed transactions linked to a customer, newest first.
 
@@ -224,11 +228,21 @@ def get_customer_transactions(
     )
     # Fetch one extra row to detect whether a next page exists (avoids
     # count="exact" which fails when PostgREST returns content-range: */*).
-    result = (
+    query = (
         db.table("transactions")
         .select(cols)
         .eq("customer_id", uuid)
         .eq("sale_status", "completed")
+    )
+
+    completed_from, completed_before = _completed_at_bounds(date_from, date_to)
+    if completed_from:
+        query = query.gte("completed_at", completed_from)
+    if completed_before:
+        query = query.lt("completed_at", completed_before)
+
+    result = (
+        query
         .order("completed_at", desc=True)
         .range(page * page_size, page * page_size + page_size)  # +1 extra
         .execute()
@@ -239,6 +253,25 @@ def get_customer_transactions(
     # Encode has_next into total so existing pagination logic still works
     total = page * page_size + len(rows) + (1 if has_next else 0)
     return rows, total
+
+
+def _completed_at_bounds(
+    date_from: Optional[date],
+    date_to: Optional[date],
+) -> tuple[Optional[str], Optional[str]]:
+    """Convert inclusive local dates to UTC timestamptz query bounds."""
+    local_tz = ZoneInfo("Australia/Melbourne")
+    start_iso = None
+    end_iso = None
+
+    if date_from:
+        start = datetime.combine(date_from, time.min, tzinfo=local_tz)
+        start_iso = start.astimezone(timezone.utc).isoformat()
+    if date_to:
+        end = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=local_tz)
+        end_iso = end.astimezone(timezone.utc).isoformat()
+
+    return start_iso, end_iso
 
 
 def lookup_for_till(query: str) -> list:

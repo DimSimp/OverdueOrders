@@ -17,6 +17,11 @@
               "assigned",
               "notes"
             ]
+          },
+          "afternoon_unmatched_orders": {
+            "hidden_columns": [
+              "assigned"
+            ]
           }
         }
       }
@@ -70,14 +75,14 @@
     "Sbonanno": {
       "logged_in": true,
       "device_name": "SAMPC1",
-      "last_heartbeat": "2026-04-24T16:36:48",
+      "last_heartbeat": "2026-04-27T13:29:42",
       "processing_order_id": null,
       "processing_since": null
     },
     "Ebburke": {
-      "logged_in": false,
+      "logged_in": true,
       "device_name": "InDurstsLight",
-      "last_heartbeat": "2026-04-20T17:27:24",
+      "last_heartbeat": "2026-04-27T13:29:41",
       "processing_order_id": null,
       "processing_since": null
     },

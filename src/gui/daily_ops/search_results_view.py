@@ -555,6 +555,7 @@ class SearchResultsView(ctk.CTkFrame):
     # ── Bulk actions ──────────────────────────────────────────────────────────
 
     def _bulk_mark_as_sent(self):
+        from src.cross_dispatch import sync_ebay_to_neto, sync_neto_to_ebay
         checked = self._tree.get_checked_orders()
         if not checked:
             return
@@ -570,6 +571,7 @@ class SearchResultsView(ctk.CTkFrame):
         neto_client = self._window.neto_client
         ebay_client = self._window.ebay_client
         results: list = []
+        failed_ebay_syncs: list = []  # (ebay_order_id, error_msg) for dialog
 
         def _work():
             for c in checked:
@@ -600,11 +602,38 @@ class SearchResultsView(ctk.CTkFrame):
                     results.append(f"✓ {label}{c['order_id']}")
                 except Exception as exc:
                     results.append(f"✗ {c['order_id']}: {exc}")
+                    continue
+
+                # Cross-platform sync (best-effort, non-fatal)
+                try:
+                    if c["platform"].lower() == "ebay" and neto_client:
+                        ok, msg = sync_ebay_to_neto(
+                            c["order_id"], neto_client,
+                            ebay_created_at=getattr(order, "creation_date", None),
+                            dry_run=dry_run,
+                        )
+                        results.append(f"  {'✓' if ok else '⚠'} Neto sync: {msg}")
+                    elif c["platform"].lower() != "ebay" and ebay_client:
+                        ebay_id = getattr(order, "purchase_order_number", "")
+                        if getattr(order, "sales_channel", "").lower() == "ebay" and ebay_id:
+                            ok, msg = sync_neto_to_ebay(
+                                order, ebay_client,
+                                dry_run=dry_run,
+                            )
+                            results.append(f"  {'✓' if ok else '⚠'} eBay sync: {msg}")
+                            if not ok:
+                                failed_ebay_syncs.append((ebay_id, msg))
+                except Exception as exc:
+                    results.append(f"  ⚠ sync error: {exc}")
+
             self.after(0, lambda: _done())
 
         def _done():
+            from src.gui.dialogs import show_ebay_sync_failed_dialog
             self._tree.clear_checks()
             messagebox.showinfo("Mark as Sent — Results", "\n".join(results), parent=self)
+            if failed_ebay_syncs:
+                show_ebay_sync_failed_dialog(self, failed_ebay_syncs)
             self._refresh_all_orders()
 
         threading.Thread(target=_work, daemon=True).start()

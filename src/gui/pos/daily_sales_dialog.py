@@ -1,10 +1,12 @@
 """Daily Sales dialog — expandable transaction list for today's completed sales."""
 from __future__ import annotations
 
+import calendar
 import threading
 import tkinter as tk
+from datetime import date, datetime
 from tkinter import messagebox, ttk
-from typing import Optional
+from typing import Callable, Optional
 
 import customtkinter as ctk
 
@@ -54,12 +56,13 @@ class DailySalesDialog(ctk.CTkToplevel):
         self._sort_desc: bool = True        # True = newest first (▼)
         self._all_expanded: bool = False    # False = next heading click expands all
 
-        from datetime import datetime
         from zoneinfo import ZoneInfo
         _MELB = ZoneInfo("Australia/Melbourne")
-        self._today_label = datetime.now(_MELB).strftime("%A, %d %B %Y")
+        self._today = datetime.now(_MELB).date()
+        self._date_from = self._today
+        self._date_to = self._today
 
-        self.title(f"Daily Sales — {self._today_label}")
+        self.title("Daily Sales")
         self.geometry("1380x820")
         self.minsize(900, 500)
         self.resizable(True, True)
@@ -87,9 +90,124 @@ class DailySalesDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             header,
-            text=f"Daily Sales  —  {self._today_label}",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).pack(side="left", padx=16, pady=10)
+            text="Find",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray70"),
+        ).pack(side="left", padx=(16, 4), pady=8)
+
+        self._search_var = ctk.StringVar()
+        self._search_entry = ctk.CTkEntry(
+            header,
+            textvariable=self._search_var,
+            placeholder_text="Receipt / TX #",
+            width=150,
+            height=28,
+            font=ctk.CTkFont(size=11),
+        )
+        self._search_entry.pack(side="left", pady=8)
+        self._search_entry.bind("<Return>", lambda _event: self._search_transaction())
+
+        ctk.CTkButton(
+            header,
+            text="Search",
+            width=66,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=self._search_transaction,
+        ).pack(side="left", padx=(6, 0), pady=8)
+
+        ctk.CTkButton(
+            header,
+            text="Clear",
+            width=58,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray30", "gray70"),
+            hover_color=("gray85", "gray25"),
+            command=self._clear_search,
+        ).pack(side="left", padx=(6, 14), pady=8)
+
+        ctk.CTkLabel(
+            header,
+            text="From",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray70"),
+        ).pack(side="left", padx=(0, 4), pady=8)
+
+        self._from_var = ctk.StringVar(value=_format_date(self._date_from))
+        self._from_entry = ctk.CTkEntry(
+            header,
+            textvariable=self._from_var,
+            placeholder_text="DD/MM/YYYY",
+            width=105,
+            height=28,
+            font=ctk.CTkFont(size=11),
+        )
+        self._from_entry.pack(side="left", pady=8)
+        self._from_entry.bind("<Return>", lambda _event: self._apply_date_filter())
+
+        ctk.CTkButton(
+            header,
+            text="...",
+            width=30,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._open_calendar(self._from_entry, self._from_var),
+        ).pack(side="left", padx=(3, 8), pady=8)
+
+        ctk.CTkLabel(
+            header,
+            text="To",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray70"),
+        ).pack(side="left", padx=(0, 4), pady=8)
+
+        self._to_var = ctk.StringVar(value=_format_date(self._date_to))
+        self._to_entry = ctk.CTkEntry(
+            header,
+            textvariable=self._to_var,
+            placeholder_text="DD/MM/YYYY",
+            width=105,
+            height=28,
+            font=ctk.CTkFont(size=11),
+        )
+        self._to_entry.pack(side="left", pady=8)
+        self._to_entry.bind("<Return>", lambda _event: self._apply_date_filter())
+
+        ctk.CTkButton(
+            header,
+            text="...",
+            width=30,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._open_calendar(self._to_entry, self._to_var),
+        ).pack(side="left", padx=(3, 8), pady=8)
+
+        ctk.CTkButton(
+            header,
+            text="Apply",
+            width=64,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=self._apply_date_filter,
+        ).pack(side="left", pady=8)
+
+        ctk.CTkButton(
+            header,
+            text="Today",
+            width=64,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray30", "gray70"),
+            hover_color=("gray85", "gray25"),
+            command=self._reset_to_today,
+        ).pack(side="left", padx=(6, 0), pady=8)
 
         ctk.CTkButton(
             header, text="Refresh", width=80, font=ctk.CTkFont(size=12),
@@ -253,7 +371,7 @@ class DailySalesDialog(ctk.CTkToplevel):
     def _fetch(self) -> None:
         try:
             from src.pos.transaction_client import get_daily_transactions
-            rows = get_daily_transactions()
+            rows = get_daily_transactions(date_from=self._date_from, date_to=self._date_to)
             self.after(0, lambda: self._apply(rows))
         except Exception as exc:
             err = str(exc)
@@ -262,7 +380,7 @@ class DailySalesDialog(ctk.CTkToplevel):
                 text_color=("#b91c1c", "#f87171"),
             ))
 
-    def _apply(self, rows: list[dict]) -> None:
+    def _apply(self, rows: list[dict], status_text: Optional[str] = None) -> None:
         self._rows = sorted(
             rows,
             key=lambda tx: tx.get("completed_at", ""),
@@ -277,10 +395,117 @@ class DailySalesDialog(ctk.CTkToplevel):
             self._insert_transaction(tx)
         count = len(self._rows)
         self._status_lbl.configure(
-            text=f"{count} transaction{'s' if count != 1 else ''} today.",
+            text=status_text or (
+                f"{count} transaction{'s' if count != 1 else ''} "
+                f"{_range_status(self._date_from, self._date_to)}."
+            ),
             text_color=("gray50", "gray60"),
         )
         self._update_summary()
+
+    def _apply_date_filter(self) -> None:
+        try:
+            date_from = _parse_date(self._from_var.get())
+            date_to = _parse_date(self._to_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("Invalid Date", str(exc), parent=self)
+            return
+
+        if date_from is None or date_to is None:
+            messagebox.showwarning(
+                "Date Range Required",
+                "Enter both From and To dates.",
+                parent=self,
+            )
+            return
+        if date_from > date_to:
+            messagebox.showwarning(
+                "Invalid Date Range",
+                "The From date must be on or before the To date.",
+                parent=self,
+            )
+            return
+
+        self._date_from = date_from
+        self._date_to = date_to
+        self._search_var.set("")
+        self.title("Daily Sales")
+        self._load()
+
+    def _reset_to_today(self) -> None:
+        self._date_from = self._today
+        self._date_to = self._today
+        self._from_var.set(_format_date(self._today))
+        self._to_var.set(_format_date(self._today))
+        self._search_var.set("")
+        self.title("Daily Sales")
+        self._load()
+
+    def _search_transaction(self) -> None:
+        query = _normalize_transaction_query(self._search_var.get())
+        if not query:
+            self._load()
+            return
+
+        self._status_lbl.configure(text="Searching...", text_color=("gray50", "gray60"))
+
+        def _thread() -> None:
+            try:
+                from src.pos.transaction_client import get_transaction_by_number
+
+                tx = get_transaction_by_number(query)
+                self.after(0, lambda: self._apply_search_result(query, tx))
+            except Exception as exc:
+                err = str(exc)
+                self.after(0, lambda: self._status_lbl.configure(
+                    text=f"Error: {err}",
+                    text_color=("#b91c1c", "#f87171"),
+                ))
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _apply_search_result(self, query: str, tx: Optional[dict]) -> None:
+        if not tx:
+            self._rows = []
+            self._selected_tx = None
+            self._all_expanded = False
+            self._reprint_btn.configure(state="disabled")
+            self._refund_btn.configure(state="disabled")
+            self._tree.delete(*self._tree.get_children())
+            self._status_lbl.configure(
+                text=f"No completed transaction found for {query}.",
+                text_color=("gray50", "gray60"),
+            )
+            self._update_summary()
+            return
+
+        tx_num = tx.get("transaction_number") or query
+        self._apply([tx], status_text=f"Showing transaction {tx_num}.")
+        tx_id = tx.get("id")
+        if tx_id and self._tree.exists(tx_id):
+            self._tree.selection_set(tx_id)
+            self._tree.focus(tx_id)
+            self._tree.see(tx_id)
+            self._on_tree_select()
+
+    def _clear_search(self) -> None:
+        self._search_var.set("")
+        self._load()
+
+    def _open_calendar(self, anchor: tk.Widget, target_var: tk.StringVar) -> None:
+        try:
+            selected = _parse_date(target_var.get())
+        except ValueError:
+            selected = date.today()
+        if selected is None:
+            selected = date.today()
+
+        _CalendarPopup(
+            self,
+            anchor=anchor,
+            initial_date=selected,
+            on_select=lambda chosen: target_var.set(_format_date(chosen)),
+        )
 
     # ── Treeview population ────────────────────────────────────────────────
 
@@ -398,18 +623,19 @@ class DailySalesDialog(ctk.CTkToplevel):
         d_qty = d_rrp = d_revenue = d_cost = d_cash = d_eft = d_online = 0.0
 
         for tx in self._rows:
-            d_revenue += float(tx.get("total") or 0)
-            d_cash    += float(tx.get("payment_cash")   or 0)
-            d_online  += float(tx.get("payment_online") or 0)
+            sign = -1 if (tx.get("sale_type") or "").lower() == "refund" else 1
+            d_revenue += sign * float(tx.get("total") or 0)
+            d_cash    += sign * float(tx.get("payment_cash")   or 0)
+            d_online  += sign * float(tx.get("payment_online") or 0)
             for e in (tx.get("payment_eft") or []):
-                d_eft += float(e.get("amount") or 0)
+                d_eft += sign * float(e.get("amount") or 0)
             for line in (tx.get("transaction_lines") or []):
                 qty  = float(line.get("qty") or 0)
                 up   = float(line.get("unit_price") or 0)
                 cost = float(line.get("cost_price") or 0)
-                d_qty  += qty
-                d_rrp  += up * qty
-                d_cost += cost * qty
+                d_qty  += sign * qty
+                d_rrp  += sign * up * qty
+                d_cost += sign * cost * qty
 
         d_disc   = d_rrp - d_revenue
         d_ex_gst = d_revenue / 1.1 if d_revenue else 0
@@ -418,15 +644,15 @@ class DailySalesDialog(ctk.CTkToplevel):
 
         self._s_count.configure(text=str(d_count))
         self._s_qty.configure(text=f"{d_qty:g}")
-        self._s_rrp.configure(text=f"${d_rrp:,.2f}")
-        self._s_disc.configure(text=f"${d_disc:,.2f}" if d_disc > 0.005 else "—")
-        self._s_revenue.configure(text=f"${d_revenue:,.2f}")
-        self._s_cost.configure(text=f"${d_cost:,.2f}" if d_cost else "—")
-        self._s_marg_d.configure(text=f"${d_marg_d:,.2f}" if d_marg_d is not None else "—")
+        self._s_rrp.configure(text=_fmt_money(d_rrp))
+        self._s_disc.configure(text=_fmt_money(d_disc) if abs(d_disc) > 0.005 else "—")
+        self._s_revenue.configure(text=_fmt_money(d_revenue))
+        self._s_cost.configure(text=_fmt_money(d_cost) if abs(d_cost) > 0.005 else "—")
+        self._s_marg_d.configure(text=_fmt_money(d_marg_d) if d_marg_d is not None else "—")
         self._s_marg_p.configure(text=f"{d_marg_p:.1f}%" if d_marg_p is not None else "—")
-        self._s_pay_cash.configure(text=f"${d_cash:,.2f}"   if d_cash   else "—")
-        self._s_pay_eft.configure(text=f"${d_eft:,.2f}"     if d_eft    else "—")
-        self._s_pay_online.configure(text=f"${d_online:,.2f}" if d_online else "—")
+        self._s_pay_cash.configure(text=_fmt_money(d_cash) if abs(d_cash) > 0.005 else "—")
+        self._s_pay_eft.configure(text=_fmt_money(d_eft) if abs(d_eft) > 0.005 else "—")
+        self._s_pay_online.configure(text=_fmt_money(d_online) if abs(d_online) > 0.005 else "—")
 
     # ── Expand / collapse ──────────────────────────────────────────────────
 
@@ -649,3 +875,204 @@ def _fmt_dt(iso: str) -> str:
         )
     except Exception:
         return iso[:16] if len(iso) >= 16 else iso
+
+
+class _CalendarPopup(ctk.CTkToplevel):
+    def __init__(
+        self,
+        parent,
+        anchor: tk.Widget,
+        initial_date: date,
+        on_select: Callable[[date], None],
+    ) -> None:
+        super().__init__(parent.winfo_toplevel())
+        self.withdraw()
+        self.title("Select Date")
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+
+        self._anchor = anchor
+        self._selected = initial_date
+        self._display_year = initial_date.year
+        self._display_month = initial_date.month
+        self._on_select = on_select
+
+        self._build()
+        self._render_month()
+        self._position()
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _build(self) -> None:
+        outer = ctk.CTkFrame(self, fg_color=("white", "gray16"), corner_radius=8)
+        outer.pack(fill="both", expand=True, padx=8, pady=8)
+
+        header = ctk.CTkFrame(outer, fg_color="transparent")
+        header.pack(fill="x", padx=6, pady=(6, 4))
+
+        ctk.CTkButton(
+            header,
+            text="<",
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._prev_month,
+        ).pack(side="left")
+
+        self._lbl_month = ctk.CTkLabel(
+            header,
+            text="",
+            width=170,
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self._lbl_month.pack(side="left", padx=6)
+
+        ctk.CTkButton(
+            header,
+            text=">",
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._next_month,
+        ).pack(side="left")
+
+        weekday_row = ctk.CTkFrame(outer, fg_color="transparent")
+        weekday_row.pack(fill="x", padx=6, pady=(2, 0))
+        for col, name in enumerate(calendar.day_abbr):
+            ctk.CTkLabel(
+                weekday_row,
+                text=name,
+                width=34,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=("gray45", "gray60"),
+            ).grid(row=0, column=col, padx=1)
+
+        self._days_frame = ctk.CTkFrame(outer, fg_color="transparent")
+        self._days_frame.pack(fill="x", padx=6, pady=(2, 6))
+
+        footer = ctk.CTkFrame(outer, fg_color="transparent")
+        footer.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(
+            footer,
+            text="Today",
+            width=72,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._select(date.today()),
+        ).pack(side="left")
+        ctk.CTkButton(
+            footer,
+            text="Cancel",
+            width=72,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray30", "gray70"),
+            hover_color=("gray85", "gray25"),
+            command=self.destroy,
+        ).pack(side="right")
+
+    def _position(self) -> None:
+        self.update_idletasks()
+        x = self._anchor.winfo_rootx()
+        y = self._anchor.winfo_rooty() + self._anchor.winfo_height() + 2
+        self.geometry(f"+{x}+{y}")
+
+    def _render_month(self) -> None:
+        self._lbl_month.configure(
+            text=f"{calendar.month_name[self._display_month]} {self._display_year}"
+        )
+
+        for widget in self._days_frame.winfo_children():
+            widget.destroy()
+
+        month = calendar.Calendar(firstweekday=0)
+        for row, week in enumerate(month.monthdayscalendar(self._display_year, self._display_month)):
+            for col, day_num in enumerate(week):
+                if day_num == 0:
+                    ctk.CTkLabel(self._days_frame, text="", width=34, height=28).grid(
+                        row=row,
+                        column=col,
+                        padx=1,
+                        pady=1,
+                    )
+                    continue
+
+                day = date(self._display_year, self._display_month, day_num)
+                selected = day == self._selected
+                ctk.CTkButton(
+                    self._days_frame,
+                    text=str(day_num),
+                    width=34,
+                    height=28,
+                    font=ctk.CTkFont(size=11),
+                    fg_color=("#1f6aa5", "#1f6aa5") if selected else "transparent",
+                    border_width=0 if selected else 1,
+                    border_color=("gray75", "gray35"),
+                    text_color="white" if selected else ("gray20", "gray80"),
+                    hover_color=("#d9e8ff", "#26374f"),
+                    command=lambda chosen=day: self._select(chosen),
+                ).grid(row=row, column=col, padx=1, pady=1)
+
+    def _prev_month(self) -> None:
+        if self._display_month == 1:
+            self._display_month = 12
+            self._display_year -= 1
+        else:
+            self._display_month -= 1
+        self._render_month()
+
+    def _next_month(self) -> None:
+        if self._display_month == 12:
+            self._display_month = 1
+            self._display_year += 1
+        else:
+            self._display_month += 1
+        self._render_month()
+
+    def _select(self, chosen: date) -> None:
+        self._on_select(chosen)
+        self.destroy()
+
+
+def _parse_date(value: str) -> Optional[date]:
+    value = (value or "").strip()
+    if not value:
+        return None
+
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            pass
+
+    raise ValueError("Enter dates as DD/MM/YYYY.")
+
+
+def _format_date(value: date) -> str:
+    return value.strftime("%d/%m/%Y")
+
+
+def _fmt_money(value: float) -> str:
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.2f}"
+
+
+def _normalize_transaction_query(value: str) -> str:
+    return "".join((value or "").strip().upper().split())
+
+
+def _range_status(date_from: date, date_to: date) -> str:
+    if date_from == date_to:
+        return f"on {_format_date(date_from)}"
+    return f"from {_format_date(date_from)} to {_format_date(date_to)}"

@@ -839,6 +839,8 @@ class TillTab(ctk.CTkFrame):
             self._cash_var.set("")
         if hasattr(self, "_online_var"):
             self._online_var.set("")
+        if hasattr(self, "_tx_number_entry"):
+            self._tx_number_entry.delete(0, "end")
         # Reset EFT to one empty row
         if hasattr(self, "_eft_frame"):
             for row in list(self._eft_row_widgets):
@@ -1164,6 +1166,38 @@ class TillTab(ctk.CTkFrame):
             self._update_totals()   # re-renders total and rounding row
         else:
             self._update_remaining_display()
+
+    def _set_payment_fields(
+        self,
+        cash: float = 0.0,
+        eft: Optional[list[dict]] = None,
+        online: float = 0.0,
+    ) -> None:
+        """Populate payment state and visible fields from a stored transaction."""
+        eft_entries = _normalise_eft_entries(eft or [], self._MAX_EFT_ROWS)
+        self._payment_cash = float(cash or 0.0)
+        self._payment_online = float(online or 0.0)
+        self._payment_eft = list(eft_entries)
+
+        if hasattr(self, "_cash_var"):
+            self._cash_var.set(_payment_field_value(self._payment_cash))
+        if hasattr(self, "_online_var"):
+            self._online_var.set(_payment_field_value(self._payment_online))
+
+        if hasattr(self, "_eft_frame"):
+            for row in list(self._eft_row_widgets):
+                row.destroy()
+            self._eft_vars.clear()
+            self._eft_row_widgets.clear()
+
+            rows_to_show = max(1, len(eft_entries))
+            for _ in range(rows_to_show):
+                self._add_eft_row()
+            for var, entry in zip(self._eft_vars, eft_entries):
+                var.set(_payment_field_value(float(entry.get("amount") or 0.0)))
+            self._refresh_eft_buttons()
+
+        self._recalc_payments()
 
     def _update_remaining_display(self):
         """Update the cash change hint and the remaining/change/paid status label."""
@@ -1773,7 +1807,6 @@ class TillTab(ctk.CTkFrame):
                     parent=self.winfo_toplevel(),
                 )
                 return
-            self._tx_number_entry.delete(0, "end")
             self._load_refund_cart(tx)
 
         def _on_error(err: str):
@@ -1804,8 +1837,6 @@ class TillTab(ctk.CTkFrame):
                 self._tx_lookup_frame.pack(side="left", pady=10)
             else:
                 self._tx_lookup_frame.pack_forget()
-                if hasattr(self, "_tx_number_entry"):
-                    self._tx_number_entry.delete(0, "end")
         self._update_totals()
 
     def _load_refund_cart(self, tx: dict):
@@ -1821,6 +1852,11 @@ class TillTab(ctk.CTkFrame):
         self._clear_cart()
         self._source_tx_id = tx.get("id")  # link this refund to the original sale
         self._sale_type_var.set("Refund")  # triggers _on_sale_type_change via trace
+        # TODO: When Inventory can start refunds, route that flow through this
+        # loader so the source transaction number and original payment split
+        # are restored consistently.
+        self._tx_number_entry.delete(0, "end")
+        self._tx_number_entry.insert(0, tx.get("transaction_number") or "")
 
         lines = tx.get("transaction_lines") or []
         for i, line in enumerate(lines):
@@ -1850,6 +1886,12 @@ class TillTab(ctk.CTkFrame):
             self._notes_text.delete("1.0", "end")
             if orig_notes:
                 self._notes_text.insert("1.0", orig_notes)
+
+        self._set_payment_fields(
+            cash=float(tx.get("payment_cash") or 0.0),
+            eft=tx.get("payment_eft") or [],
+            online=float(tx.get("payment_online") or 0.0),
+        )
 
         # Re-link the customer if the original sale had one
         orig_customer_id = tx.get("customer_id")
@@ -1926,6 +1968,29 @@ class TillTab(ctk.CTkFrame):
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
+
+def _payment_field_value(amount: float) -> str:
+    return f"{amount:.2f}" if amount > 0 else ""
+
+
+def _normalise_eft_entries(entries: list, max_rows: int) -> list[dict]:
+    amounts: list[float] = []
+    for entry in entries or []:
+        raw = entry.get("amount") if isinstance(entry, dict) else entry
+        try:
+            amount = float(raw or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if amount > 0:
+            amounts.append(amount)
+
+    if len(amounts) > max_rows:
+        kept = amounts[: max_rows - 1]
+        kept.append(sum(amounts[max_rows - 1:]))
+        amounts = kept
+
+    return [{"amount": round(amount, 2)} for amount in amounts]
+
 
 def _bg_delete_parked(tx_id: str) -> None:
     """Fire-and-forget: delete a parked transaction row from the DB."""

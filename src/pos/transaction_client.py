@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 
@@ -314,14 +314,21 @@ def delete_parked_transaction(tx_id: str) -> None:
     db.table("transactions").delete().eq("id", tx_id).execute()
 
 
-def get_daily_transactions(date_str: str = None) -> list:
-    """Return all completed transactions for a Melbourne calendar date.
+def get_daily_transactions(
+    date_str: str = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> list:
+    """Return completed transactions for a Melbourne calendar date or date range.
 
     Parameters
     ----------
     date_str : str, optional
         Date in ``"YYYY-MM-DD"`` format (Melbourne local date).
         Defaults to today in Melbourne time.
+    date_from/date_to : date, optional
+        Inclusive Melbourne local date range. When provided, these take
+        precedence over ``date_str``.
 
     Each returned dict includes a nested ``"transaction_lines"`` list.
     """
@@ -331,23 +338,24 @@ def get_daily_transactions(date_str: str = None) -> list:
 
     _MELB = ZoneInfo("Australia/Melbourne")
 
-    if date_str is None:
-        today_melb = datetime.now(_MELB).date()
-    else:
-        today_melb = _date.fromisoformat(date_str)
+    if date_from is None and date_to is None:
+        if date_str is None:
+            date_from = datetime.now(_MELB).date()
+        else:
+            date_from = _date.fromisoformat(date_str)
+        date_to = date_from
 
-    day_start_utc = (
-        datetime(today_melb.year, today_melb.month, today_melb.day,
-                 0, 0, 0, tzinfo=_MELB)
-        .astimezone(timezone.utc)
-        .isoformat()
-    )
-    day_end_utc = (
-        datetime(today_melb.year, today_melb.month, today_melb.day,
-                 23, 59, 59, 999999, tzinfo=_MELB)
-        .astimezone(timezone.utc)
-        .isoformat()
-    )
+    if date_from is None:
+        date_from = date_to
+    if date_to is None:
+        date_to = date_from
+
+    day_start_utc = datetime.combine(date_from, time.min, tzinfo=_MELB).astimezone(
+        timezone.utc
+    ).isoformat()
+    day_end_utc = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=_MELB).astimezone(
+        timezone.utc
+    ).isoformat()
 
     db = get_client()
     result = (
@@ -355,7 +363,7 @@ def get_daily_transactions(date_str: str = None) -> list:
         .select("*, transaction_lines(*)")
         .eq("sale_status", "completed")
         .gte("completed_at", day_start_utc)
-        .lte("completed_at", day_end_utc)
+        .lt("completed_at", day_end_utc)
         .order("completed_at", desc=False)
         .execute()
     )

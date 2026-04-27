@@ -9,7 +9,22 @@
       "role": "admin",
       "neto_api": "",
       "created_at": "2026-03-27T16:45:49",
-      "active": true
+      "active": true,
+      "preferences": {
+        "table_preferences": {
+          "daily_ops_results": {
+            "hidden_columns": [
+              "assigned",
+              "notes"
+            ]
+          },
+          "afternoon_unmatched_orders": {
+            "hidden_columns": [
+              "assigned"
+            ]
+          }
+        }
+      }
     },
     {
       "user_id": "827e6f9b-3508-4366-bec3-bc7edd85248d",
@@ -60,14 +75,14 @@
     "Sbonanno": {
       "logged_in": true,
       "device_name": "SAMPC1",
-      "last_heartbeat": "2026-04-24T10:24:28",
+      "last_heartbeat": "2026-04-27T13:09:35",
       "processing_order_id": null,
       "processing_since": null
     },
     "Ebburke": {
-      "logged_in": false,
+      "logged_in": true,
       "device_name": "InDurstsLight",
-      "last_heartbeat": "2026-04-20T17:27:24",
+      "last_heartbeat": "2026-04-27T13:09:34",
       "processing_order_id": null,
       "processing_since": null
     },

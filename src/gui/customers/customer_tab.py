@@ -195,8 +195,15 @@ class CustomerTab(ctk.CTkFrame):
         self._detail_tabs = ctk.CTkTabview(self._detail_frame, anchor="nw", height=380)
         self._detail_tabs.pack(fill="both", expand=True, padx=0, pady=0)
 
-        # TODO: add an Audit tab once customer_merge_audit is surfaced in the UI.
-        for name in ("Customer Info", "Sale History", "Quotes", "Invoices", "Repairs", "Deposits"):
+        for name in (
+            "Customer Info",
+            "Sale History",
+            "Quotes",
+            "Invoices",
+            "Repairs",
+            "Deposits",
+            "Audit",
+        ):
             self._detail_tabs.add(name)
 
         from src.gui.customers.tabs.customer_info_tab import CustomerInfoTab
@@ -215,7 +222,7 @@ class CustomerTab(ctk.CTkFrame):
         )
         self._history_tab.pack(fill="both", expand=True)
 
-        for name in ("Quotes", "Invoices", "Repairs", "Deposits"):
+        for name in ("Quotes", "Invoices", "Repairs", "Deposits", "Audit"):
             ctk.CTkLabel(
                 self._detail_tabs.tab(name),
                 text=f"{name} - coming soon",

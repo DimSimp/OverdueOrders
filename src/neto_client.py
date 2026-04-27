@@ -184,7 +184,7 @@ class NetoClient:
                 "OrderStatus": UNDISPATCHED_STATUSES,
                 "PaymentStatus": "FullyPaid",
                 "DatePaidFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
-                "DatePaidTo": date_to.strftime("%Y-%m-%d 23:59:59"),
+                "DatePaidTo": _format_range_end(date_to),
                 "OutputSelector": OUTPUT_SELECTOR,
                 "Page": page,
                 "Limit": limit,
@@ -200,7 +200,7 @@ class NetoClient:
                 "OrderStatus": UNDISPATCHED_STATUSES,
                 "SalesChannel": UNPAID_CHANNELS,
                 "DatePlacedFrom": date_from.strftime("%Y-%m-%d 00:00:00"),
-                "DatePlacedTo": date_to.strftime("%Y-%m-%d 23:59:59"),
+                "DatePlacedTo": _format_range_end(date_to),
                 "OutputSelector": OUTPUT_SELECTOR,
                 "Page": page,
                 "Limit": limit,
@@ -269,6 +269,71 @@ class NetoClient:
             order = self._parse_order(raw)
             if order:
                 orders.append(order)
+        return orders
+
+    def get_order_by_purchase_order_number(
+        self,
+        po_number: str,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> list[NetoOrder]:
+        """Find Neto orders where PurchaseOrderNumber matches po_number.
+
+        For eBay-channel orders the PurchaseOrderNumber is populated automatically
+        with the eBay order ID (e.g. "12-34567-89012"), so this is used to look up
+        the Neto counterpart of a dispatched eBay order.  No status filter is applied
+        so the result includes dispatched orders too.
+
+        Neto exposes PurchaseOrderNumber in the response, but some stores do not
+        apply it as a GetOrder filter. When a date range is supplied, fall back to
+        scanning that small window and filtering locally.
+        """
+        po_number = str(po_number or "").strip()
+        if not po_number:
+            return []
+
+        body = {
+            "Filter": {
+                "PurchaseOrderNumber": po_number,
+                "OutputSelector": OUTPUT_SELECTOR,
+            }
+        }
+        data = self._post(body)
+        raw_orders = data.get("Order", [])
+        if isinstance(raw_orders, dict):
+            raw_orders = [raw_orders]
+        orders = []
+        for raw in raw_orders:
+            order = self._parse_order(raw)
+            if order and order.purchase_order_number == po_number:
+                orders.append(order)
+        if orders or not (date_from and date_to):
+            return orders
+
+        page = 0
+        limit = 200
+        while True:
+            body = {
+                "Filter": {
+                    "SalesChannel": "eBay",
+                    "DatePlacedFrom": date_from.strftime("%Y-%m-%d %H:%M:%S"),
+                    "DatePlacedTo": date_to.strftime("%Y-%m-%d %H:%M:%S"),
+                    "OutputSelector": OUTPUT_SELECTOR,
+                    "Page": page,
+                    "Limit": limit,
+                }
+            }
+            data = self._post(body)
+            raw_orders = data.get("Order", [])
+            if isinstance(raw_orders, dict):
+                raw_orders = [raw_orders]
+            for raw in raw_orders:
+                order = self._parse_order(raw)
+                if order and order.purchase_order_number == po_number:
+                    orders.append(order)
+            if len(raw_orders) < limit or orders:
+                break
+            page += 1
         return orders
 
     def search_orders(
@@ -1026,6 +1091,18 @@ def _parse_date(raw: str | None) -> datetime | None:
         except (ValueError, TypeError):
             continue
     return None
+
+
+def _format_range_end(dt: datetime) -> str:
+    """Format an end bound, preserving explicit times and expanding date-only values."""
+    if (
+        dt.hour == 0
+        and dt.minute == 0
+        and dt.second == 0
+        and dt.microsecond == 0
+    ):
+        return dt.strftime("%Y-%m-%d 23:59:59")
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _classify_shipping(method: str) -> str:

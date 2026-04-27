@@ -1233,6 +1233,9 @@ class OrderDetailView(ctk.CTkFrame):
     # ── Actions ───────────────────────────────────────────────────────────
 
     def _mark_as_sent(self):
+        import threading
+        from src.cross_dispatch import sync_ebay_to_neto, sync_neto_to_ebay
+
         tracking = self._tracking_entry.get().strip()
         carrier = self._carrier_combo.get().strip()
         parent = self.winfo_toplevel()
@@ -1242,6 +1245,12 @@ class OrderDetailView(ctk.CTkFrame):
                 return
 
         try:
+            _cross_sync_fn = None
+
+            # _sync_ebay_id is set only for the Neto→eBay direction so the
+            # failure dialog knows which eBay order to link to.
+            _sync_ebay_id: str = ""
+
             if self._neto_order and self._neto_client:
                 line_item_skus = [li.sku for li in self._neto_order.line_items]
                 self._neto_client.update_order_status(
@@ -1252,6 +1261,20 @@ class OrderDetailView(ctk.CTkFrame):
                     line_item_skus=line_item_skus,
                     dry_run=self._dry_run,
                 )
+                # Cross-sync: eBay-channel Neto order → also fulfill on eBay
+                if (
+                    self._ebay_client
+                    and self._neto_order.sales_channel.lower() == "ebay"
+                    and self._neto_order.purchase_order_number
+                ):
+                    _sync_ebay_id = self._neto_order.purchase_order_number
+                    _neto_order_snap = self._neto_order
+                    _cross_sync_fn = lambda: sync_neto_to_ebay(
+                        _neto_order_snap, self._ebay_client,
+                        tracking_number=tracking, carrier=carrier,
+                        dry_run=self._dry_run,
+                    )
+
             elif self._ebay_order and self._ebay_client:
                 self._ebay_client.create_shipping_fulfillment(
                     self._order_id,
@@ -1260,16 +1283,25 @@ class OrderDetailView(ctk.CTkFrame):
                     carrier=carrier,
                     dry_run=self._dry_run,
                 )
+                # Cross-sync: eBay order → also dispatch the Neto eBay-channel order
+                if self._neto_client:
+                    _ebay_order_id_snap = self._order_id
+                    _cross_sync_fn = lambda: sync_ebay_to_neto(
+                        _ebay_order_id_snap, self._neto_client,
+                        tracking_number=tracking, shipping_method=carrier,
+                        ebay_created_at=getattr(self._ebay_order, "creation_date", None),
+                        dry_run=self._dry_run,
+                    )
 
             self._completed = True
             self._send_btn.configure(state="disabled", text="SENT", fg_color="gray50")
             self._tracking_entry.configure(state="disabled")
             self._carrier_combo.configure(state="disabled")
 
-            if self._dry_run:
-                self._status_label.configure(text="[DRY RUN] Order marked as sent", text_color="orange")
-            else:
-                self._status_label.configure(text="Order marked as sent!", text_color="green")
+            base_text = "[DRY RUN] Order marked as sent" if self._dry_run else "Order marked as sent!"
+            base_color = "orange" if self._dry_run else "green"
+
+            if not self._dry_run:
                 # Kogan orders are tracked via Neto but must be manually dispatched
                 # on the Kogan portal — open it automatically after marking as sent
                 if (
@@ -1288,7 +1320,58 @@ class OrderDetailView(ctk.CTkFrame):
                         __import__("subprocess").Popen([_chrome, "https://dispatch.aws.kgn.io/Manage"])
                     else:
                         webbrowser.open("https://dispatch.aws.kgn.io/Manage")
-                self._on_fulfilled()
+
+            if _cross_sync_fn:
+                # Run cross-platform sync in a background thread so the UI stays responsive.
+                # Navigate away after the sync result is shown (1.5 s delay).
+                self._status_label.configure(
+                    text=base_text + " — syncing...", text_color=base_color,
+                )
+
+                def _do_cross_sync():
+                    ok, msg = _cross_sync_fn()
+                    try:
+                        self.after(0, lambda: _show_sync_result(ok, msg))
+                    except Exception:
+                        pass
+
+                def _show_sync_result(ok: bool, msg: str):
+                    from src.gui.dialogs import show_ebay_sync_failed_dialog
+                    try:
+                        prefix = "[DRY RUN] " if self._dry_run else ""
+                        if ok:
+                            self._status_label.configure(
+                                text=f"{prefix}Sent! Sync: {msg}", text_color="green",
+                            )
+                            if not self._dry_run:
+                                self.after(1500, self._on_fulfilled)
+                        else:
+                            self._status_label.configure(
+                                text=f"{prefix}Sent! eBay sync failed — see popup",
+                                text_color="orange",
+                            )
+                            if _sync_ebay_id:
+                                # Neto→eBay direction: show dialog with link to
+                                # the eBay order so staff can update it manually.
+                                # Navigation happens when the dialog is closed.
+                                show_ebay_sync_failed_dialog(
+                                    self,
+                                    [(_sync_ebay_id, msg)],
+                                    on_close=self._on_fulfilled if not self._dry_run else None,
+                                )
+                            else:
+                                # eBay→Neto direction: no portal link needed,
+                                # just navigate away after a short delay.
+                                if not self._dry_run:
+                                    self.after(1500, self._on_fulfilled)
+                    except Exception:
+                        pass
+
+                threading.Thread(target=_do_cross_sync, daemon=True).start()
+            else:
+                self._status_label.configure(text=base_text, text_color=base_color)
+                if not self._dry_run:
+                    self._on_fulfilled()
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to mark order as sent:\n{e}", parent=parent)

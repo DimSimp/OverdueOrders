@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import calendar
 import threading
 import tkinter as tk
+from datetime import date, datetime
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
@@ -27,7 +29,7 @@ _BLANK_VALUES = ("",) * len(_COLS)
 class SaleHistoryTab(ctk.CTkFrame):
     """Shows completed customer transactions with expandable line detail."""
 
-    _PAGE_SIZE = 50
+    _PAGE_SIZE = 100
 
     def __init__(self, parent, on_refund: Optional[Callable[[dict], None]] = None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
@@ -39,6 +41,8 @@ class SaleHistoryTab(ctk.CTkFrame):
         self._selected_tx: Optional[dict] = None
         self._all_expanded = False
         self._on_refund_cb = on_refund
+        self._date_from: Optional[date] = None
+        self._date_to: Optional[date] = None
 
         self._build_ui()
 
@@ -69,6 +73,89 @@ class SaleHistoryTab(ctk.CTkFrame):
             command=self._do_refund,
         )
         self._btn_refund.pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            toolbar,
+            text="From",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray70"),
+        ).pack(side="left", padx=(16, 4))
+
+        self._from_var = ctk.StringVar()
+        self._from_entry = ctk.CTkEntry(
+            toolbar,
+            textvariable=self._from_var,
+            placeholder_text="DD/MM/YYYY",
+            width=105,
+            height=28,
+            font=ctk.CTkFont(size=11),
+        )
+        self._from_entry.pack(side="left")
+        self._from_entry.bind("<Return>", lambda _event: self._apply_date_filter())
+
+        self._btn_from_calendar = ctk.CTkButton(
+            toolbar,
+            text="...",
+            width=30,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._open_calendar(self._from_entry, self._from_var),
+        )
+        self._btn_from_calendar.pack(side="left", padx=(3, 0))
+
+        ctk.CTkLabel(
+            toolbar,
+            text="To",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray70"),
+        ).pack(side="left", padx=(8, 4))
+
+        self._to_var = ctk.StringVar()
+        self._to_entry = ctk.CTkEntry(
+            toolbar,
+            textvariable=self._to_var,
+            placeholder_text="DD/MM/YYYY",
+            width=105,
+            height=28,
+            font=ctk.CTkFont(size=11),
+        )
+        self._to_entry.pack(side="left")
+        self._to_entry.bind("<Return>", lambda _event: self._apply_date_filter())
+
+        self._btn_to_calendar = ctk.CTkButton(
+            toolbar,
+            text="...",
+            width=30,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._open_calendar(self._to_entry, self._to_var),
+        )
+        self._btn_to_calendar.pack(side="left", padx=(3, 0))
+
+        self._btn_apply_dates = ctk.CTkButton(
+            toolbar,
+            text="Apply",
+            width=64,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=self._apply_date_filter,
+        )
+        self._btn_apply_dates.pack(side="left", padx=(8, 0))
+
+        self._btn_clear_dates = ctk.CTkButton(
+            toolbar,
+            text="Clear",
+            width=64,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray30", "gray70"),
+            hover_color=("gray85", "gray25"),
+            command=self._clear_date_filter,
+        )
+        self._btn_clear_dates.pack(side="left", padx=(6, 0))
 
         self._lbl_status = ctk.CTkLabel(
             toolbar,
@@ -157,6 +244,10 @@ class SaleHistoryTab(ctk.CTkFrame):
     def load_for_customer(self, customer_uuid: str):
         self._customer_id = customer_uuid
         self._page = 0
+        self._date_from = None
+        self._date_to = None
+        self._from_var.set("")
+        self._to_var.set("")
         self._loaded = True
         self._fetch()
 
@@ -169,6 +260,10 @@ class SaleHistoryTab(ctk.CTkFrame):
         self._loaded = False
         self._page = 0
         self._total = 0
+        self._date_from = None
+        self._date_to = None
+        self._from_var.set("")
+        self._to_var.set("")
         self._rows = []
         self._selected_tx = None
         self._all_expanded = False
@@ -186,11 +281,19 @@ class SaleHistoryTab(ctk.CTkFrame):
         self._lbl_status.configure(text="Loading...", text_color=("gray50", "gray60"))
         uuid = self._customer_id
         page = self._page
+        date_from = self._date_from
+        date_to = self._date_to
 
         def _thread():
             from src.customers.customer_client import get_customer_transactions
             try:
-                rows, total = get_customer_transactions(uuid, page=page, page_size=self._PAGE_SIZE)
+                rows, total = get_customer_transactions(
+                    uuid,
+                    page=page,
+                    page_size=self._PAGE_SIZE,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
                 self.after(0, lambda: self._populate(rows, total))
             except Exception as exc:
                 err = str(exc)
@@ -226,6 +329,54 @@ class SaleHistoryTab(ctk.CTkFrame):
         self._btn_prev.configure(state="normal" if self._page > 0 else "disabled")
         self._btn_next.configure(
             state="normal" if (self._page + 1) * self._PAGE_SIZE < total else "disabled"
+        )
+
+    def _apply_date_filter(self):
+        try:
+            date_from = _parse_date(self._from_var.get())
+            date_to = _parse_date(self._to_var.get())
+        except ValueError as exc:
+            messagebox.showwarning(
+                "Invalid Date",
+                str(exc),
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        if date_from and date_to and date_from > date_to:
+            messagebox.showwarning(
+                "Invalid Date Range",
+                "The From date must be on or before the To date.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        self._date_from = date_from
+        self._date_to = date_to
+        self._page = 0
+        self._fetch()
+
+    def _clear_date_filter(self):
+        self._from_var.set("")
+        self._to_var.set("")
+        self._date_from = None
+        self._date_to = None
+        self._page = 0
+        self._fetch()
+
+    def _open_calendar(self, anchor: tk.Widget, target_var: tk.StringVar):
+        try:
+            selected = _parse_date(target_var.get())
+        except ValueError:
+            selected = date.today()
+        if selected is None:
+            selected = date.today()
+
+        _CalendarPopup(
+            self,
+            anchor=anchor,
+            initial_date=selected,
+            on_select=lambda chosen: target_var.set(_format_date(chosen)),
         )
 
     def _insert_transaction(self, tx: dict):
@@ -534,3 +685,194 @@ def _fmt_dt(iso: str) -> str:
         )
     except Exception:
         return iso[:16] if len(iso) >= 16 else iso
+
+
+class _CalendarPopup(ctk.CTkToplevel):
+    def __init__(
+        self,
+        parent,
+        anchor: tk.Widget,
+        initial_date: date,
+        on_select: Callable[[date], None],
+    ):
+        super().__init__(parent.winfo_toplevel())
+        self.withdraw()
+        self.title("Select Date")
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+
+        self._anchor = anchor
+        self._selected = initial_date
+        self._display_year = initial_date.year
+        self._display_month = initial_date.month
+        self._on_select = on_select
+        self._day_buttons: list[ctk.CTkButton] = []
+
+        self._build()
+        self._render_month()
+        self._position()
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _build(self):
+        outer = ctk.CTkFrame(self, fg_color=("white", "gray16"), corner_radius=8)
+        outer.pack(fill="both", expand=True, padx=8, pady=8)
+
+        header = ctk.CTkFrame(outer, fg_color="transparent")
+        header.pack(fill="x", padx=6, pady=(6, 4))
+
+        ctk.CTkButton(
+            header,
+            text="<",
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._prev_month,
+        ).pack(side="left")
+
+        self._lbl_month = ctk.CTkLabel(
+            header,
+            text="",
+            width=170,
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self._lbl_month.pack(side="left", padx=6)
+
+        ctk.CTkButton(
+            header,
+            text=">",
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._next_month,
+        ).pack(side="left")
+
+        weekday_row = ctk.CTkFrame(outer, fg_color="transparent")
+        weekday_row.pack(fill="x", padx=6, pady=(2, 0))
+        for col, name in enumerate(calendar.day_abbr):
+            label = ctk.CTkLabel(
+                weekday_row,
+                text=name,
+                width=34,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=("gray45", "gray60"),
+            )
+            label.grid(row=0, column=col, padx=1)
+
+        self._days_frame = ctk.CTkFrame(outer, fg_color="transparent")
+        self._days_frame.pack(fill="x", padx=6, pady=(2, 6))
+
+        footer = ctk.CTkFrame(outer, fg_color="transparent")
+        footer.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(
+            footer,
+            text="Today",
+            width=72,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._select(date.today()),
+        ).pack(side="left")
+        ctk.CTkButton(
+            footer,
+            text="Cancel",
+            width=72,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray60", "gray45"),
+            text_color=("gray30", "gray70"),
+            hover_color=("gray85", "gray25"),
+            command=self.destroy,
+        ).pack(side="right")
+
+    def _position(self):
+        self.update_idletasks()
+        x = self._anchor.winfo_rootx()
+        y = self._anchor.winfo_rooty() + self._anchor.winfo_height() + 2
+        self.geometry(f"+{x}+{y}")
+
+    def _render_month(self):
+        self._lbl_month.configure(
+            text=f"{calendar.month_name[self._display_month]} {self._display_year}"
+        )
+
+        for widget in self._days_frame.winfo_children():
+            widget.destroy()
+        self._day_buttons = []
+
+        month = calendar.Calendar(firstweekday=0)
+        for row, week in enumerate(month.monthdayscalendar(self._display_year, self._display_month)):
+            for col, day_num in enumerate(week):
+                if day_num == 0:
+                    ctk.CTkLabel(self._days_frame, text="", width=34, height=28).grid(
+                        row=row,
+                        column=col,
+                        padx=1,
+                        pady=1,
+                    )
+                    continue
+
+                day = date(self._display_year, self._display_month, day_num)
+                selected = day == self._selected
+                button = ctk.CTkButton(
+                    self._days_frame,
+                    text=str(day_num),
+                    width=34,
+                    height=28,
+                    font=ctk.CTkFont(size=11),
+                    fg_color=("#1f6aa5", "#1f6aa5") if selected else "transparent",
+                    border_width=0 if selected else 1,
+                    border_color=("gray75", "gray35"),
+                    text_color="white" if selected else ("gray20", "gray80"),
+                    hover_color=("#d9e8ff", "#26374f"),
+                    command=lambda chosen=day: self._select(chosen),
+                )
+                button.grid(row=row, column=col, padx=1, pady=1)
+                self._day_buttons.append(button)
+
+    def _prev_month(self):
+        if self._display_month == 1:
+            self._display_month = 12
+            self._display_year -= 1
+        else:
+            self._display_month -= 1
+        self._render_month()
+
+    def _next_month(self):
+        if self._display_month == 12:
+            self._display_month = 1
+            self._display_year += 1
+        else:
+            self._display_month += 1
+        self._render_month()
+
+    def _select(self, chosen: date):
+        self._on_select(chosen)
+        self.destroy()
+
+
+def _parse_date(value: str) -> Optional[date]:
+    value = (value or "").strip()
+    if not value:
+        return None
+
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            pass
+
+    raise ValueError("Enter dates as DD/MM/YYYY.")
+
+
+def _format_date(value: date) -> str:
+    return value.strftime("%d/%m/%Y")

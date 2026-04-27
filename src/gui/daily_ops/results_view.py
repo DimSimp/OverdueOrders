@@ -337,6 +337,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
     def _bulk_mark_as_sent(self):
         import threading
         from tkinter import messagebox
+        from src.cross_dispatch import sync_ebay_to_neto, sync_neto_to_ebay
         tree = self._current_tree()
         checked = tree.get_checked_orders()
         if not checked:
@@ -353,6 +354,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
         neto_client = self._window.neto_client
         ebay_client = self._window.ebay_client
         results: list = []
+        failed_ebay_syncs: list = []  # (ebay_order_id, error_msg) for dialog
 
         def _work():
             for c in checked:
@@ -383,11 +385,38 @@ class DailyOpsResultsView(ctk.CTkFrame):
                     results.append(f"✓ {label}{c['order_id']}")
                 except Exception as exc:
                     results.append(f"✗ {c['order_id']}: {exc}")
+                    continue
+
+                # Cross-platform sync (best-effort, non-fatal)
+                try:
+                    if c["platform"].lower() == "ebay" and neto_client:
+                        ok, msg = sync_ebay_to_neto(
+                            c["order_id"], neto_client,
+                            ebay_created_at=getattr(order, "creation_date", None),
+                            dry_run=dry_run,
+                        )
+                        results.append(f"  {'✓' if ok else '⚠'} Neto sync: {msg}")
+                    elif c["platform"].lower() != "ebay" and ebay_client:
+                        ebay_id = getattr(order, "purchase_order_number", "")
+                        if getattr(order, "sales_channel", "").lower() == "ebay" and ebay_id:
+                            ok, msg = sync_neto_to_ebay(
+                                order, ebay_client,
+                                dry_run=dry_run,
+                            )
+                            results.append(f"  {'✓' if ok else '⚠'} eBay sync: {msg}")
+                            if not ok:
+                                failed_ebay_syncs.append((ebay_id, msg))
+                except Exception as exc:
+                    results.append(f"  ⚠ sync error: {exc}")
+
             self.after(0, lambda: _done())
 
         def _done():
+            from src.gui.dialogs import show_ebay_sync_failed_dialog
             tree.clear_checks()
             messagebox.showinfo("Mark as Sent — Results", "\n".join(results), parent=self)
+            if failed_ebay_syncs:
+                show_ebay_sync_failed_dialog(self, failed_ebay_syncs)
             self._refresh_all_orders()
 
         threading.Thread(target=_work, daemon=True).start()
@@ -968,27 +997,44 @@ class DailyOpsResultsView(ctk.CTkFrame):
         """Re-fetch all orders by ID in a background thread."""
         neto_ids = [o.order_id for o in self._neto_orders]
         ebay_ids = [o.order_id for o in self._ebay_orders]
+        # Snapshot current eBay orders so we can fall back to them if the
+        # eBay API is unavailable (e.g. during a Neto-only session).
+        cached_ebay = list(self._ebay_orders)
 
         self._refresh_btn.configure(state="disabled")
         self._error_label.configure(text="Refreshing…")
 
         def _fetch():
+            # Neto is always required — fail the whole refresh if it's unreachable.
             try:
                 fresh_neto = (
                     self._window.neto_client.get_orders_by_ids(neto_ids)
                     if neto_ids else []
                 )
-                fresh_ebay = []
-                if ebay_ids and self._window.ebay_client.is_authenticated():
-                    fresh_ebay = self._window.ebay_client.get_orders_by_ids(ebay_ids)
-                self.after(0, lambda n=fresh_neto, e=fresh_ebay: self._on_refresh_done(n, e, neto_ids, ebay_ids))
             except Exception as exc:
                 msg = str(exc)
                 self.after(0, lambda m=msg: self._on_refresh_error(m))
+                return
+
+            # eBay is best-effort — if the API is unavailable, keep the cached
+            # orders so that Neto-only actions (e.g. moving an order between
+            # lists) still complete successfully.
+            fresh_ebay = cached_ebay
+            ebay_warn = ""
+            if ebay_ids and self._window.ebay_client.is_authenticated():
+                try:
+                    fresh_ebay = self._window.ebay_client.get_orders_by_ids(ebay_ids)
+                except Exception as exc:
+                    fresh_ebay = cached_ebay
+                    ebay_warn = "eBay unavailable — showing cached data"
+                    log.warning("eBay refresh skipped (API unavailable): %s", exc)
+
+            self.after(0, lambda n=fresh_neto, e=fresh_ebay, w=ebay_warn:
+                       self._on_refresh_done(n, e, neto_ids, ebay_ids, w))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _on_refresh_done(self, fresh_neto: list, fresh_ebay: list, old_neto_ids: list, old_ebay_ids: list):
+    def _on_refresh_done(self, fresh_neto: list, fresh_ebay: list, old_neto_ids: list, old_ebay_ids: list, ebay_warn: str = ""):
         old_neto_set = set(old_neto_ids)
         old_ebay_set = set(old_ebay_ids)
         fresh_neto_map = {o.order_id: o for o in fresh_neto}
@@ -1015,7 +1061,7 @@ class DailyOpsResultsView(ctk.CTkFrame):
         self._save_session()
 
         self._refresh_btn.configure(state="normal")
-        self._error_label.configure(text="")
+        self._error_label.configure(text=ebay_warn, text_color="orange" if ebay_warn else "")
         self._status_label.configure(
             text=f"Refreshed {datetime.now().strftime('%H:%M')}",
             text_color=("gray50", "gray60"),

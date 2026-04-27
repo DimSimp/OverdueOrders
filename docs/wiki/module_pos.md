@@ -68,7 +68,7 @@ Quote:           [cart built] → [confirm draft] → [recall → promote to Inv
 Invoice:         [cart built] → [confirm, stock moves] → [recall → mark paid]
 Deposit:         [cart built] → [deposit amount entered] → [confirm] → allocation created
 Repair:          [repair details entered] → [confirm intake] → [collect via POS later]
-Refund:          [load original transaction OR enter manually] → [confirm] → stock restored
+Refund:          [load original transaction OR enter manually] -> [original payment split restored] -> [confirm] -> stock restored
 ```
 
 ---
@@ -114,6 +114,10 @@ Any combination of methods can be used simultaneously (split payment). A live st
 panel shows **Remaining $X.XX** (red), **Change due $X.XX** (green), or **Paid in full ✓** (green)
 as amounts are typed. Confirm Sale is blocked until the full amount is covered.
 
+When a refund is loaded from an existing transaction, the Till pre-populates Cash, EFT rows, and
+Online amounts from the original payment split. This keeps the refund aligned with the customer's
+original payment method while still allowing staff to adjust if needed.
+
 ---
 
 ## Discounts
@@ -151,6 +155,12 @@ Customer linking is now a working part of the Till flow:
 - When a customer is linked, the Till uses the same attach path regardless of where that customer came from, so the customer card, receipt output, and profile discount behaviour stay consistent.
 - Historical recall/refund flows re-link customers without repricing old transactions.
 
+Refund loading is shared by transaction-number lookup, Daily Sales, and Customer Sale History. It
+populates the refund cart with negative line quantities, keeps the original transaction number in
+the `Transaction #` field until the refund is completed or **Clear Cart** is pressed, restores
+transaction notes/customer details, and pre-fills the original payment method/amount split. Future
+Inventory-started refunds should route through the same loader.
+
 ---
 
 ## Parked Transactions
@@ -180,7 +190,7 @@ transaction without recalling it.
 
 A non-modal **Daily Sales** window (`DailySalesDialog`, `src/gui/pos/daily_sales_dialog.py`)
 is accessible via the **Sales** button in the Till top bar. It lists all completed transactions
-for today (Melbourne time).
+for the selected Melbourne-local date range. The range defaults to today.
 
 **Layout**:
 - Each transaction appears as a **collapsible parent row** (TX #, date/time, customer, user,
@@ -188,18 +198,25 @@ for today (Melbourne time).
   disc $, line total, cost, margin $, margin %) and a green **TOTAL** footer row.
 - A fixed **Day Summary** panel at the bottom aggregates: transactions count, items sold, total
   RRP, total discount, revenue, cost, margin $, margin %, and Cash/EFT/Online payment breakdown.
+  Refund transactions are netted as negative values in these totals.
 
 **Interactions**:
+- `From` / `To` fields with popup calendars filter the transaction list by inclusive date range.
+- Receipt barcode scans or manual transaction numbers can be entered in the `Find` field to show
+  that completed transaction directly, even when it is outside the current date range.
 - Click the **#0** (arrow) column header → expand / collapse all transactions at once.
 - Click the **Date & Time** column header → toggle sort order (▼ newest-first / ▲ oldest-first).
 - Expanding a transaction inserts a subtle **divider row** (`#2a2a2a` stripe) after it via
   `<<TreeviewOpen>>` / `<<TreeviewClose>>` events; dividers are removed when collapsed.
-- Click any row → enables **Reprint Receipt** button in the header.
-- Right-click any row → context menu with **Reprint Receipt**.
+- Click any row -> enables **Reprint Receipt** and, when eligible, **Refund Order**.
+- Right-click any row -> context menu with **Reprint Receipt** and eligible refund action.
 - **Refresh** button re-fetches from Supabase without closing the window.
 
 **Reprint**: reconstructs `cart_items` from stored `transaction_lines`, calls `generate_receipt()`
 then `print_pdf()` on a background thread.
+
+**Refund Order**: hands the selected transaction to the Till refund loader, which restores the
+original transaction number, cart lines, customer, notes, and payment split.
 
 ---
 
@@ -219,6 +236,7 @@ then `print_pdf()` on a background thread.
 |--------|--------------|
 | Load customer in Till | Queries `customers`; attaches the profile to the active transaction; auto-applies `discount_profile` unless a Till-side manual discount is currently selected |
 | Load in Till from Customers tab | Uses the same customer-attach path as the Till search pane, then returns focus to the Till tab |
+| Refund from Daily Sales or Customer Sale History | Loads original transaction into the Till as a linked refund; restores transaction number, cart lines, customer, notes, and payment split |
 | Scan barcode / enter SKU | Queries `items` for exact match; populates row |
 | Confirm Standard/Invoice sale | Decrements `qty_on_hand`, writes `sale_instore` movement |
 | Confirm Deposit | Increments `qty_allocated_customer`, creates `deposits` record |
@@ -264,3 +282,7 @@ Reprint: available from the Daily Sales dialog for any past transaction.
 | Issue refund | ✗ | ✓ |
 | View cost / margin columns | ✗ | ✓ |
 | Void a completed transaction | ✗ | ✓ |
+
+---
+
+*Last updated: 2026-04-27 — Daily Sales date range/calendar filters, transaction-number search, refund action, and net refund summaries documented; Till refund loader now preserves original transaction number and payment split.*

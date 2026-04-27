@@ -429,6 +429,11 @@ class AftNewSessionView(ctk.CTkFrame):
         except ValueError:
             self._options_error.configure(text=f"Invalid 'To' date: '{to_str}'. Use DD/MM/YYYY.")
             return None, None
+        today = datetime.now().date()
+        if date_to.date() >= today:
+            date_to = datetime.now()
+        else:
+            date_to = date_to.replace(hour=23, minute=59, second=59)
         if date_from > date_to:
             self._options_error.configure(text="'From' date must be before 'To' date.")
             return None, None

@@ -1478,3 +1478,4 @@ usb.core.USBError: [Errno None] b'libusb0-dll:err [_usb_reap_async] timeout erro
 11:09:31  INFO      brother_ql.backends.helpers  Sending instructions to the printer. Total: 108116 bytes.
 11:09:34  INFO      brother_ql.backends.helpers  Printing was successful. Waiting for the next job.
 11:09:56  INFO      src.user_manager  Logout: Sbonanno
+10:29:36  INFO      __main__  UI scale: 1.00 (auto, screen_h=1080 logical px)
